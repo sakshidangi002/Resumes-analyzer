@@ -1,0 +1,67 @@
+# UI
+streamlit==1.32.2
+
+# Backend
+fastapi==0.110.0
+uvicorn==0.29.0
+python-multipart>=0.0.9
+
+# Database
+sqlalchemy>=2.0.0,<3.0.0
+psycopg2-binary==2.9.9
+
+# Validation
+pydantic==2.6.4
+pydantic-settings==2.2.1
+
+# LangChain (COMPATIBLE SET)
+langchain==0.1.20
+langchain-core==0.1.52
+langchain-community==0.0.38
+langchain-text-splitters==0.0.2
+langchain-huggingface==0.0.3
+
+# Hugging Face
+# NOTE: tokenizers must be compatible with langchain-huggingface (>=0.19.1),
+# so we use a newer transformers range that supports tokenizers>=0.19.
+transformers>=4.45.0,<5.0.0
+tokenizers>=0.19.1,<0.21.0
+accelerate>=0.28.0,<1.0.0
+torch==2.1.2
+sentence-transformers==2.6.1
+
+# Vector DB (required by backend/api.py — Chroma persistent client)
+faiss-cpu==1.7.4
+chromadb>=0.4.24,<0.5.0
+
+# Resume parsing
+pdfplumber==0.10.3
+pypdf==4.2.0
+python-docx==1.1.0
+# NER for production name extraction (run: python -m spacy download en_core_web_sm)
+spacy>=3.7.0,<4.0.0
+
+# Excel
+pandas==2.2.1
+openpyxl==3.1.2
+
+# Utils
+requests==2.31.0
+python-dotenv==1.0.1
+tqdm==4.66.2
+beautifulsoup4==4.12.3
+
+# Browser automation (Indeed "View resume" link download)
+playwright==1.44.0
+
+
+
+
+
+
+
+
+
+
+
+
