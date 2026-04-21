@@ -344,17 +344,19 @@ def _view_skills_dialog_body(resume_id: str) -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        "<div style='font-size:1.35rem; font-weight:800; margin-bottom:0.25rem;'>Candidate Skills</div>",
-        unsafe_allow_html=True,
-    )
     st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
     st.markdown(_render_skill_chips_html("Primary Skills", "⭐", primary[:25]), unsafe_allow_html=True)
     st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
     st.markdown(_render_skill_chips_html("Other Skills", "🧰", other[:50]), unsafe_allow_html=True)
+    st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
 
-    # No extra close button here: the overlay modal provides a single Close action,
-    # and Streamlit dialogs already include a close affordance.
+    # Added a standard button for manual closure; when using st.dialog, rerun cleans up state.
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Close", key=f"skills_close_btn_{resume_id}", type="primary", use_container_width=True):
+            st.rerun()
+
+    # End of dialog body
 
 
 if _dialog_decorator is not None:
@@ -374,9 +376,24 @@ def _open_skills_modal(resume_id: str) -> None:
     st.session_state["skills_modal_open"] = True
 
 
+def _open_skills_modal_with_row(resume_id: str, row: Optional[dict]) -> None:
+    """
+    Open modal and seed it with already-loaded row data so the popup feels instant.
+    The modal may still fetch `/resumes/{id}/json` if needed, but only as a fallback.
+    """
+    st.session_state["skills_modal_rid"] = resume_id
+    st.session_state["skills_modal_open"] = True
+    if row:
+        st.session_state["skills_modal_seed"] = {
+            "primary_skills": row.get("primary_skills") or row.get("key_skills") or [],
+            "other_skills": row.get("other_skills") or row.get("skills") or [],
+        }
+
+
 def _close_skills_modal() -> None:
     st.session_state["skills_modal_open"] = False
     st.session_state.pop("skills_modal_rid", None)
+    st.session_state.pop("skills_modal_seed", None)
 
 
 def _render_skills_modal_if_open() -> None:
@@ -391,15 +408,20 @@ def _render_skills_modal_if_open() -> None:
         _close_skills_modal()
         return
 
-    # Fetch resume JSON (includes skills lists).
-    with st.spinner("Loading skills..."):
-        try:
-            resp = requests.get(f"{API_URL}/resumes/{rid}/json", timeout=15)
-            resp.raise_for_status()
-            resume = resp.json()
-        except Exception as exc:
-            resume = None
-            st.error(f"Could not load skills: {exc}")
+    resume = None
+    seed = st.session_state.get("skills_modal_seed")
+    if isinstance(seed, dict) and (seed.get("primary_skills") or seed.get("other_skills")):
+        resume = dict(seed)
+    else:
+        # Fetch resume JSON (includes skills lists).
+        with st.spinner("Loading skills..."):
+            try:
+                resp = requests.get(f"{API_URL}/resumes/{rid}/json", timeout=15)
+                resp.raise_for_status()
+                resume = resp.json()
+            except Exception as exc:
+                resume = None
+                st.error(f"Could not load skills: {exc}")
 
     if not resume:
         if st.button("Close", type="primary", key="skills_modal_close_empty"):
@@ -441,33 +463,41 @@ def _render_skills_modal_if_open() -> None:
     # Use placeholder replacement instead.
     css = """
 <style>
-/* Backdrop */
-.skills-modal-backdrop{
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.70);
-  z-index: 100001;
-  pointer-events: auto;
-}
-/* Centered modal */
-.skills-modal{
-  position: fixed;
-  top: 50%; left: __MODAL_LEFT__;
-  transform: translate(-50%, -50%);
-  width: __MODAL_WIDTH__;
-  max-height: 84vh;
-  overflow: auto;
+/* Skills dialog box (in-page, always visible) */
+#skills-modal-root + div{
   background: #0e1117;
   border: 1px solid rgba(255,255,255,0.14);
   border-radius: 18px;
-  box-shadow: 0 28px 90px rgba(0,0,0,0.75);
+  box-shadow: 0 28px 90px rgba(0,0,0,0.45);
   padding: 22px 22px 14px 22px;
-  z-index: 100002;
-  pointer-events: auto;
+  max-width: 860px;
+  margin: 14px auto 0 auto;
 }
 .skills-modal-title{
   font-size: 1.35rem;
   font-weight: 850;
+  margin: 0;
+}
+.skills-modal-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 8px 0;
+}
+.skills-close-btn div[data-testid="stButton"] button{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  color: rgba(255,255,255,0.92) !important;
+  border-radius: 10px !important;
+  width: 40px !important;
+  height: 40px !important;
+  padding: 0 !important;
+  font-weight: 900 !important;
+}
+.skills-close-btn div[data-testid="stButton"] button:hover{
+  background: rgba(255,255,255,0.10) !important;
+  border-color: rgba(255,255,255,0.22) !important;
 }
 .skills-divider { height: 1px; background: rgba(255,255,255,0.10); margin: 14px 0; }
 .skills-title { font-size: 1.05rem; font-weight: 750; margin: 10px 0 12px 0; display:flex; align-items:center; gap:10px; }
@@ -481,45 +511,30 @@ def _render_skills_modal_if_open() -> None:
   color: rgba(255,255,255,0.92);
 }
 
-/* Pin the modal Close button deterministically:
-   we render <div id="skills-close-anchor"></div> right before the Close button,
-   then style the *next* Streamlit button block. */
-#skills-close-anchor + div[data-testid="stButton"]{
-  position: fixed !important;
-  top: 8vh !important;
-  right: 5vw !important;
-  z-index: 100003 !important;
-}
-#skills-close-anchor + div[data-testid="stButton"] button{
-  border-radius: 10px !important;
-  padding: 0.35rem 0.7rem !important;
-}
 </style>
-<div class="skills-modal-backdrop"></div>
         """
     css = css.replace("__MODAL_LEFT__", modal_left).replace("__MODAL_WIDTH__", modal_width)
     st.markdown(css, unsafe_allow_html=True)
 
-    primary_html = _render_skill_chips_html("Primary Skills", "⭐", primary[:25])
-    other_html = _render_skill_chips_html("Other Skills", "🧰", other[:60])
-    st.markdown(
-        f"""
-<div class="skills-modal">
-  <div class="skills-modal-title">Candidate Skills</div>
-  <div class="skills-divider"></div>
-  {primary_html}
-  <div class="skills-divider"></div>
-  {other_html}
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Render skills dialog content in a Streamlit container so the Close button is always visible.
+    st.markdown('<div id="skills-modal-root"></div>', unsafe_allow_html=True)
+    with st.container():
+        left, right = st.columns([8, 1])
+        with left:
+           st.markdown('<div class="skills-modal-title">Candidate Skills</div>', unsafe_allow_html=True)
+        with right:
+            st.markdown('<div class="skills-close-btn">', unsafe_allow_html=True)
+            if st.button("✕", key=f"skills_modal_x_{rid}", type="secondary", help="Close"):
+                _close_skills_modal()
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    # Close action
-    st.markdown('<div id="skills-close-anchor"></div>', unsafe_allow_html=True)
-    if st.button("Close", type="primary", key=f"skills_modal_close_{rid}"):
-        _close_skills_modal()
-        st.rerun()
+        st.markdown('<div class="skills-divider"></div>', unsafe_allow_html=True)
+        primary_html = _render_skill_chips_html("Primary Skills", "⭐", primary[:25])
+        other_html = _render_skill_chips_html("Other Skills", "🧰", other[:60])
+        st.markdown(primary_html, unsafe_allow_html=True)
+        st.markdown('<div class="skills-divider"></div>', unsafe_allow_html=True)
+        st.markdown(other_html, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1240,12 @@ with tabs[0]:
             accept_multiple_files=True,
             key=f"resume_uploader_{st.session_state['resume_uploader_nonce']}",
         )
+        skills_only = st.checkbox(
+            "Extract skills only (do not save to database)",
+            value=False,
+            key="upload_skills_only",
+            help="Runs a skills-only extractor and returns only skills.",
+        )
         if st.button("Send files", key="btn_send_files"):
             if not uploaded:
                 st.warning("Please select at least one PDF or DOCX file.")
@@ -1242,9 +1263,13 @@ with tabs[0]:
                     "Processing resumes — this can take several minutes while the model runs…"
                 ):
                     try:
-                        resp = requests.post(
-                            f"{API_URL}/upload", files=files
-                        )
+                        if skills_only:
+                            if len(files) != 1:
+                                st.warning("Skills-only mode supports exactly 1 file at a time.")
+                                st.stop()
+                            resp = requests.post(f"{API_URL}/extract/skills", files={"file": files[0][1]})
+                        else:
+                            resp = requests.post(f"{API_URL}/upload", files=files)
                         try:
                             data = resp.json()
                         except ValueError:
@@ -1259,6 +1284,14 @@ with tabs[0]:
                                 f"Upload failed (HTTP {resp.status_code}). "
                                 f"{data.get('detail', '')}"
                             )
+                            st.stop()
+
+                        if skills_only:
+                            st.success("Skills extracted.")
+                            st.markdown("**Primary Skills**")
+                            st.write(", ".join(data.get("primary_skills") or []) or "—")
+                            st.markdown("**Other Skills**")
+                            st.write(", ".join(data.get("other_skills") or []) or "—")
                             st.stop()
 
                         if isinstance(data, list):
@@ -1521,7 +1554,7 @@ with tabs[1]:
                 elapsed = time.time() - start_t
                 remaining = min_duration - elapsed
                 if remaining > 0:
-                    time.sleep(remaining)dfgn
+                    time.sleep(remaining)
 
     if fetch_err == "OFFLINE":
         st.error(
@@ -1818,7 +1851,7 @@ with tabs[1]:
                 act1, act2, act3, act4 = st.columns(4)
                 with act1:
                     if st.button("🧩", key=f"viewskills_resumes_{rid}_{i}", help="View Skills"):
-                        _open_skills_modal(rid)
+                        st.session_state["skills_dialog_rid"] = rid
                         st.rerun()
                 with act2:
                     if st.button("📝", key=f"notes_btn_resumes_{rid}", help="Add Note"):
@@ -2177,7 +2210,7 @@ with tabs[3]:
                 act1, act2, act3, act4 = st.columns(4)
                 with act1:
                     if st.button("🧩", key=f"viewskills_chat_{rid}_{i}", help="View Skills"):
-                        _open_skills_modal(rid)
+                        st.session_state["skills_dialog_rid"] = rid
                         st.rerun()
                 with act2:
                     if st.button("📝", key=f"notes_btn_chat_{rid}", help="Add Note"):

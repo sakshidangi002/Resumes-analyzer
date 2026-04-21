@@ -744,6 +744,109 @@ def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:
             pass
 
 
+def _slice_skills_section(text: str) -> str:
+    """
+    Best-effort: keep content under a Skills heading, stop at next common heading.
+    Used only as a signal booster for skills extraction/cleanup.
+    """
+    t = (text or "").replace("\r\n", "\n")
+    lower = t.lower()
+    start_markers = ["\nskills\n", "\ntechnical skills\n", "\nkey skills\n", "\nskill set\n"]
+    start = -1
+    for m in start_markers:
+        start = lower.find(m)
+        if start != -1:
+            start = start + len(m)
+            break
+    if start == -1:
+        # fallback: first occurrence
+        for m in ["skills", "technical skills", "key skills", "skill set"]:
+            p = lower.find(m)
+            if p != -1:
+                start = p
+                break
+    if start == -1:
+        return text or ""
+
+    tail = t[start:]
+    tail_l = tail.lower()
+    end_markers = [
+        "\nexperience\n",
+        "\nwork experience\n",
+        "\nprofessional experience\n",
+        "\neducation\n",
+        "\nprojects\n",
+        "\ncertifications\n",
+        "\nsummary\n",
+        "\nprofile\n",
+    ]
+    end = None
+    for em in end_markers:
+        epos = tail_l.find(em)
+        if epos != -1:
+            end = epos
+            break
+    return tail[:end].strip() if end is not None else tail.strip()
+
+
+def _clean_skill_list(items, *, max_items: int) -> list[str]:
+    """
+    Remove junk phrases often misclassified as skills.
+    Keeps short, skill-like tokens (e.g. 'JavaScript', 'Node.js', 'MongoDB').
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (items or []):
+        s = str(raw or "").strip()
+        if not s:
+            continue
+
+        # Drop overly long / sentence-like strings
+        if len(s) > 32:
+            continue
+        # Drop items with too many words (usually sentences)
+        if len(s.split()) > 3:
+            continue
+        # Drop obvious non-skill filler
+        low = s.lower().strip(" .,:;|/\\-+_()[]{}")
+        if low in {"programmer", "developer", "software", "engineer", "fresher", "student"}:
+            continue
+        if any(w in low for w in ["ready to", "passion", "team work", "teamwork", "adaptability", "time management", "communication "]):
+            # These are too often soft-skill sentences in your data; keep them out of primary lists.
+            continue
+
+        key = low.replace(" ", "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _derive_clean_skills_from_text(resume_text: str) -> tuple[list[str], list[str]]:
+    """
+    Prefer extracting skills from the Skills section; fallback to full text.
+    """
+    skills_text = _slice_skills_section(resume_text or "")
+    skills = extract_skills_from_text(skills_text if skills_text.strip() else (resume_text or "")) or {}
+
+    primary = skills.get("primary_skills") or skills.get("key_skills") or []
+    other = skills.get("other_skills") or skills.get("skills") or []
+    if not isinstance(primary, list):
+        primary = [s.strip() for s in str(primary).split(",") if s.strip()]
+    if not isinstance(other, list):
+        other = [s.strip() for s in str(other).split(",") if s.strip()]
+
+    primary_clean = _clean_skill_list(primary, max_items=10)
+    other_clean = _clean_skill_list([s for s in other if str(s).strip()], max_items=40)
+    # remove duplicates across lists
+    prim_norm = {s.lower().replace(" ", "") for s in primary_clean}
+    other_clean = [s for s in other_clean if s.lower().replace(" ", "") not in prim_norm]
+    return primary_clean, other_clean
+
+
 @app.post("/upload", tags=["Resumes"])
 async def upload_resume(
     request: Request,
@@ -820,6 +923,16 @@ async def upload_resume(
                 extracted.update(repaired)
             except Exception as _gate_exc:
                 logger.warning("Extraction validation gate failed for %s: %s", filename, _gate_exc)
+
+            # Skills repair: derive cleaner skills from the Skills section and override junky outputs.
+            try:
+                primary_clean, other_clean = _derive_clean_skills_from_text(resume_text or "")
+                if primary_clean:
+                    extracted["primary_skills"] = primary_clean
+                if other_clean:
+                    extracted["other_skills"] = other_clean
+            except Exception as _skills_exc:
+                logger.debug("Skills cleanup skipped for %s: %s", filename, _skills_exc)
 
             cleaned = ResumeSchema(**extracted)
 
@@ -1041,6 +1154,51 @@ async def upload_resume(
             results[idx] = {"status": "error", "file": filename, "message": str(exc)}
 
     return [r for r in results if r is not None]
+
+
+# ---------------------------------------------------------------------------
+# Skills-only extraction (no DB write)
+# ---------------------------------------------------------------------------
+
+@app.post("/extract/skills", tags=["Resumes"])
+async def extract_skills_only(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """
+    Extract ONLY skills from a resume file.
+    - Does not write anything to the database.
+    - Keeps existing analyzer/extraction logic untouched by using the existing helpers.
+    """
+    try:
+        file_bytes = await file.read()
+        ext = os.path.splitext(file.filename or "")[-1].lower()
+        if ext not in (".pdf", ".docx"):
+            raise HTTPException(status_code=400, detail="Only PDF and DOCX are supported.")
+
+        executor = getattr(request.app.state, "executor", None)
+        loop = asyncio.get_event_loop()
+        if executor:
+            resume_text = await loop.run_in_executor(executor, _extract_text_from_bytes, file_bytes, ext, BASE_DIR)
+        else:
+            resume_text = _extract_text_from_bytes(file_bytes, ext, BASE_DIR)
+
+        if not (resume_text or "").strip():
+            raise HTTPException(status_code=400, detail="Text extraction produced no content.")
+
+        primary, other = _derive_clean_skills_from_text(resume_text or "")
+
+        return {
+            "ok": True,
+            "file": file.filename,
+            "primary_skills": primary,
+            "other_skills": other,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Skills-only extraction failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -1420,6 +1578,17 @@ def list_resumes_by_field(
         }
         for r in rows
     ]
+
+
+@app.get("/resumes/{resume_id}/json", tags=["Resumes"])
+def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
+    """Return full resume data as JSON. Used by the frontend 'Skills' dialog."""
+    r = db.query(ResumeDB).filter(
+        ResumeDB.id == resume_id, ResumeDB.deleted_at == None
+    ).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return _resume_to_dict(r)
 
 
 @app.get("/resume/{resume_id}", tags=["Resumes"])
