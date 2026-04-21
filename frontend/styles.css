@@ -1,0 +1,132 @@
+.skills-wrap { padding: 6px 2px; }
+.skills-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 14px 14px 8px 14px;
+}
+.skills-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom: 8px;
+}
+.skills-header .title { font-size: 20px; font-weight: 700; }
+.skills-header .x { opacity: 0.7; font-size: 18px; }
+.skills-divider { height:1px; background: rgba(255,255,255,0.08); margin: 10px 0; }
+.skills-section { margin: 10px 0; }
+.skills-title { font-weight: 700; font-size: 15px; margin-bottom: 8px; display:flex; gap:8px; align-items:center; }
+.chips { display:flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  background: rgba(80, 140, 255, 0.22);
+  border: 1px solid rgba(80, 140, 255, 0.35);
+  color: rgba(235,245,255,0.95);
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+.muted { color: rgba(255,255,255,0.55); font-size: 13px; }
+
+.notes-wrap { max-width: 760px; margin: 0 auto; }
+.notes-meta { color: rgba(255,255,255,0.72); font-size: 0.92rem; margin-top: -0.2rem; }
+.notes-list {
+    max-height: 420px;
+    overflow: auto;
+    padding-right: 6px;
+    margin-top: 0.4rem;
+}
+.notes-list::-webkit-scrollbar { width: 8px; }
+.notes-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 999px; }
+.note-card {
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+    padding: 10px 10px 9px 10px;
+    background: rgba(255,255,255,0.015);
+    box-shadow: 0 10px 22px rgba(0,0,0,0.18);
+    margin: 0.30rem 0;
+}
+.note-head { display: flex; align-items: baseline; gap: 0.55rem; }
+.note-date { color: rgba(255,255,255,0.55); font-size: 0.85rem; }
+.note-body { color: rgba(255,255,255,0.92); font-size: 0.95rem; margin-top: 0.3rem; white-space: pre-wrap; }
+.note-pill {
+    display: inline-flex; align-items: center;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.80);
+    font-size: 0.80rem;
+    margin-top: 0.5rem;
+}
+.note-actions button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0.0rem 0.1rem !important;
+    min-height: 1.0rem !important;
+}
+
+/* Global sidebar/header layout tweaks */
+[data-testid="collapsedControl"] {
+    z-index: 9999 !important;
+    position: fixed !important;
+    top: 0.5rem !important;
+    left: 0 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: flex !important;
+    pointer-events: auto !important;
+    transform: none !important;
+    filter: none !important;
+}
+[data-testid="stSidebarCollapsedControl"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    width: auto !important;
+}
+[data-testid="collapsedControl"]:hover { opacity: 1 !important; }
+button[kind="header"] { z-index: 9998 !important; }
+header[data-testid="stHeader"] { height: 3.25rem !important; }
+.block-container {
+    padding-top: 3.25rem;
+    padding-bottom: 2rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+    max-width: 100%;
+}
+
+/* Filters expander layout */
+[data-testid="stExpander"] details summary { padding: 0.4rem 0; }
+[data-testid="stExpander"] details summary ~ div { padding: 0.5rem 0.75rem 0.6rem 0.75rem; }
+[data-testid="stExpander"] [data-testid="column"] { padding-left: 0.6rem; padding-right: 0.6rem; }
+
+/* Resumes table grid borders */
+.resume-grid-wrap div[data-testid="stHorizontalBlock"] {
+  border-left: 1px solid rgba(255,255,255,0.10);
+  border-right: 1px solid rgba(255,255,255,0.10);
+}
+.resume-grid-wrap .resume-grid-row div[data-testid="stColumn"] {
+  border-right: 1px solid rgba(255,255,255,0.10);
+  padding-right: 10px;
+}
+.resume-grid-wrap .resume-grid-row div[data-testid="stColumn"]:last-child {
+  border-right: none;
+}
+.resume-grid-wrap .resume-grid-row {
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+  padding: 6px 6px;
+}
+.resume-grid-wrap .resume-grid-header {
+  border-top: 1px solid rgba(255,255,255,0.10);
+  border-bottom: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.03);
+  padding: 8px 6px;
+}
+.resume-grid-wrap .resume-grid-header div[data-testid="stColumn"] {
+  border-right: 1px solid rgba(255,255,255,0.10);
+  padding-right: 10px;
+}
+.resume-grid-wrap .resume-grid-header div[data-testid="stColumn"]:last-child {
+  border-right: none;
+}
+
