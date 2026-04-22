@@ -11,8 +11,8 @@ import requests
 import streamlit as st
 from sqlalchemy import create_engine, text
 
-# Backend base URL. Override via environment for LAN access (e.g. http://192.168.29.235:8001)
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8001").rstrip("/")
+# Backend base URL. Override via environment for LAN access (e.g. http://192.168.29.235:8501)
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8501").rstrip("/")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1158,7 +1158,7 @@ with st.sidebar:
         st.caption("Wait ~10 seconds then click Refresh.")
     else:
         st.error("Backend offline", icon="🔴")
-        st.caption("Run: uvicorn backend.api:app --host 127.0.0.1 --port 8001")
+        st.caption("Run: uvicorn backend.api:app --host 127.0.0.1 --port 8501")
 
     if st.button(" Refresh", key="sidebar_refresh"):
         fetch_resumes.clear()
@@ -1338,7 +1338,7 @@ with tabs[0]:
                     except requests.exceptions.ConnectionError:
                         st.error(
                             f"Cannot reach backend at {API_URL}. "
-                            "Make sure uvicorn is running on port 8001."
+                            "Make sure uvicorn is running on port 8501."
                         )
                     except Exception as e:
                         st.error(f"Upload failed: {e}")
@@ -1559,7 +1559,7 @@ with tabs[1]:
     if fetch_err == "OFFLINE":
         st.error(
             "Backend is not running. Start it with:\n\n"
-            "```\nuvicorn backend.api:app --reload --host 127.0.0.1 --port 8001\n```"
+            "```\nuvicorn backend.api:app --reload --host 127.0.0.1 --port 8501\n```"
         )
         data = []
     elif fetch_err == "STARTING":

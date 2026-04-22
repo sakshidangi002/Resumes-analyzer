@@ -203,29 +203,42 @@ def preprocess_resume_text(text: str, max_chars: int = 8000) -> str:
     # Step 4: Replace non-ASCII with space (preserve structure)
     text = re.sub(r"[^\x00-\x7F]+", " ", text)
 
-    # Step 5: Normalize line breaks and whitespace per line
+    # Step 5: Normalize line breaks and whitespace per line, applying multi-column formatting
+    try:
+        try:
+            from backend.extraction_v3 import normalize_multi_column
+        except ImportError:
+            from extraction_v3 import normalize_multi_column
+        text = normalize_multi_column(text)
+    except Exception as e:
+        logger.warning(f"Multi-column normalization failed: {e}")
+
     lines = []
     for ln in text.splitlines():
         ln = re.sub(r"[ \t]+", " ", ln).strip()
-        if ln:
-            lines.append(ln)
+        lines.append(ln)
 
-    # Step 6: Remove duplicate lines (footers/headers)
+    # Step 6: Remove duplicate lines (footers/headers) but preserve structure
     seen_lines: dict[str, int] = {}
     for ln in lines:
+        if not ln:
+            continue
         key = ln.lower().strip()
         seen_lines[key] = seen_lines.get(key, 0) + 1
     # Remove lines that repeat 3+ times (they are headers/footers)
     freq_threshold = 3
     deduped = []
     for ln in lines:
+        if not ln:
+            deduped.append("")
+            continue
         key = ln.lower().strip()
-        if seen_lines[key] < freq_threshold:
+        if seen_lines.get(key, 0) < freq_threshold:
             deduped.append(ln)
     lines = deduped
 
     # Step 7: Fix broken spacing (e.g. "Java Script" → "JavaScript")
-    result = "\n".join(lines)
+    result = "\n".join(lines).strip()
     result = re.sub(r"(?i)\bjava\s+script\b", "JavaScript", result)
     result = re.sub(r"(?i)\btype\s+script\b", "TypeScript", result)
     result = re.sub(r"(?i)\bnode\s+\.?\s*js\b", "Node.js", result)

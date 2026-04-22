@@ -7,9 +7,9 @@ from pathlib import Path
 def main() -> None:
     """
     Start FastAPI backend and Streamlit frontend together.
-    - Backend: uvicorn backend.api:app --host HOST --port 8001
+    - Backend: uvicorn backend.api:app --host HOST --port 8501
       Use HOST=0.0.0.0 to allow access from other machines by IP; set BASE_URL in .env to
-      the URL clients use (e.g. http://192.168.x.x:8001) so resume links work.
+      the URL clients use (e.g. http://192.168.x.x:8501) so resume links work.
     - Frontend: streamlit run frontend/app.py
     """
     root = Path(__file__).resolve().parent
@@ -23,7 +23,7 @@ def main() -> None:
         "--host",
         host,
         "--port",
-        "8001",
+        "8501",
     ]
     frontend_cmd = [
         sys.executable,

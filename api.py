@@ -118,7 +118,7 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:root@localhost:5432/Resume_analyzer",
 )
 # Used for building resume download links — override in .env if behind a proxy
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8501")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")

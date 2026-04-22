@@ -118,7 +118,7 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:root@localhost:5432/Resume_analyzer",
 )
 # Used for building resume download links — override in .env if behind a proxy
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8501")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -759,14 +759,7 @@ def _slice_skills_section(text: str) -> str:
             start = start + len(m)
             break
     if start == -1:
-        # fallback: first occurrence
-        for m in ["skills", "technical skills", "key skills", "skill set"]:
-            p = lower.find(m)
-            if p != -1:
-                start = p
-                break
-    if start == -1:
-        return text or ""
+        return ""
 
     tail = t[start:]
     tail_l = tail.lower()
@@ -798,21 +791,40 @@ def _clean_skill_list(items, *, max_items: int) -> list[str]:
     seen: set[str] = set()
     for raw in (items or []):
         s = str(raw or "").strip()
+        s = re.sub(
+            r"^(programming languages|frontend development|backend development|version control tools|"
+            r"database management|web technologies|project management tool|core concepts|technical skills|"
+            r"technical proficiencies|skills|languages|databases|frameworks|testing|tools)\s*[:\-]?\s*",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        )
         if not s:
             continue
 
         # Drop overly long / sentence-like strings
-        if len(s) > 32:
+        if len(s) > 28:
             continue
         # Drop items with too many words (usually sentences)
-        if len(s.split()) > 3:
+        word_count = len(s.split())
+        if word_count > 4:
+            continue
+        if word_count > 2 and not _looks_like_primary_skill(s):
             continue
         # Drop obvious non-skill filler
         low = s.lower().strip(" .,:;|/\\-+_()[]{}")
         if low in {"programmer", "developer", "software", "engineer", "fresher", "student"}:
             continue
-        if any(w in low for w in ["ready to", "passion", "team work", "teamwork", "adaptability", "time management", "communication "]):
-            # These are too often soft-skill sentences in your data; keep them out of primary lists.
+        if low in {"asp", "net", "concepts"}:
+            continue
+        if low in {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"}:
+            continue
+        if "management team collaboration" in low:
+            continue
+        
+        # Aggressive verb/noun filtering for hallucinated strings
+        bad_words = ["ready", "good", "passion", "team", "adaptability", "time management", "communication", "work", "thumbnail", "canva", "seo", "management", "designer"]
+        if any(w in low for w in bad_words):
             continue
 
         key = low.replace(" ", "")
@@ -825,22 +837,76 @@ def _clean_skill_list(items, *, max_items: int) -> list[str]:
     return out
 
 
+def _looks_like_primary_skill(label: str) -> bool:
+    s = str(label or "").strip()
+    if not s:
+        return False
+    low = re.sub(r"\s+", " ", s.lower()).strip()
+    if not low:
+        return False
+    if any(ch in s for ch in (".", "#", "+", "/")):
+        return True
+    primary_terms = {
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "react",
+        "node.js",
+        "next.js",
+        "angular",
+        "vue",
+        "asp.net",
+        ".net",
+        "c#",
+        "sql",
+        "mysql",
+        "postgresql",
+        "mongodb",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "jira",
+        "figma",
+        "framer",
+        "webflow",
+        "photoshop",
+        "maya",
+        "blender",
+        "windows",
+        "linux",
+        "visual studio",
+        "entity framework",
+        "core java",
+        "advanced java",
+        "react native",
+        "postman",
+        "ssms",
+    }
+    return low in primary_terms
+
+
 def _derive_clean_skills_from_text(resume_text: str) -> tuple[list[str], list[str]]:
     """
     Prefer extracting skills from the Skills section; fallback to full text.
     """
     skills_text = _slice_skills_section(resume_text or "")
-    skills = extract_skills_from_text(skills_text if skills_text.strip() else (resume_text or "")) or {}
+    skills = extract_skills_from_text(skills_text if skills_text.strip() else (resume_text or ""))
+    # skills is a list, not a dict
+    if not isinstance(skills, list):
+        skills = []
 
-    primary = skills.get("primary_skills") or skills.get("key_skills") or []
-    other = skills.get("other_skills") or skills.get("skills") or []
-    if not isinstance(primary, list):
-        primary = [s.strip() for s in str(primary).split(",") if s.strip()]
-    if not isinstance(other, list):
-        other = [s.strip() for s in str(other).split(",") if s.strip()]
+    primary = [s for s in skills if _looks_like_primary_skill(s)]
+    if not primary:
+        primary = []
+    else:
+        primary = primary[:10]
+    other = [s for s in skills if s not in primary] if skills else []
 
     primary_clean = _clean_skill_list(primary, max_items=10)
-    other_clean = _clean_skill_list([s for s in other if str(s).strip()], max_items=40)
+    other_clean = _clean_skill_list(other, max_items=40)
     # remove duplicates across lists
     prim_norm = {s.lower().replace(" ", "") for s in primary_clean}
     other_clean = [s for s in other_clean if s.lower().replace(" ", "") not in prim_norm]
@@ -924,15 +990,18 @@ async def upload_resume(
             except Exception as _gate_exc:
                 logger.warning("Extraction validation gate failed for %s: %s", filename, _gate_exc)
 
-            # Skills repair: derive cleaner skills from the Skills section and override junky outputs.
+            # Skills repair: prefer deterministic section-aware extraction over
+            # the broader LLM-derived list when we have any usable signal.
             try:
-                primary_clean, other_clean = _derive_clean_skills_from_text(resume_text or "")
-                if primary_clean:
+                primary_clean, other_clean = _derive_clean_skills_from_text(norm_text or resume_text or "")
+                deterministic_skills = primary_clean + other_clean
+                if deterministic_skills:
                     extracted["primary_skills"] = primary_clean
-                if other_clean:
                     extracted["other_skills"] = other_clean
+                    extracted["skills"] = deterministic_skills
+                    extracted["key_skills"] = primary_clean[:15] if primary_clean else deterministic_skills[:15]
             except Exception as _skills_exc:
-                logger.debug("Skills cleanup skipped for %s: %s", filename, _skills_exc)
+                logger.debug("Skills split skipped for %s: %s", filename, _skills_exc)
 
             cleaned = ResumeSchema(**extracted)
 
@@ -1758,8 +1827,29 @@ def _extract_search_intent(question: str) -> tuple[list[str], float]:
             min_exp = float(exp_match.group(1))
 
     for key, tokens in _SEARCH_SKILL_GROUPS.items():
-        if any(t in q for t in tokens):
-            search_terms.extend(tokens)
+        matched = [t for t in tokens if t in q]
+        if matched:
+            # Keep the query narrow. If the user asks for TypeScript, do not
+            # expand into the whole frontend bucket (React/Angular/Vue/HTML/CSS).
+            if key == "frontend":
+                if "typescript" in matched:
+                    search_terms.extend(["typescript", "ts"])
+                elif "javascript" in matched:
+                    search_terms.extend(["javascript", "js"])
+                elif "react" in matched:
+                    search_terms.extend(["react", "reactjs", "react.js", "next.js", "nextjs"])
+                elif "angular" in matched:
+                    search_terms.extend(["angular"])
+                elif "vue" in matched:
+                    search_terms.extend(["vue"])
+                elif "html" in matched:
+                    search_terms.extend(["html"])
+                elif "css" in matched:
+                    search_terms.extend(["css"])
+                elif "frontend" in matched:
+                    search_terms.extend(["frontend"])
+            else:
+                search_terms.extend(matched)
     # Also single-word tech mentions
     for word in ["developer", "developers", "candidates", "show", "find", "list"]:
         q = q.replace(word, " ")
@@ -1789,14 +1879,15 @@ def _db_search_candidates(
         return rows[:limit]
     combined = []
     for r in rows:
+        # For skill lookups, match only the explicit skill columns.
+        # Projects / summary text can mention technologies in narrative form
+        # and should not make a candidate appear as a skill match.
         blob = " ".join([
             (r.skills or ""),
             (_safe_get(r, "primary_skills") or ""),
             (_safe_get(r, "key_skills") or ""),
-            (r.experience_summary or ""),
-            (r.projects or ""),
         ]).lower()
-        if any(term in blob for term in skill_terms):
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", blob) for term in skill_terms):
             combined.append(r)
     return combined[:limit]
 
@@ -1821,10 +1912,8 @@ def _apply_skill_filter(question: str, resumes: list) -> list:
             str(r.skills or ""),
             str(_safe_get(r, "primary_skills") or ""),
             str(_safe_get(r, "key_skills") or ""),
-            str(r.experience_summary or ""),
-            str(r.projects or ""),
         ]).lower()
-        if any(tok in blob for tok in must_tokens):
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(tok)}(?![a-z0-9])", blob) for tok in must_tokens):
             filtered.append(r)
     return filtered if filtered else resumes
 
@@ -1858,6 +1947,33 @@ def _encode_question(question: str):
     return q_vec[0] if len(q_vec.shape) == 2 else q_vec
 
 
+def _safe_chroma_query(query_embeddings, n_results: int) -> dict:
+    """
+    Best-effort Chroma query wrapper.
+    If the collection has an internal metadata/segment problem, return an empty
+    result instead of failing the whole chat request.
+    """
+    try:
+        collection = getattr(embedding_manager, "collection", None)
+        if collection is None:
+            return {}
+        return collection.query(query_embeddings=query_embeddings, n_results=n_results)
+    except Exception as exc:
+        logger.warning("Chroma query skipped after failure: %s", exc)
+        return {}
+
+
+def _safe_chroma_count() -> int:
+    try:
+        collection = getattr(embedding_manager, "collection", None)
+        if collection is None:
+            return 0
+        return int(collection.count())
+    except Exception as exc:
+        logger.warning("Chroma count skipped after failure: %s", exc)
+        return 0
+
+
 @app.post("/chat", tags=["Chat"])
 async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
     question = (payload.get("question") or "").strip()
@@ -1870,33 +1986,11 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
         x in question.lower() for x in ["show", "find", "list", "candidates", "developers", "who has"]
     )
 
-    # Vector search: run embedding encode in thread pool to avoid blocking the event loop
     executor = getattr(request.app.state, "executor", None)
     loop = asyncio.get_event_loop()
-    if executor:
-        q_vec = await loop.run_in_executor(executor, _encode_question, question)
-    else:
-        q_vec = _encode_question(question)
 
-    try:
-        coll_count = embedding_manager.collection.count()
-    except Exception:
-        coll_count = 25
-    n_vector = 25
-    n_results = min(n_vector, max(1, coll_count))
-    results = embedding_manager.collection.query(
-        query_embeddings=[q_vec.tolist()], n_results=n_results
-    )
-
-    vector_resumes: list = []
-    if results.get("metadatas") and results["metadatas"][0]:
-        vector_ids = [m.get("vector_id") for m in results["metadatas"][0] if m.get("vector_id")]
-        if vector_ids:
-            rows = db.query(ResumeDB).filter(ResumeDB.vector_id.in_(vector_ids)).all()
-            by_vid = {r.vector_id: r for r in rows if r.vector_id}
-            vector_resumes = [by_vid[vid] for vid in vector_ids if vid in by_vid]
-
-    # When search-like, also run DB filter by skills/experience and merge with vector results
+    # Keep chat independent from Chroma/embedding persistence. Search-like
+    # questions are answered from stored resume rows only.
     seen_ids = set()
     merged: list = []
     if is_search_like and (skill_terms or min_exp > 0):
@@ -1905,21 +1999,15 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
             if r.id not in seen_ids:
                 seen_ids.add(r.id)
                 merged.append(r)
-    for r in vector_resumes:
-        if r.id not in seen_ids:
-            seen_ids.add(r.id)
-            merged.append(r)
-    if not merged and vector_resumes:
-        merged = vector_resumes
     resumes = _apply_skill_filter(question, merged) if merged else merged
-    if not resumes and vector_resumes:
-        resumes = vector_resumes
+    if not resumes and is_search_like and skill_terms:
+        resumes = _db_search_candidates(db, skill_terms, min_exp, limit=50)
+    if not resumes and is_search_like:
+        resumes = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).limit(50).all()
 
     if not resumes:
         return {"answer": "No matching candidates found.", "best_matches": []}
 
-    # Deterministic ranking: combine embedding shortlist with skill/experience relevance.
-    # (No response shape changes; only ordering changes.)
     if is_search_like and resumes:
         terms = [t.strip().lower() for t in (skill_terms or []) if t and t.strip()][:25]
 

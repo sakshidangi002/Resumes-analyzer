@@ -81,6 +81,25 @@ def extract_text_from_pdf(path: str) -> str:
     Default uses pdfplumber (better layout but slower). You can opt into
     a faster extractor by setting PDF_EXTRACTOR=pypdf.
     """
+    try:
+        # Prefer the multi-strategy extractor first so complex/multi-column PDFs
+        # can fall back to PyMuPDF when pdfplumber/pypdf underperform.
+        try:
+            from backend.resume_parser_v2 import extract_text_robust
+        except ImportError:
+            from resume_parser_v2 import extract_text_robust  # type: ignore
+
+        robust_text, meta = extract_text_robust(path)
+        if robust_text.strip():
+            logger.info(
+                "[PDF Extraction] robust=%s score=%.3f",
+                meta.get("source"),
+                float(meta.get("quality_score", 0.0) or 0.0),
+            )
+            return robust_text.strip()
+    except Exception as exc:
+        logger.debug("Robust PDF extraction unavailable, falling back: %s", exc)
+
     def _extract_with_pypdf() -> str:
         from pypdf import PdfReader
 
@@ -161,6 +180,33 @@ def extract_text_from_pdf(path: str) -> str:
         return n1.strip()
     # Otherwise prefer the longer normalized text (more content)
     return (n1 if len(n1) >= len(n2) else n2).strip()
+
+
+def _extract_contact_email(text: str) -> str:
+    """
+    Prefer the contact email from the header/top contact block instead of the
+    first email anywhere in the document body.
+    """
+    if not text:
+        return ""
+
+    email_re = re.compile(r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    scopes = [
+        "\n".join(lines[:12]),
+        "\n".join(lines[:25]),
+        "\n".join(ln for ln in lines[:50] if "@" in ln or re.search(r"\+?\d[\d\s\-]{8,}", ln)),
+        text,
+    ]
+
+    for blob in scopes:
+        for match in email_re.finditer(blob):
+            email = match.group(1).strip().lower()
+            if email.endswith("@gmai.com"):
+                email = email.replace("@gmai.com", "@gmail.com")
+            return email
+
+    return ""
 
 
 def extract_text_from_docx(path: str) -> str:
@@ -333,12 +379,48 @@ _SKILL_GENERIC_WORDS = {
     "execute",
     "strategies",
     "effective",
+    "engineer",
+    "engineers",
+    "developer",
+    "developers",
+    "programmer",
+    "programmers",
+    "designer",
+    "designers",
+    "intern",
+    "interns",
+    "trainee",
+    "trainees",
+    "operating",
+    "atlassian",
+    "asp",
+    "net",
+    "concepts",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
 }
 _SKILL_ADJECTIVES = {"scalable", "dynamic", "efficient", "robust", "reliable", "high", "low", "fast", "secure"}
 _SKILL_VAGUE_PHRASES = {
     "dynamic content rendering",
     "api consumption",
 }
+
+_SKILL_CATEGORY_PREFIX_RE = re.compile(
+    r"^(programming languages|frontend development|backend development|version control tools|"
+    r"database management|web technologies|project management tool|core concepts|technical skills|"
+    r"technical proficiencies|skills|languages|databases|frameworks|testing|tools)\s*[:\-]?\s*",
+    re.IGNORECASE,
+)
 
 
 def _fix_merged_words(text: str) -> str:
@@ -389,6 +471,16 @@ def _clean_text_for_skill_tokens(text: str) -> str:
         s = ln.strip()
         if not s:
             continue
+        # Strip category prefixes commonly used in skills sections.
+        s = _SKILL_CATEGORY_PREFIX_RE.sub("", s)
+        # Normalize common spaced tech names before tokenization.
+        s = re.sub(r"\bjava\s+script\b", "javascript", s)
+        s = re.sub(r"\btype\s+script\b", "typescript", s)
+        s = re.sub(r"\bnode\s+js\b", "node.js", s)
+        s = re.sub(r"\bmy\s+sql\b", "mysql", s)
+        s = re.sub(r"\bpost\s+gre\s+sql\b", "postgresql", s)
+        s = re.sub(r"\bgit\s+hub\b", "github", s)
+        s = re.sub(r"\bpower\s+bi\b", "power bi", s)
         # Keep . + # / - for tech tokens like c++, c#, .net, ci/cd
         s = re.sub(r"[^a-z0-9.+#/\-\s]", " ", s)
         s = s.replace("ci cd", "ci/cd")
@@ -492,6 +584,8 @@ def _skill_is_noise(tok: str) -> bool:
     if low in _SKILL_ADJECTIVES:
         return True
     if low in _SKILL_VAGUE_PHRASES:
+        return True
+    if "management team collaboration" in low:
         return True
     # School / board lines mistaken for skills (avoid bare 'board' — matches 'keyboard')
     if re.search(
@@ -1575,20 +1669,8 @@ def _is_skills_header_line(line: str) -> bool:
     norm = _norm_header(line)
     if not norm:
         return False
-    if norm in _SKILLS_SECTION_HEADERS:
-        return True
-    # Fuzzy: any header that clearly mentions skills / competencies / tech
-    SKILL_KEYWORDS = (
-        "skill",
-        "skills",
-        "competenc",
-        "tech stack",
-        "technology",
-        "technologies",
-        "tools",
-        "stack",
-    )
-    if any(kw in norm for kw in SKILL_KEYWORDS):
+    normalized_headers = {_norm_header(h) for h in _SKILLS_SECTION_HEADERS}
+    if norm in normalized_headers:
         return True
     return False
 
@@ -1611,8 +1693,11 @@ def build_extraction_context(resume_text: str) -> tuple[str, str, str]:
 _SKILL_CANONICAL = {
     "dotnet": ".NET",
     ".net": ".NET",
+    "net core": ".NET Core",
     "aspnet": "ASP.NET",
     "asp.net": "ASP.NET",
+    "asp net mvc": "ASP.NET MVC",
+    "asp net core": "ASP.NET Core",
     "nodejs": "Node.js",
     "node js": "Node.js",
     "reactjs": "React",
@@ -1640,8 +1725,25 @@ _SKILL_CANONICAL = {
     "py": "Python",
     "c sharp": "C#",
     "c#": "C#",
+    "visual studio": "Visual Studio",
+    "entity framework": "Entity Framework",
+    "core java": "Core Java",
+    "advanced java": "Advanced Java",
+    "react native": "React Native",
+    "figma": "Figma",
+    "f igma": "Figma",
+    "framer": "Framer",
+    "webflow": "Webflow",
+    "substance painter": "Substance Painter",
+    "substance 3d painter": "Substance 3D Painter",
+    "autodesk maya": "Autodesk Maya",
+    "rizom uv": "Rizom UV",
+    "uv unwrapping": "UV Unwrapping",
+    "product visualization": "Product Visualization",
+    "hard surface modeling": "Hard Surface Modeling",
     "sql server": "SQL Server",
     "ms sql server": "SQL Server",
+    "ssms": "SSMS",
 }
 
 
@@ -1818,66 +1920,35 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
     if not text:
         return []
 
-    # Robust carve-out: grab substring after the first SKILLS *header line*
-    # until the next major header. (Avoid matching "skills" inside sentences.)
-    carved_block = ""
-    header_idx = None
-    header_end = None
-    for m in re.finditer(r"(?im)^\s*skills\s*:?\s*$", text):
-        header_idx = m.start()
-        header_end = m.end()
-        break
-    if header_idx is None:
-        # Sometimes headers are on the same line with other headers ("EDUCATION SKILLS")
-        # or in all-caps footer blocks; handle explicit header lines in the first 120 lines.
-        for m in re.finditer(r"(?im)^\s*[a-z &]+\bskills\b[a-z &]*\s*$", text):
-            # Ensure it looks like a header line, not a sentence
-            line = text[m.start() : m.end()].strip()
-            if len(line) <= 40 and _looks_like_header(line):
-                header_idx = m.start()
-                header_end = m.end()
-                break
-    if header_end is not None:
-        rest = text[header_end:]
-        m1 = re.search(r"(?is)\b(summary|educ\w*|projects|experience|training|certifications)\b", rest)
-        carved_block = (rest[: m1.start()] if m1 else rest)[:1800].strip()
-
-    # Fallback: many PDFs put the actual skill list near the top (before headers),
-    # and later repeat "EDUCATION EXPERIENCE SKILLS PROJECTS" in a footer.
-    if not carved_block or len(carved_block) < 25:
-        top_lines = [ln.strip() for ln in text.splitlines()[:45] if ln.strip()]
-        strip: list[str] = []
-        started = False
-        for ln in top_lines:
-            norm = _norm_header(ln)
-            # Start collecting after a line that clearly indicates skills (header-like)
-            if not started and ("skills" in norm) and _looks_like_header(ln):
-                started = True
-                continue
-            if not started:
-                continue
-            # Stop at the next major section header
-            if norm in {"experience", "projects", "education", "extra curicular", "extra curricular"}:
-                break
-            # Candidate skill line: short, low symbol ratio, not an email/phone/year
-            if len(ln) > 30:
-                continue
-            if re.search(r"@\w+|\b\d{4}\b|\+?\d[\d\s\-]{8,}", ln):
-                continue
-            if not re.search(r"[a-zA-Z]", ln):
-                continue
-            if _symbol_ratio(ln) > 0.25:
-                continue
-            strip.append(ln)
-        if len(strip) >= 5:
-            carved_block = "\n".join(strip)
-
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     # Find all skills-like section headers (not just the first one)
     section_blocks: list[list[str]] = []
     i = 0
     n = len(lines)
+    stop_headers = {
+        "skills",
+        "technical skills",
+        "key skills",
+        "skill set",
+        "tech stack",
+        "tools & technologies",
+        "tools and technologies",
+        "experience",
+        "work experience",
+        "work history",
+        "professional experience",
+        "projects",
+        "project experience",
+        "education",
+        "summary",
+        "profile",
+        "objective",
+        "certifications",
+        "achievements",
+        "awards",
+        "languages",
+    }
     while i < n:
         ln = lines[i]
         if _is_skills_header_line(ln):
@@ -1892,10 +1963,13 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
                         break
                     continue
                 blank_streak = 0
+                cur_norm = _norm_header(cur)
+                if cur_norm in stop_headers and section:
+                    break
                 if _looks_like_header(cur) and section:
                     break
                 section.append(cur)
-                if len(section) >= 80:
+                if len(section) >= 20:
                     break
             if section:
                 section_blocks.append(section)
@@ -1903,36 +1977,16 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
         else:
             i += 1
 
-    # Fallback for PDFs where extraction collapses line breaks:
-    # use regex to carve out a SKILLS-like block until the next major section.
     if not section_blocks:
-        m = re.search(
-            r"(?is)\b(skills|technical skills|tech stack|tools\s*&?\s*technologies)\b\s*:?\s*(.+?)\s*(\b(summary|educ\w*|projects|experience|training|certifications)\b|$)",
-            text,
-        )
-        if m:
-            block = m.group(2) or ""
-            # Create a pseudo section block from the captured substring
-            section_blocks = [[ln.strip() for ln in re.split(r"[\n\r]+", block) if ln.strip()]]
-        elif carved_block:
-            section_blocks = [[ln.strip() for ln in re.split(r"[\n\r]+", carved_block) if ln.strip()]]
-        else:
-            return []
+        return []
 
     # Join all skill section lines and tokenize using the strict cleaner.
     section_joined = "\n".join(["\n".join(sec) for sec in section_blocks if sec]).strip()
-    # Do not let a narrow "skills:" carve-out replace a full parsed section (common PDF bug).
-    if section_joined:
-        section_text = section_joined
-    elif carved_block:
-        section_text = carved_block
-    else:
-        section_text = ""
-    if not section_text:
+    if not section_joined:
         return []
+    section_text = section_joined
 
-    # Candidate collection: prefer explicit skills section, but also harvest from
-    # experience/projects when PDFs are messy or skills are embedded elsewhere.
+    # Candidate collection is limited strictly to the skills section.
     def _explode_compact_skill_line(tok: str) -> list[str]:
         """
         Split compact lines like 'HTML CSS JS' into individual tokens safely.
@@ -1941,12 +1995,56 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
         s = _collapse_whitespace(tok or "")
         if not s or " " not in s:
             return [tok]
-        parts = [p for p in s.split(" ") if p]
-        if 2 <= len(parts) <= 5 and all(1 < len(p) <= 12 for p in parts):
+        norm = _norm_header(s)
+        if not norm:
+            return [tok]
+
+        # Pull out common multi-word technical phrases first so a line such as
+        # "ASP.NET MVC .NET Core Entity Framework" becomes separate skills.
+        phrase_hints = [
+            "asp net mvc",
+            "asp net core",
+            "net core",
+            "visual studio",
+            "entity framework",
+            "core java",
+            "advanced java",
+            "react native",
+            "java script",
+            "type script",
+            "power bi",
+            "adobe photoshop",
+            "substance 3d painter",
+            "substance painter",
+            "autodesk maya",
+            "rizom uv",
+            "uv unwrapping",
+            "product visualization",
+            "hard surface modeling",
+            "project management tool",
+            "sql server",
+            "ms sql server",
+            "next js",
+            "node js",
+        ]
+        extracted: list[str] = []
+        working = norm
+        for phrase in sorted(phrase_hints, key=len, reverse=True):
+            pattern = rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])"
+            if re.search(pattern, working):
+                extracted.append(phrase)
+                working = re.sub(pattern, " ", working)
+
+        parts = [p for p in re.split(r"\s+", working) if p]
+        if extracted:
+            extracted.extend(parts)
+            return extracted
+
+        if 2 <= len(parts) <= 6 and all(1 < len(p) <= 12 for p in parts):
             # Avoid splitting sentences: require low symbol ratio and no verbs.
             if _symbol_ratio(s) <= 0.18 and not re.search(
                 r"\b(created|developed|implemented|managed|responsible)\b",
-                _norm_header(s),
+                norm,
             ):
                 return parts
         return [tok]
@@ -1968,20 +2066,6 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
     # Source B: experience/projects — ONLY when no real skills section was found.
     # If the resume has an explicit Skills / Technical Skills block, harvesting from
     # experience/projects pulls narrative words ("For", "Registration", verbs, etc.).
-    exp_txt = ""
-    proj_txt = ""
-    if not section_blocks:
-        blocks = _get_context_blocks_for_evidence(text)
-        exp_txt = _find_section_block(
-            text,
-            {"experience", "work experience", "work history", "professional experience"},
-            max_lines=140,
-        ) or ""
-        proj_txt = _find_section_block(text, {"projects"}, max_lines=140) or ""
-        if len(candidates) < 8:
-            candidates += _collect_tokens(exp_txt, cap=180)
-            candidates += _collect_tokens(proj_txt, cap=140)
-
     # Normalize + pre-filter (lightweight). Final acceptance is evidence-based.
     normalized: list[str] = []
     seen_norm: set[str] = set()
@@ -2042,6 +2126,12 @@ def _get_context_blocks_for_evidence(resume_text: str) -> dict:
         max_lines=120,
     )
     proj_block = _find_section_block(resume_text, {"projects"}, max_lines=120)
+    if not proj_block:
+        proj_block = _find_section_block(
+            resume_text,
+            {"projects", "project experience", "personal projects", "academic projects"},
+            max_lines=120,
+        )
     return {
         "skills": (skills_block or "").lower(),
         "experience": (exp_block or "").lower(),
@@ -2410,6 +2500,9 @@ def extract_resume(resume_text: str) -> dict:
     projects: list[str] = []
     experience_summary = ""
     experience_years = 0.0
+    experience_level = ""
+    internship_present = False
+    exp_notes = ""
     work_experience: list[dict] = []
     summary = ""
     companies_worked_at: list[str] = []
@@ -2432,9 +2525,7 @@ def extract_resume(resume_text: str) -> dict:
         resume_text_sanitised = _drop_symbol_heavy_lines(resume_text_sanitised, max_ratio=0.32)
 
     # Email and phone first (needed for name candidate scoring)
-    email_match = re.search(r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", base_text)
-    if email_match:
-        email = email_match.group(1)
+    email = _extract_contact_email(base_text)
 
     phone_match = re.search(r"(\+?1?\s*\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})", base_text)
     if phone_match:
@@ -2445,17 +2536,36 @@ def extract_resume(resume_text: str) -> dict:
             phone = re.sub(r"\s+", " ", phone_match.group(0)).strip()
 
     # Production name extraction: candidate-based scoring (no hardcoded bad-name list)
+    def _name_has_header_support(candidate: str, text: str, email_value: str) -> bool:
+        if not candidate or not text:
+            return False
+        cand_norm = _norm_header(candidate)
+        if not cand_norm:
+            return False
+
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        top_lines = lines[:12]
+        if any(cand_norm == _norm_header(ln) or cand_norm in _norm_header(ln) for ln in top_lines):
+            return True
+
+        if email_value:
+            email_local = email_value.split("@", 1)[0].lower()
+            for word in cand_norm.split():
+                if len(word) > 2 and word in email_local:
+                    return True
+        return False
+
     try:
         name_candidates = extract_name_candidates(base_text, email)
         best_name, low_confidence = select_best_name(name_candidates, base_text, email)
-        if best_name:
+        if best_name and (_name_has_header_support(best_name, base_text, email) or not low_confidence):
             name = best_name[:60]
         if low_confidence and best_name:
             extraction_warnings.append("name_low_confidence")
     except Exception as e:
         logger.warning("Candidate-based name extraction failed: %s", e)
         header_name = extract_name_from_header(base_text)
-        if header_name:
+        if header_name and _name_has_header_support(header_name, base_text, email):
             name = header_name[:60]
 
     # Many resumes have location in the top few lines
@@ -2570,6 +2680,13 @@ def extract_resume(resume_text: str) -> dict:
         "microservices", "rest api", "soap", "grpc", "websockets",
         "mqtt", "socket.io", "html", "css", "tailwind", "bootstrap",
         "node", "nodejs", "excel", "powerbi",
+
+        # Creative / 3D / Media Tools
+        "autodesk maya", "maya", "substance painter", "substance 3d painter",
+        "arnold renderer", "arnold", "rizom uv", "adobe photoshop", "photoshop",
+        "blender", "3ds max", "cinema 4d", "zbrush", "after effects",
+        "premiere pro", "3d modeling", "hard surface modeling",
+        "product visualization", "uv unwrapping", "texturing", "rendering",
     ]
     _tech_vocab = _build_tech_skill_vocab(skill_keywords)
     # --- Skills extraction (cleaned, context-aware) ---
@@ -2795,7 +2912,9 @@ def extract_resume(resume_text: str) -> dict:
                                     if _is_plausible_person_name(llm_name):
                                         name = _strip_contact_noise(llm_name)
                                 if llm_result.get("email", "").strip():
-                                    email = llm_result["email"]
+                                    # Regex takes precedence because LLM can hallucinate or truncate emails
+                                    if not email:
+                                        email = llm_result["email"]
                                 if llm_result.get("phone", "").strip():
                                     phone = llm_result["phone"]
                                 if isinstance(llm_result.get("location"), str) and llm_result.get("location", "").strip():
@@ -2853,33 +2972,87 @@ def extract_resume(resume_text: str) -> dict:
         except Exception as exc:
             logger.warning("LLM extraction failed (%s), falling back to regex.", exc)
 
-    # --- experience_summary regex fallback ---
-    if not experience_summary:
-        m = re.search(r"(\d+(?:\.\d+)?)(?:\+|-)?[\s-]*years?", resume_text.lower())
-        if m:
-            experience_summary = f"{m.group(0)} experience"
+    # --- NEW V3 DETERMINISTIC FALLBACKS / OVERRIDES ---
+    # We call extraction_v3 here since tech vocab is built and text is available.
+    try:
+        try:
+            from backend.extraction_v3 import deterministic_extract_pipeline
+        except ImportError:
+            from extraction_v3 import deterministic_extract_pipeline
+        
+        v3_results = deterministic_extract_pipeline(base_text, _tech_vocab)
+        
+        # 1. Override Name if highly confident (deterministic rules passed)
+        if v3_results["name_conf"] > 0.8 and v3_results["name"]:
+            name = v3_results["name"]
 
-    # --- experience_years fallback ---
-    # 1) Prefer conservative professional experience from structured work_experience (excluding internships)
-    total_years, experience_level, internship_present, exp_notes = calculate_professional_experience(
-        work_experience,
-        resume_text,
-    )
-    if total_years > 0:
-        experience_years = total_years
+        # 2. Filter LLM garbage and merge deterministic skills
+        if v3_results["skills"]:
+            # Heavily filter the LLM-derived skills to drop sentences/noise
+            llm_clean = []
+            for s in skills:
+                # Keep if it is short, doesn't contain verbs/noise, and is highly likely a real skill
+                s_norm = s.lower().strip()
+                if len(s.split()) > 2:
+                    continue
+                if any(bad in s_norm for bad in ("programmer", "developer", "engineer", "designer", "canva", "ready", "good", "work", "thumbnail", "seo", "management")):
+                    continue
+                llm_clean.append(s)
+                
+            # V3 skills (vocab matched) take precedence
+            skills = v3_results["skills"] + [s for s in llm_clean if s not in v3_results["skills"]]
+        else:
+            # Even if V3 failed, filter the LLM output aggressively
+            llm_clean = []
+            for s in skills:
+                s_norm = s.lower().strip()
+                if len(s.split()) > 2:
+                    continue
+                if any(bad in s_norm for bad in ("programmer", "developer", "engineer", "designer", "canva", "ready", "good", "work", "thumbnail", "seo", "management")):
+                    continue
+                llm_clean.append(s)
+            skills = llm_clean
+
+            
+        # 3. Override Experience Years with deterministic date range parser (much more accurate than LLM hallucination)
+        if v3_results["experience_years"] > 0.0:
+            experience_years = v3_results["experience_years"]
+            if not experience_summary:
+                experience_summary = f"{experience_years} years experience (from section parsing)"
+    except Exception as e:
+        logger.warning(f"V3 Deterministic Pipeline failed: {e}")
+
+    # Fallback to existing logic if V3 did not catch experience
+    if experience_years == 0.0:
         if not experience_summary:
-            experience_summary = f"{round(total_years, 2)} years experience (calculated from work history)"
-    else:
-        # 2) Fall back to explicit "X years" summary, but keep conservative
-        if experience_summary:
-            experience_years = calculate_experience_years(experience_summary)
-        # 3) Fall back to date ranges in experience section (internships excluded)
-        if experience_years == 0.0:
-            approx = _estimate_years_from_raw_dates(resume_text)
-            if approx > 0:
-                experience_years = approx
-                if not experience_summary:
-                    experience_summary = f"{approx} years experience (from date ranges)"
+            m = re.search(r"(\d+(?:\.\d+)?)(?:\+|-)?[\s-]*years?", resume_text.lower())
+            if m:
+                experience_summary = f"{m.group(0)} experience"
+
+        total_years, experience_level, internship_present, exp_notes = calculate_professional_experience(
+            work_experience,
+            resume_text,
+        )
+        if total_years > 0:
+            experience_years = total_years
+            if not experience_summary:
+                experience_summary = f"{round(total_years, 2)} years experience (calculated from work history)"
+        else:
+            if experience_summary:
+                experience_years = calculate_experience_years(experience_summary)
+            if experience_years == 0.0:
+                experience_blocks = _get_context_blocks_for_evidence(base_text)
+                approx_source = "\n".join(
+                    [
+                        experience_blocks.get("experience", ""),
+                        experience_blocks.get("projects", ""),
+                    ]
+                ).strip()
+                approx = _estimate_years_from_raw_dates(approx_source)
+                if approx > 0:
+                    experience_years = approx
+                    if not experience_summary:
+                        experience_summary = f"{approx} years experience (from date ranges)"
 
     if experience_years == 0.0:
         if "experience_unknown" not in extraction_warnings:
@@ -3068,21 +3241,23 @@ def extract_resume(resume_text: str) -> dict:
         if len(primary_skills) >= 3:
             break
     if not primary_skills:
-        # fallback to first few other_skills
-        primary_skills = other_skills[:3]
+        # Leave primary_skills empty rather than backfilling with generic section text.
+        primary_skills = [s for s in other_skills if _is_primary_candidate_skill(str(s))][:3]
 
     # Fallback: derive a best-effort name from email local-part when header/LLM failed
-    if (not name or name == "Unknown") and email:
-        local = email.split("@", 1)[0]
-        # Replace common separators with spaces and title-case
-        local = re.sub(r"[._\-]+", " ", local)
-        local = re.sub(r"\s+", " ", local).strip()
-        if local and any(ch.isalpha() for ch in local):
-            parts = [p for p in local.split(" ") if p]
-            if 1 <= len(parts) <= 4:
-                name = " ".join(w.capitalize() for w in parts)
-                if "name_low_confidence" not in extraction_warnings:
-                    extraction_warnings.append("name_low_confidence")
+    if not name or name == "Unknown":
+        top_lines = [ln.strip().lower() for ln in base_text.splitlines() if ln.strip()][:12]
+        if email and any(email in ln for ln in top_lines):
+            local = email.split("@", 1)[0]
+            # Replace common separators with spaces and title-case
+            local = re.sub(r"[._\-]+", " ", local)
+            local = re.sub(r"\s+", " ", local).strip()
+            if local and any(ch.isalpha() for ch in local):
+                parts = [p for p in local.split(" ") if p]
+                if 1 <= len(parts) <= 4:
+                    name = " ".join(w.capitalize() for w in parts)
+                    if "name_low_confidence" not in extraction_warnings:
+                        extraction_warnings.append("name_low_confidence")
 
     logger.info(
         "Extracted: name=%s email=%s skills_count=%d primary=%s exp_years=%.1f",
@@ -3110,6 +3285,36 @@ def extract_resume(resume_text: str) -> dict:
         )
     except Exception:
         pass
+
+    # Final strict skills policy: only return skills that came from an explicit
+    # skills section. This prevents body text, projects, and experience lines
+    # from leaking into the final skills fields.
+    explicit_skill_section = list(section_skills or [])
+    if explicit_skill_section:
+        cleaned_explicit: list[str] = []
+        seen_explicit: set[str] = set()
+        for raw in explicit_skill_section:
+            s = _SKILL_CATEGORY_PREFIX_RE.sub("", _strip_skill_decorators(str(raw))).strip()
+            if not s:
+                continue
+            norm = canonicalise_skill(s) or _normalize_skill_token(s)
+            norm = _strip_footnote_numbers(norm)
+            if not norm or _skill_is_noise(norm):
+                continue
+            key = norm.lower()
+            if key in seen_explicit:
+                continue
+            seen_explicit.add(key)
+            cleaned_explicit.append(norm)
+        skills = cleaned_explicit[:]
+        key_skills = cleaned_explicit[:15]
+        primary_skills = [s for s in skills if _is_primary_candidate_skill(str(s))][:3]
+        other_skills = [s for s in skills if s not in primary_skills]
+    else:
+        skills = []
+        key_skills = []
+        primary_skills = []
+        other_skills = []
 
     # Final sanitization before returning/persisting
     summary = _collapse_whitespace(summary or "")
