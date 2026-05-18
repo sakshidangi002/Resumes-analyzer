@@ -1,0 +1,32 @@
+# Web
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+aiofiles>=23.0.0
+
+# Database - PostgreSQL
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# Auth & security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt<4
+python-multipart>=0.0.6
+
+# Validation & env
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+tomli; python_version < "3.11"
+
+# Email - SMTP
+# Standard library smtplib used; no extra package needed for basic SMTP
+
+# Reports
+openpyxl>=3.1.0
+# Optional: weasyprint or pdfkit for PDF export
+
+# Utils
+python-dotenv>=1.0.0
+jinja2>=3.1.0
+
