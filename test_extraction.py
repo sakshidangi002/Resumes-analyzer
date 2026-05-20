@@ -1,28 +1,57 @@
-import requests
+import argparse
 import json
-import requests
-import json
+import os
+import sys
 
-# Read and upload a test resume
-with open('backend/uploads/633c7e07-7ee6-4203-ba95-8a2907bfb381_TUSHAR_KUMAR.pdf', 'rb') as f:
-    files = [('files', f)]
-    response = requests.post('http://127.0.0.1:8000/upload', files=files)
 
-if response.status_code == 200:
-    result = response.json()
-    print('\nRESPONSE JSON:')
-    print(json.dumps(result, indent=2))
-    if result and len(result) > 0:
-        print("\n✓ EXTRACTION TEST RESULT:\n")
-        print(f"Status: {result[0].get('status')}")
-        if result[0].get('status') == 'error':
-            print(f"Error Message: {result[0].get('message')}")
-        else:
-            print(f"Candidate Name: {result[0].get('candidate_name')}")
-            if result[0].get('resume_link'):
-                print(f"Resume Link: {result[0].get('resume_link')}")
-    else:
-        print("No result returned")
-else:
-    print(f'Error: {response.status_code}')
-    print(response.text[:500])
+def _load_main_module():
+    # Keep the test local and lightweight: import the app module only when run.
+    import main
+
+    return main
+
+
+def main_cli() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run a local resume PDF extraction quality check."
+    )
+    parser.add_argument(
+        "pdf",
+        nargs="?",
+        default=os.environ.get("SAMPLE_PDF", ""),
+        help="Path to a sample resume PDF.",
+    )
+    args = parser.parse_args()
+
+    if not args.pdf:
+        print("Usage: python test_extraction.py <resume.pdf>")
+        return 2
+    if not os.path.exists(args.pdf):
+        print(f"File not found: {args.pdf}")
+        return 2
+
+    main_mod = _load_main_module()
+
+    # Show the quality gate inputs and the final text chosen by the extraction layer.
+    text, meta = main_mod.run_fallback_extraction(args.pdf)
+    normalized_text, norm_meta = main_mod.normalize_resume_text(text)
+    quality = main_mod.score_extraction_quality(text)
+    normalized_quality = main_mod.score_extraction_quality(normalized_text)
+
+    print(json.dumps(
+        {
+            "file": os.path.abspath(args.pdf),
+            "extraction": meta,
+            "raw_quality": quality,
+            "normalized_quality": normalized_quality,
+            "normalization_actions": norm_meta.get("actions", []),
+            "text_preview": text[:1000],
+        },
+        indent=2,
+        ensure_ascii=False,
+    ))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_cli())

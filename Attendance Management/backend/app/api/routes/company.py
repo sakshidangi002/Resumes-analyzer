@@ -67,24 +67,38 @@ def list_holidays(db: Session = Depends(get_db)):
 @router.get("/stats", response_model=CompanyStatsResponse)
 def get_company_stats(db: Session = Depends(get_db)):
     from app.models import Employee, Department, AttendanceRecord, LeaveRequest
+    from app.models.employee import EmploymentStatus
     from datetime import date as dt_date
     today = dt_date.today()
-    
-    total_employees = db.query(Employee).count()
+
+    active_status = EmploymentStatus.ACTIVE.value
+    active_emp_ids_subq = db.query(Employee.id).filter(Employee.employment_status == active_status).subquery()
+
+    total_employees = db.query(Employee).filter(Employee.employment_status == active_status).count()
     total_departments = db.query(Department).count()
-    
-    # Today's attendance
-    attendance = db.query(AttendanceRecord).filter(AttendanceRecord.date == today).all()
+
+    # Today's attendance (active employees only)
+    attendance = (
+        db.query(AttendanceRecord)
+        .filter(AttendanceRecord.date == today)
+        .filter(AttendanceRecord.employee_id.in_(active_emp_ids_subq))
+        .all()
+    )
     present_today = len([r for r in attendance if r.status in ['PRESENT', 'SHORT', 'HALF_DAY']])
     late_today = len([r for r in attendance if r.is_late])
-    
-    # Today's leave
-    on_leave_today = db.query(LeaveRequest).filter(
-        LeaveRequest.status == 'APPROVED',
-        LeaveRequest.start_date <= today,
-        LeaveRequest.end_date >= today
-    ).count()
-    
+
+    # Today's leave (active employees only)
+    on_leave_today = (
+        db.query(LeaveRequest)
+        .filter(
+            LeaveRequest.status == 'APPROVED',
+            LeaveRequest.start_date <= today,
+            LeaveRequest.end_date >= today,
+            LeaveRequest.employee_id.in_(active_emp_ids_subq),
+        )
+        .count()
+    )
+
     return {
         "total_employees": total_employees,
         "total_departments": total_departments,

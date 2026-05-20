@@ -15,49 +15,30 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Float, ForeignKey, String, Text, Boolean, create_engine, text, or_, func
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, Boolean, create_engine, text, or_, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from starlette.responses import FileResponse, JSONResponse, Response
 
-# allow running from workspace root OR from inside the backend/ folder
-try:
-    from backend.main import (
-        analyze_fit,
-        calculate_experience_years,
-        chatbot_answer,
-        extract_resume,
-        extract_skills_from_text,
-        estimate_experience_years_from_text,
-        extract_text_from_docx,
-        extract_text_from_pdf,
-        format_experience_duration,
-        normalize_resume_text,
-        validate_and_repair_extraction,
-        get_embedding_model,
-        preload_chat_model,
-        preload_extract_model,
-        rank_candidates,
-    )
-except ImportError:  # pragma: no cover
-    from main import (  # type: ignore
-        analyze_fit,
-        calculate_experience_years,
-        chatbot_answer,
-        extract_resume,
-        extract_skills_from_text,
-        estimate_experience_years_from_text,
-        extract_text_from_docx,
-        extract_text_from_pdf,
-        format_experience_duration,
-        normalize_resume_text,
-        validate_and_repair_extraction,
-        get_embedding_model,
-        preload_chat_model,
-        preload_extract_model,
-        rank_candidates,
-    )
+from .main import (
+    analyze_fit,
+    calculate_experience_years,
+    chatbot_answer,
+    extract_resume,
+    extract_skills_from_text,
+    extract_skills_with_langchain,
+    estimate_experience_years_from_text,
+    extract_text_from_docx,
+    extract_text_from_pdf,
+    format_experience_duration,
+    normalize_resume_text,
+    validate_and_repair_extraction,
+    get_embedding_model,
+    preload_chat_model,
+    preload_extract_model,
+    rank_candidates,
+)
 
 import pandas as pd
 from chromadb import PersistentClient
@@ -118,7 +99,7 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:root@localhost:5432/Resume_analyzer",
 )
 # Used for building resume download links — override in .env if behind a proxy
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8501")
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -183,6 +164,16 @@ class ResumeDB(Base):
     key_skills = Column(Text, nullable=True)
     primary_skills = Column(Text, nullable=True)
     other_skills = Column(Text, nullable=True)
+    employee_id = Column(Integer, nullable=True)
+    
+    # Newly requested details form fields
+    current_salary = Column(String, nullable=True)
+    expected_salary = Column(String, nullable=True)
+    notice_period = Column(String, nullable=True)
+    availability_ftf = Column(String, nullable=True)
+    current_company = Column(String, nullable=True)
+    ready_to_relocate = Column(String, nullable=True)
+    reason_job_change = Column(Text, nullable=True)
 
 
 class CandidateNoteDB(Base):
@@ -250,6 +241,20 @@ class NoteCreate(BaseModel):
     status: Optional[str] = None
 
 
+class CandidateDetailsUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    experience_years: Optional[float] = None
+    current_salary: Optional[str] = None
+    expected_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    availability_ftf: Optional[str] = None
+    current_company: Optional[str] = None
+    location: Optional[str] = None
+    ready_to_relocate: Optional[str] = None
+    reason_job_change: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Vector / embedding manager
 # ---------------------------------------------------------------------------
@@ -271,7 +276,14 @@ class ResumeEmbedding:
         logger.info("Embedding manager ready.")
 
         
-embedding_manager = ResumeEmbedding()
+embedding_manager: ResumeEmbedding | None = None
+
+
+def _get_embedding_manager() -> ResumeEmbedding:
+    global embedding_manager
+    if embedding_manager is None:
+        embedding_manager = ResumeEmbedding()
+    return embedding_manager
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +401,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 Base.metadata.create_all(bind=engine)
+
+# Auto-migrate table to add newly requested candidate detail columns
+try:
+    with engine.connect() as conn:
+        new_cols = {
+            "current_salary": "VARCHAR(255)",
+            "expected_salary": "VARCHAR(255)",
+            "notice_period": "VARCHAR(255)",
+            "availability_ftf": "VARCHAR(255)",
+            "current_company": "VARCHAR(255)",
+            "ready_to_relocate": "VARCHAR(255)",
+            "reason_job_change": "TEXT"
+        }
+        for col_name, col_type in new_cols.items():
+            res = conn.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='resumes' AND column_name='{col_name}')"
+            )).scalar()
+            if not res:
+                conn.execute(text(f"ALTER TABLE resumes ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+except Exception as e:
+    logger.error(f"Schema auto-migration failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +461,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def sanitize_db_string(val):
+    if isinstance(val, str):
+        return val.replace("\x00", "")
+    elif isinstance(val, list):
+        return [sanitize_db_string(item) for item in val]
+    elif isinstance(val, dict):
+        return {k: sanitize_db_string(v) for k, v in val.items()}
+    return val
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -585,8 +639,9 @@ def _resume_to_dict(r: ResumeDB) -> dict:
         ],
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
         "tags": [s.strip() for s in (_safe_get(r, "tags") or "").split(",") if s.strip()],
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "source": _safe_get(r, "source", "") or "",
+        "source_file": r.source_file or "",
         "experience_line": _safe_get(r, "experience_line", "") or "",
         "experience_tags": [
             s.strip()
@@ -604,6 +659,13 @@ def _resume_to_dict(r: ResumeDB) -> dict:
             for s in (_safe_get(r, "other_skills") or "").split(",")
             if s.strip()
         ],
+        "current_salary": getattr(r, "current_salary", "") or "",
+        "expected_salary": getattr(r, "expected_salary", "") or "",
+        "notice_period": getattr(r, "notice_period", "") or "",
+        "availability_ftf": getattr(r, "availability_ftf", "") or "",
+        "current_company": getattr(r, "current_company", "") or "",
+        "ready_to_relocate": getattr(r, "ready_to_relocate", "") or "",
+        "reason_job_change": getattr(r, "reason_job_change", "") or "",
     }
 
 
@@ -711,7 +773,7 @@ def stats(db: Session = Depends(get_db)):
 def _encode_embedding(embedding_text: str):
     """Blocking: encode text and return (vector_id, embedding list). Run in thread pool."""
     vid = str(uuid.uuid4())
-    vec = embedding_manager.embedder.encode(embedding_text)
+    vec = _get_embedding_manager().embedder.encode(embedding_text)
     if len(vec.shape) == 2:
         vec = vec[0]
     return vid, vec.tolist()
@@ -719,7 +781,7 @@ def _encode_embedding(embedding_text: str):
 
 def _chroma_add(vector_id: str, embedding: list, embedding_text: str, file_name: str, name: str) -> None:
     """Blocking: add vector to ChromaDB."""
-    embedding_manager.collection.add(
+    _get_embedding_manager().collection.add(
         embeddings=[embedding],
         documents=[embedding_text],
         metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
@@ -734,8 +796,10 @@ def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:
         with open(temp_path, "wb") as fh:
             fh.write(file_bytes)
         if ext == ".docx":
-            return extract_text_from_docx(temp_path)
-        return extract_text_from_pdf(temp_path)
+            extracted_text = extract_text_from_docx(temp_path)
+        else:
+            extracted_text = extract_text_from_pdf(temp_path)
+        return (extracted_text or "").replace("\x00", "")
     finally:
         try:
             if os.path.exists(temp_path):
@@ -893,7 +957,7 @@ def _derive_clean_skills_from_text(resume_text: str) -> tuple[list[str], list[st
     Prefer extracting skills from the Skills section; fallback to full text.
     """
     skills_text = _slice_skills_section(resume_text or "")
-    skills = extract_skills_from_text(skills_text if skills_text.strip() else (resume_text or ""))
+    skills = extract_skills_with_langchain(skills_text if skills_text.strip() else (resume_text or ""))
     # skills is a list, not a dict
     if not isinstance(skills, list):
         skills = []
@@ -922,10 +986,7 @@ async def upload_resume(
     executor = getattr(request.app.state, "executor", None)
     loop = asyncio.get_event_loop()
     results: List[Optional[dict]] = [None] * len(files)
-    try:
-        from backend.main import _enrichment_fallback
-    except ImportError:
-        from main import _enrichment_fallback  # type: ignore[import]
+    from .main import _enrichment_fallback
 
     # Phase 1: read files and extract text; collect valid items for parallel LLM extraction
     valid_items: List[tuple] = []  # (index, filename, file_bytes, ext, resume_text)
@@ -1002,6 +1063,9 @@ async def upload_resume(
                     extracted["key_skills"] = primary_clean[:15] if primary_clean else deterministic_skills[:15]
             except Exception as _skills_exc:
                 logger.debug("Skills split skipped for %s: %s", filename, _skills_exc)
+
+            # Sanitize NUL characters from all extracted string fields before schemas and DB write
+            extracted = sanitize_db_string(extracted)
 
             cleaned = ResumeSchema(**extracted)
 
@@ -1135,6 +1199,8 @@ async def upload_resume(
                         tags=None,
                         deleted_at=None,
                     )
+                # Sanitize any string fields to prevent NUL characters in DB
+                base = sanitize_db_string(base)
                 return ResumeDB(**base)
 
             db_record = _make_record(include_new_cols=True)
@@ -1142,6 +1208,33 @@ async def upload_resume(
             try:
                 db.commit()
                 db.refresh(db_record)
+                if db_record.email:
+                    try:
+                        emp_row = db.execute(
+                            text("SELECT id, skills FROM employees WHERE LOWER(official_email) = :email OR LOWER(personal_email) = :email LIMIT 1"),
+                            {"email": db_record.email.lower().strip()}
+                        ).first()
+                        if emp_row:
+                            emp_id = emp_row[0]
+                            db_record.employee_id = emp_id
+                            
+                            new_skills_list = []
+                            if cleaned.skills:
+                                new_skills_list = list(cleaned.skills)
+                            elif db_record.skills:
+                                new_skills_list = [s.strip() for s in db_record.skills.split(",") if s.strip()]
+                                
+                            existing_skills = [s.strip() for s in (emp_row[1] or "").split(",") if s.strip()]
+                            merged_skills = list(dict.fromkeys(existing_skills + new_skills_list))
+                            
+                            db.execute(
+                                text("UPDATE employees SET skills = :skills WHERE id = :eid"),
+                                {"skills": ", ".join(merged_skills), "eid": emp_id}
+                            )
+                            db.commit()
+                            db.refresh(db_record)
+                    except Exception as sync_err:
+                        logger.error("Failed to link employee or sync skills: %s", sync_err)
             except (OperationalError, ProgrammingError) as db_err:
                 msg = str(getattr(db_err, "orig", db_err))
                 if "column" in msg.lower() and ("does not exist" in msg or "undefined" in msg):
@@ -1430,6 +1523,50 @@ def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/resumes/{resume_id}/reextract-name", tags=["Resumes"])
+def reextract_name(resume_id: str, db: Session = Depends(get_db)):
+    """Re-extract candidate name from stored PDF/DOCX (email-validated)."""
+    resume = (
+        db.query(ResumeDB)
+        .filter(ResumeDB.id == resume_id, ResumeDB.deleted_at == None)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    if not resume.source_file:
+        raise HTTPException(status_code=400, detail="No source_file stored for this resume")
+
+    file_path = os.path.join(UPLOAD_DIR, resume.source_file)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Stored resume file not found on server")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        resume_text = extract_text_from_pdf(file_path)
+    elif ext in (".docx", ".doc"):
+        resume_text = extract_text_from_docx(file_path)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    extracted = extract_resume(resume_text)
+    new_name = (extracted.get("name") or "").strip()
+    if not new_name or new_name.lower() in {"unknown", "unknown candidate"}:
+        return {"updated": False, "name": resume.name, "message": "Could not extract a reliable name."}
+
+    old_name = resume.name
+    resume.name = new_name[:120]
+    if extracted.get("email"):
+        resume.email = extracted["email"]
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+    return {
+        "updated": old_name != new_name,
+        "name": new_name,
+        "resume": _resume_to_dict(resume),
+    }
+
+
 @app.post("/resumes/{resume_id}/reextract-experience", tags=["Resumes"])
 def reextract_experience(resume_id: str, db: Session = Depends(get_db)):
     """
@@ -1563,30 +1700,70 @@ def compare_resumes(
     id_list = [x.strip() for x in ids.split(",") if x.strip()][:5]
     if not id_list:
         raise HTTPException(status_code=400, detail="ids required")
-    rows = db.query(ResumeDB).filter(
-        ResumeDB.id.in_(id_list), ResumeDB.deleted_at == None
-    ).all()
-    result = [_resume_to_dict(r) for r in rows]
+    
+    result = []
+    for x in id_list:
+        is_uuid = False
+        try:
+            uuid.UUID(x)
+            is_uuid = True
+        except ValueError:
+            pass
+            
+        if is_uuid:
+            r = db.query(ResumeDB).filter(ResumeDB.id == x, ResumeDB.deleted_at == None).first()
+            if r:
+                result.append(_resume_to_dict(r))
+        else:
+            # Try to fetch from employees table!
+            emp_row = db.execute(text(
+                "SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills, d.title as designation "
+                "FROM employees e "
+                "LEFT JOIN designations d ON e.designation_id = d.id "
+                "WHERE CAST(e.id AS VARCHAR) = :eid"
+            ), {"eid": x}).first()
+            
+            if emp_row:
+                # Calculate experience from date_of_joining if available
+                doj_row = db.execute(text("SELECT date_of_joining FROM employees WHERE id = :eid"), {"eid": emp_row[0]}).scalar()
+                experience_years = 0.0
+                if doj_row:
+                    import datetime
+                    if isinstance(doj_row, str):
+                        try:
+                            doj_dt = datetime.datetime.strptime(doj_row, "%Y-%m-%d").date()
+                        except Exception:
+                            doj_dt = None
+                    else:
+                        doj_dt = doj_row
+                        
+                    if doj_dt:
+                        experience_years = round((datetime.date.today() - doj_dt).days / 365.25, 1)
+
+                emp_dict = {
+                    "id": str(emp_row[0]),
+                    "name": f"{emp_row[1]} {emp_row[2]} (Employee)",
+                    "email": emp_row[3] or "",
+                    "skills": [s.strip() for s in (emp_row[4] or "").split(",") if s.strip()],
+                    "primary_skills": [s.strip() for s in (emp_row[4] or "").split(",") if s.strip()][:3],
+                    "experience_years": experience_years,
+                    "role": emp_row[5] or "Employee",
+                    "summary": f"Active employee. Role: {emp_row[5] or 'N/A'}.",
+                    "experience_summary": f"Worked as {emp_row[5] or 'Employee'} since {doj_row}."
+                }
+                result.append(emp_dict)
+
     if job_description and result:
         for r in result:
-            # Provide richer evidence for fit analysis without changing API shape.
             skills = ", ".join((r.get("skills") or [])[:30])
-            key_skills = ", ".join((r.get("key_skills") or [])[:15])
             primary = ", ".join((r.get("primary_skills") or [])[:10])
-            tags = ", ".join((r.get("experience_tags") or [])[:15])
-            companies = ", ".join((r.get("companies_worked_at") or [])[:8])
-            education = ", ".join((r.get("education") or [])[:6])
             context = "\n".join(
                 [
                     f"Name: {r.get('name','')}",
                     f"Role: {r.get('role','')}",
                     f"Experience: {r.get('experience_years')} years",
                     f"Primary skills: {primary}",
-                    f"Key skills: {key_skills}",
                     f"Skills: {skills}",
-                    f"Experience tags: {tags}",
-                    f"Companies: {companies}",
-                    f"Education: {education}",
                     f"Summary: {r.get('summary','')}",
                     f"Experience summary: {r.get('experience_summary','')}",
                 ]
@@ -1594,7 +1771,9 @@ def compare_resumes(
             fit = analyze_fit(job_description, context)
             r["fit_score"] = fit.get("score_1_10")
             r["fit_summary"] = fit.get("fit_summary", "")
+            
     return result
+
 
 
 @app.get("/resumes/by-field", tags=["Resumes"])
@@ -1643,7 +1822,7 @@ def list_resumes_by_field(
             "experience_years": r.experience_years,
             "primary_skills": [s.strip() for s in (_safe_get(r, "primary_skills") or "").split(",") if s.strip()],
             "resume_link": r.resume_link,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         }
         for r in rows
     ]
@@ -1726,13 +1905,55 @@ def bulk_delete(body: BulkDeleteRequest, db: Session = Depends(get_db)):
         # Remove vector from ChromaDB if present
         if getattr(r, "vector_id", None):
             try:
-                embedding_manager.collection.delete(ids=[r.vector_id])
+                _get_embedding_manager().collection.delete(ids=[r.vector_id])
             except Exception:
                 pass
         # Hard delete candidate row so it is fully removed from the database
         db.delete(r)
     db.commit()
     return {"status": "ok", "deleted_count": len(body.resume_ids)}
+
+
+@app.put("/resumes/{resume_id}/details", tags=["Resumes"])
+def update_candidate_details(
+    resume_id: str,
+    details: CandidateDetailsUpdate,
+    db: Session = Depends(get_db)
+):
+    try:
+        r_id = uuid.UUID(resume_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    r = db.query(ResumeDB).filter(ResumeDB.id == r_id, ResumeDB.deleted_at == None).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+        
+    if details.name is not None:
+        r.name = details.name
+    if details.role is not None:
+        r.role = details.role
+    if details.experience_years is not None:
+        r.experience_years = details.experience_years
+    if details.current_salary is not None:
+        r.current_salary = details.current_salary
+    if details.expected_salary is not None:
+        r.expected_salary = details.expected_salary
+    if details.notice_period is not None:
+        r.notice_period = details.notice_period
+    if details.availability_ftf is not None:
+        r.availability_ftf = details.availability_ftf
+    if details.current_company is not None:
+        r.current_company = details.current_company
+    if details.location is not None:
+        r.location = details.location
+    if details.ready_to_relocate is not None:
+        r.ready_to_relocate = details.ready_to_relocate
+    if details.reason_job_change is not None:
+        r.reason_job_change = details.reason_job_change
+        
+    db.commit()
+    return _resume_to_dict(r)
 
 
 # ---------------------------------------------------------------------------
@@ -1757,7 +1978,7 @@ def get_notes(resume_id: str, db: Session = Depends(get_db)):
             "id": str(n.id),
             "note": n.note,
             "status": n.status,
-            "created_at": n.created_at.isoformat() if n.created_at else None,
+            "created_at": (n.created_at.isoformat() + "Z") if n.created_at else None,
         }
         for n in notes
     ]
@@ -1935,7 +2156,7 @@ def _resume_row_for_chat(r: ResumeDB) -> dict:
             s.strip() for s in (_safe_get(r, "companies_worked_at") or "").split(",") if s.strip()
         ]),
         "resume_link": r.resume_link,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
         "skills": r.skills,
     }
@@ -1943,7 +2164,7 @@ def _resume_row_for_chat(r: ResumeDB) -> dict:
 
 def _encode_question(question: str):
     """Blocking: encode question for vector search. Run in thread pool."""
-    q_vec = embedding_manager.embedder.encode(question)
+    q_vec = _get_embedding_manager().embedder.encode(question)
     return q_vec[0] if len(q_vec.shape) == 2 else q_vec
 
 
@@ -1954,7 +2175,7 @@ def _safe_chroma_query(query_embeddings, n_results: int) -> dict:
     result instead of failing the whole chat request.
     """
     try:
-        collection = getattr(embedding_manager, "collection", None)
+        collection = getattr(_get_embedding_manager(), "collection", None)
         if collection is None:
             return {}
         return collection.query(query_embeddings=query_embeddings, n_results=n_results)
@@ -1965,7 +2186,7 @@ def _safe_chroma_query(query_embeddings, n_results: int) -> dict:
 
 def _safe_chroma_count() -> int:
     try:
-        collection = getattr(embedding_manager, "collection", None)
+        collection = getattr(_get_embedding_manager(), "collection", None)
         if collection is None:
             return 0
         return int(collection.count())
@@ -2222,3 +2443,291 @@ async def upload_bulk_zip(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
     return results
+
+
+class ExportSheetsRequest(BaseModel):
+    sheet_name: str
+    creds_json: str
+
+@app.post("/resumes/export-sheets", tags=["Resumes"])
+def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
+    try:
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Google Sheets export dependencies are missing. Install gspread and oauth2client."
+        )
+
+    # 1. Fetch resumes
+    candidates = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).all()
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No resumes found in the database.")
+
+    # 2. Structure data
+    rows_data = []
+    for c in candidates:
+        rows_data.append({
+            "id": str(c.id),
+            "candidate_name": c.name or "",
+            "email": c.email or "",
+            "phone": c.phone or "",
+            "primary_skills": c.primary_skills or c.key_skills or c.skills or "",
+            "other_skills": c.other_skills or "",
+            "experience": float(c.experience_years or 0.0),
+            "resume_link": c.resume_link or "",
+            "created_at": (c.created_at.isoformat() + "Z") if c.created_at else "",
+        })
+    df = pd.DataFrame(rows_data)
+
+    # 3. Authenticate and connect
+    try:
+        creds_dict = json.loads(req.creds_json.strip())
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+            creds_dict, scopes=scope
+        )
+        client = gspread.authorize(credentials)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="The pasted credentials are not valid JSON.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+
+    try:
+        sh = client.open(req.sheet_name.strip())
+    except gspread.SpreadsheetNotFound:
+        try:
+            sh = client.create(req.sheet_name.strip())
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to create spreadsheet: {str(e)}")
+
+    try:
+        ws = sh.sheet1
+    except Exception:
+        ws = sh.add_worksheet(title="Sheet1", rows="1000", cols="20")
+
+    # 4. Get existing IDs
+    try:
+        vals = ws.col_values(1) if ws.get_all_values() else []
+    except Exception:
+        vals = []
+        
+    existing_ids = set()
+    if vals:
+        existing_ids = {str(v).strip() for v in vals[1:] if str(v).strip()}
+
+    new_rows = df[~df["id"].isin(existing_ids)]
+    if not new_rows.empty:
+        headers = list(new_rows.columns)
+        rows = new_rows.values.tolist()
+        if not ws.get_all_values():
+            ws.append_row(headers)
+        ws.append_rows(rows, value_input_option="RAW")
+
+    return {"status": "success", "spreadsheet_url": sh.url}
+
+
+# ===========================================================================
+# Secure API Authentication & Employee Skills Endpoints
+# ===========================================================================
+
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt
+
+SECRET_KEY = "abc2025"
+ALGORITHM = "HS256"
+
+security_bearer = HTTPBearer(auto_error=False)
+
+def get_current_user_from_token(token: str, db: Session) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+            
+        user_res = db.execute(
+            text("SELECT id, username, employee_id, is_active FROM users WHERE id = :uid LIMIT 1"),
+            {"uid": int(user_id)}
+        ).first()
+        if not user_res:
+            return None
+        
+        if not user_res[3]:  # is_active check
+            return None
+            
+        roles_res = db.execute(
+            text("SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = :uid"),
+            {"uid": user_res[0]}
+        ).all()
+        roles = [row[0] for row in roles_res]
+        
+        return {
+            "id": user_res[0],
+            "username": user_res[1],
+            "employee_id": user_res[2],
+            "roles": roles
+        }
+    except Exception as e:
+        logger.error("Token validation error: %s", e)
+        return None
+
+
+def require_admin_or_hr(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+    db: Session = Depends(get_db)
+) -> dict:
+    token = None
+    if credentials:
+        token = credentials.credentials
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        token = request.cookies.get("token")
+        
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+        
+    user = get_current_user_from_token(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        
+    if not any(role in user["roles"] for role in ["Admin", "HR"]):
+        raise HTTPException(status_code=403, detail="Insufficient permissions: Admin or HR access required")
+        
+    return user
+
+
+@app.get("/employees/skills", tags=["Employee Skills"])
+def get_all_employee_skills(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Get skills of all employees.
+    """
+    query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        ORDER BY e.first_name, e.last_name
+    """
+    res = db.execute(text(query)).all()
+    results = []
+    for row in res:
+        results.append({
+            "employee_id": row[0],
+            "first_name": row[1],
+            "last_name": row[2],
+            "full_name": f"{row[1]} {row[2]}",
+            "email": row[3],
+            "skills": row[4] or ""
+        })
+    return results
+
+
+@app.get("/employees/skills/search", tags=["Employee Skills"])
+def search_employee_skills(
+    query: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Search employee skills by employee name or skill keyword.
+    """
+    sql_query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        WHERE LOWER(e.first_name) LIKE :q 
+           OR LOWER(e.last_name) LIKE :q 
+           OR LOWER(e.skills) LIKE :q
+        ORDER BY e.first_name, e.last_name
+    """
+    res = db.execute(text(sql_query), {"q": f"%{query.lower()}%"}).all()
+    results = []
+    for row in res:
+        results.append({
+            "employee_id": row[0],
+            "first_name": row[1],
+            "last_name": row[2],
+            "full_name": f"{row[1]} {row[2]}",
+            "email": row[3],
+            "skills": row[4] or ""
+        })
+    return results
+
+
+@app.get("/employees/{employee_id}/skills", tags=["Employee Skills"])
+def get_skills_by_employee(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Get skills for a specific employee.
+    """
+    query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        WHERE e.id = :eid
+        LIMIT 1
+    """
+    row = db.execute(text(query), {"eid": employee_id}).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Employee not found")
+        
+    return {
+        "employee_id": row[0],
+        "first_name": row[1],
+        "last_name": row[2],
+        "full_name": f"{row[1]} {row[2]}",
+        "email": row[3],
+        "skills": row[4] or ""
+    }
+
+
+@app.middleware("http")
+async def secure_endpoints_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if (
+        path.startswith("/resumes") or
+        path.startswith("/resume") or
+        path.startswith("/upload") or
+        path.startswith("/extract") or
+        path.startswith("/files")
+    ):
+        if path in ("/health", "/api-version"):
+            return await call_next(request)
+            
+        token = None
+        auth_hdr = request.headers.get("Authorization")
+        if auth_hdr and auth_hdr.startswith("Bearer "):
+            token = auth_hdr.split(" ")[1]
+        if not token:
+            token = request.query_params.get("token")
+        if not token:
+            token = request.cookies.get("token")
+            
+        if not token:
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            
+        db = SessionLocal()
+        try:
+            user = get_current_user_from_token(token, db)
+            if not user:
+                return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+            if not any(role in user["roles"] for role in ["Admin", "HR"]):
+                return JSONResponse(status_code=403, content={"detail": "Insufficient permissions: Admin or HR access required"})
+        finally:
+            db.close()
+            
+    return await call_next(request)
+
+
+

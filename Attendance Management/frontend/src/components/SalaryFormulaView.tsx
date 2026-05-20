@@ -6,6 +6,9 @@
 export interface ComponentBreakdown {
   basic?: number;
   hra?: number;
+  medical?: number;
+  travelling?: number;
+  miscellaneous?: number;
   allowances?: number;
   deductions?: number;
   paid_days?: number;
@@ -53,6 +56,10 @@ export default function SalaryFormulaView({
     }
   }
 
+  const med = breakdown?.medical ?? 0;
+  const tr = breakdown?.travelling ?? 0;
+  const misc = breakdown?.miscellaneous ?? 0;
+
   return (
     <div className="salary-formula-view" style={{ fontSize: "0.9rem" }}>
       {title && (
@@ -67,6 +74,9 @@ export default function SalaryFormulaView({
             <tbody>
               <tr><td style={{ padding: "2px 8px 2px 0" }}>Basic</td><td style={{ textAlign: "right" }}>{currency(breakdown.basic ?? 0)}</td></tr>
               <tr><td style={{ padding: "2px 8px 2px 0" }}>HRA</td><td style={{ textAlign: "right" }}>{currency(breakdown.hra ?? 0)}</td></tr>
+              <tr><td style={{ padding: "2px 8px 2px 0" }}>Medical</td><td style={{ textAlign: "right" }}>{currency(med)}</td></tr>
+              <tr><td style={{ padding: "2px 8px 2px 0" }}>Travelling</td><td style={{ textAlign: "right" }}>{currency(tr)}</td></tr>
+              <tr><td style={{ padding: "2px 8px 2px 0" }}>Miscellaneous</td><td style={{ textAlign: "right" }}>{currency(misc)}</td></tr>
               <tr><td style={{ padding: "2px 8px 2px 0" }}>Allowances</td><td style={{ textAlign: "right" }}>{currency(breakdown.allowances ?? 0)}</td></tr>
             </tbody>
           </table>
@@ -75,7 +85,9 @@ export default function SalaryFormulaView({
           <strong>Gross Salary</strong>
           {breakdown ? (
             <span style={{ color: "rgba(255, 255, 255, 0.72)", fontWeight: "normal" }}>
-              {" "}= Basic + HRA + Allowances = {currency(breakdown.basic ?? 0)} + {currency(breakdown.hra ?? 0)} + {currency(breakdown.allowances ?? 0)}
+              {" "}
+              = Basic + HRA + Medical + Travelling + Miscellaneous + Allowances ={" "}
+              {currency(breakdown.basic ?? 0)} + {currency(breakdown.hra ?? 0)} + {currency(med)} + {currency(tr)} + {currency(misc)} + {currency(breakdown.allowances ?? 0)}
             </span>
           ) : null}
           <span style={{ float: "right", fontWeight: 600 }}>{currency(gross)}</span>

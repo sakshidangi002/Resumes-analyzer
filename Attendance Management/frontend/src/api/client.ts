@@ -174,6 +174,16 @@ export const letters = {
     api.post("/letters/instances/" + instance_id + "/replies", { message }),
   deleteInstance: (instance_id: number) =>
     api.delete("/letters/instances/" + instance_id),
+  emailInstance: (
+    instance_id: number,
+    email_target: "official" | "personal" | "both" = "official",
+    from_email?: string
+  ) =>
+    api.post(
+      "/letters/instances/" + instance_id + "/email",
+      null,
+      { params: { email_target, from_email } }
+    ),
 };
 
 export const reports = {
@@ -213,6 +223,7 @@ export const calendar = {
   deleteEvent: (id: number) => api.delete("/calendar/events/" + id),
   birthdays: (month: number) => api.get("/calendar/birthdays", { params: { month } }),
   anniversaries: (month: number) => api.get("/calendar/anniversaries", { params: { month } }),
+  marriageAnniversaries: (month: number) => api.get("/calendar/marriage-anniversaries", { params: { month } }),
   reminders: (for_date?: string, days?: number) =>
     api.get("/calendar/reminders", { params: { for_date, days } }),
 };

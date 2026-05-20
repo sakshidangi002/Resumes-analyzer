@@ -6,6 +6,7 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { SectionLoader } from "../components/LoadingState";
 import { formatDate } from "../utils/dateFormatter";
 import CustomSelect from "../components/CustomSelect";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 interface LetterTemplate {
   id: number;
@@ -63,6 +64,12 @@ const Icons = {
       <line x1="14" y1="11" x2="14" y2="17"></line>
     </svg>
   ),
+  Email: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+      <polyline points="22,6 12,13 2,6"></polyline>
+    </svg>
+  ),
 };
 
 export default function Letters({ forceEmployeeView = false }: { forceEmployeeView?: boolean }) {
@@ -86,6 +93,10 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
   const [success, setSuccess] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [sortOrder, setSortOrder] = useState<"newest" | "earliest">("newest");
+  const [emailModalFor, setEmailModalFor] = useState<LetterInstance | null>(null);
+  const [emailModalTarget, setEmailModalTarget] = useState<"official" | "personal" | "both">("official");
+  const [emailModalFromEmail, setEmailModalFromEmail] = useState("");
+  const [emailModalSending, setEmailModalSending] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -141,6 +152,41 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
       return sortOrder === "newest" ? timeB - timeA : timeA - timeB;
     });
   }, [instances, sortOrder]);
+
+  const {
+    displayed: displayedInstances,
+    search: letterSearch,
+    setSearch: setLetterSearch,
+    sort: letterSort,
+    toggleSort: toggleLetterSort,
+    clearAll: clearLetterControls,
+    hasActiveControls: letterHasActive,
+  } = useTableControls<LetterInstance>({
+    rows: sortedInstances,
+    columns: {
+      generated_at: (i) => i.generated_at,
+      employee: (i) => `${i.employee_code ?? ""} ${i.employee_name ?? ""}`.trim(),
+      email: (i) => i.employee_official_email || i.employee_personal_email || "",
+      subject: (i) => i.subject || "",
+      sent_via_email: (i) => (i.sent_via_email ? "Yes" : "No"),
+    },
+    searchableText: (i) =>
+      [
+        i.employee_code,
+        i.employee_name,
+        i.employee_official_email,
+        i.employee_personal_email,
+        i.subject,
+        i.sent_via_email ? "sent" : "not sent",
+      ]
+        .filter(Boolean)
+        .join(" "),
+  });
+
+  const ownInstances = useMemo(
+    () => displayedInstances.filter((i) => user?.employee_id && i.employee_id === user.employee_id),
+    [displayedInstances, user?.employee_id]
+  );
 
 
   const htmlToSimpleText = (html: string) => {
@@ -354,6 +400,52 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
 
   const handleDelete = (id: number) => {
     setConfirmDeleteId(id);
+  };
+
+  const openEmailModal = (instance: LetterInstance) => {
+    setEmailModalFor(instance);
+    if (instance.employee_official_email) {
+      setEmailModalTarget("official");
+    } else if (instance.employee_personal_email) {
+      setEmailModalTarget("personal");
+    } else {
+      setEmailModalTarget("official");
+    }
+    setEmailModalFromEmail("");
+    setError("");
+  };
+
+  const submitEmailInstance = async () => {
+    if (!emailModalFor) return;
+    setEmailModalSending(true);
+    setError("");
+    setSuccess("");
+    try {
+      const { data } = await api.emailInstance(
+        emailModalFor.id,
+        emailModalTarget,
+        emailModalFromEmail.trim() || undefined
+      );
+      const sentTo: string[] = (data as { sent_to?: string[] })?.sent_to || [];
+      setInstances((prev) =>
+        prev.map((i) =>
+          i.id === emailModalFor.id ? { ...i, sent_via_email: true } : i
+        )
+      );
+      setSuccess(
+        sentTo.length
+          ? `Email sent with PDF attachment to ${sentTo.join(", ")}.`
+          : "Email sent."
+      );
+      setEmailModalFor(null);
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || "Failed to send email.";
+      setError(msg);
+    } finally {
+      setEmailModalSending(false);
+    }
   };
 
   const confirmActualDelete = async () => {
@@ -575,10 +667,17 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
       {canManageLetters ? (
         <>
           <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", gap: "1rem", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", gap: "1rem", flexWrap: "wrap" }}>
               <h3 style={{ margin: 0 }}>Generated Documents History</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <span style={{ fontSize: "0.85rem", color: "#fff" }}>Sort by:</span>
+            </div>
+            <TableToolbar
+              search={letterSearch}
+              onSearchChange={setLetterSearch}
+              placeholder="Search by employee, subject, email..."
+              showClear={letterHasActive}
+              onClear={clearLetterControls}
+              count={{ shown: displayedInstances.length, total: sortedInstances.length }}
+              leftControls={
                 <div style={{ minWidth: "160px" }}>
                   <CustomSelect
                     value={sortOrder}
@@ -589,8 +688,8 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                     ]}
                   />
                 </div>
-              </div>
-            </div>
+              }
+            />
             {loading ? (
               <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
             ) : sortedInstances.length === 0 ? (
@@ -600,28 +699,23 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                 <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'auto', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', overflow: 'hidden' }}>
                   <thead>
                     <tr style={{ background: 'rgba(255, 255, 255, 0.08)' }}>
-                      <th className="hide-xl" style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Generated</div>
-                      </th>
-                      <th style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Employee</div>
-                      </th>
-                      <th className="hide-md" style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Email</div>
-                      </th>
-                      <th style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Subject</div>
-                      </th>
-                      <th className="hide-lg" style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Email sent</div>
-                      </th>
-                      <th style={{ width: 260, padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Actions</div>
-                      </th>
+                      <SortableHeader className="hide-xl" label="Generated" columnKey="generated_at" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                      <SortableHeader label="Employee" columnKey="employee" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                      <SortableHeader className="hide-md" label="Email" columnKey="email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                      <SortableHeader label="Subject" columnKey="subject" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                      <SortableHeader className="hide-lg" label="Email sent" columnKey="sent_via_email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                      <SortableHeader label="Actions" columnKey="__actions" sort={letterSort} onToggle={toggleLetterSort} align="center" notSortable style={{ width: 260, padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedInstances.map((i: LetterInstance) => (
+                    {displayedInstances.length === 0 && (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65, color: '#fff' }}>
+                          No letters match your search.
+                        </td>
+                      </tr>
+                    )}
+                    {displayedInstances.map((i: LetterInstance) => (
                       <tr key={i.id} style={{ background: 'rgba(255,255,255,0.02)' }}>
                         <td className="hide-xl" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -652,6 +746,15 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                             </button>
                             <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openReplies(i.id)} title="Open Conversation/Replies">
                               <Icons.Reply />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-icon btn-sm"
+                              onClick={() => openEmailModal(i)}
+                              title={i.sent_via_email ? "Resend Letter by Email (PDF attached)" : "Send Letter by Email (PDF attached)"}
+                              style={i.sent_via_email ? { borderColor: "#22c55e", color: "#22c55e" } : undefined}
+                            >
+                              <Icons.Email />
                             </button>
                             <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => handleDelete(i.id)} title="Delete Letter Permanently">
                               <Icons.Delete />
@@ -691,9 +794,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedInstances
-                    .filter((i) => user?.employee_id && i.employee_id === user.employee_id)
-                    .map((i: LetterInstance) => (
+                  {ownInstances.map((i: LetterInstance) => (
                       <tr key={i.id} style={{ background: 'rgba(255,255,255,0.02)' }}>
                         <td className="hide-xl" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -803,6 +904,81 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
         }
         confirmText="Yes, Delete Letter"
       />
+
+      {emailModalFor && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+          }}
+          onClick={() => !emailModalSending && setEmailModalFor(null)}
+        >
+          <div
+            className="card"
+            style={{ width: "min(520px, 92vw)", padding: "1.5rem" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>
+              {emailModalFor.sent_via_email ? "Resend letter by email" : "Send letter by email"}
+            </h3>
+            <p className="text-muted" style={{ marginTop: 0 }}>
+              {emailModalFor.employee_code ? `${emailModalFor.employee_code} – ` : ""}
+              {emailModalFor.employee_name || "Employee"}
+              <br />
+              The letter will be sent with a PDF attachment.
+            </p>
+            <div className="form-group">
+              <label>Send to</label>
+              <CustomSelect
+                value={emailModalTarget}
+                onChange={(val) => setEmailModalTarget(val as "official" | "personal" | "both")}
+                options={[
+                  {
+                    value: "official",
+                    label: emailModalFor.employee_official_email
+                      ? `Official (${emailModalFor.employee_official_email})`
+                      : "Official (none on record)",
+                  },
+                  {
+                    value: "personal",
+                    label: emailModalFor.employee_personal_email
+                      ? `Personal (${emailModalFor.employee_personal_email})`
+                      : "Personal (none on record)",
+                  },
+                  { value: "both", label: "Both" },
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Reply-to (optional)</label>
+              <input
+                type="email"
+                placeholder="hr@company.com"
+                value={emailModalFromEmail}
+                onChange={(e) => setEmailModalFromEmail(e.target.value)}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1rem" }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEmailModalFor(null)}
+                disabled={emailModalSending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={submitEmailInstance}
+                disabled={emailModalSending}
+              >
+                {emailModalSending ? "Sending..." : emailModalFor.sent_via_email ? "Resend" : "Send"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

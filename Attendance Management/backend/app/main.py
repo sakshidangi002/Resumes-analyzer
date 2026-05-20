@@ -9,8 +9,38 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.types import Scope
 from app.api.routes import api_router
 from app.core.config import get_settings
+
+
+# MIME types that should declare UTF-8. Without this, browsers default to
+# Latin-1 / Windows-1252 and multi-byte characters (₹, ·, em-dash, etc.) in
+# the JS/CSS bundle render as mojibake ("â,¹", "Â·").
+_UTF8_MIME_PREFIXES = (
+    "application/javascript",
+    "text/javascript",
+    "application/json",
+    "text/css",
+    "image/svg+xml",
+)
+
+
+class Utf8StaticFiles(StaticFiles):
+    """StaticFiles that forces charset=utf-8 on text-like assets."""
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        try:
+            ctype = response.headers.get("content-type", "") or ""
+            base = ctype.split(";", 1)[0].strip().lower()
+            if base and "charset=" not in ctype.lower() and any(
+                base.startswith(p) for p in _UTF8_MIME_PREFIXES
+            ):
+                response.headers["content-type"] = f"{base}; charset=utf-8"
+        except Exception:
+            pass
+        return response
 
 app = FastAPI(
     title=get_settings().app_name,
@@ -69,7 +99,7 @@ if FRONTEND_DIST.exists():
     # Vite build uses /assets for hashed JS/CSS. Incomplete copies sometimes omit this folder.
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        app.mount("/assets", Utf8StaticFiles(directory=str(assets_dir)), name="assets")
 
     # Serve favicon and other root-level static files
     @app.get("/favicon.ico", include_in_schema=False)

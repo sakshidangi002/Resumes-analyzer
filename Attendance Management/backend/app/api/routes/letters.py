@@ -18,7 +18,56 @@ from app.api.deps import get_current_user, require_roles
 from app.services.letter_service import render_letter, create_letter_instance
 from app.services.letter_templates_defaults import ensure_default_letter_templates
 from app.services.email_service import send_notification
+from app.services.letter_pdf import html_to_pdf_bytes, safe_pdf_filename
 from app.services.notification_service import notify_user_for_employee
+
+
+def _resolve_targets(emp: Employee, email_target: str) -> list[str]:
+    """Pick official/personal email(s) for a letter delivery, raise HTTP 400 if missing."""
+    official = (emp.official_email or "").strip() if emp else ""
+    personal = (emp.personal_email or "").strip() if emp else ""
+    targets: list[str] = []
+    if email_target == "personal":
+        if not personal:
+            raise HTTPException(
+                status_code=400,
+                detail="Employee has no personal email saved. Add Personal Email in Employees and try again.",
+            )
+        targets.append(personal)
+    elif email_target == "both":
+        if not official and not personal:
+            raise HTTPException(
+                status_code=400,
+                detail="Employee has neither official nor personal email saved.",
+            )
+        if official:
+            targets.append(official)
+        if personal and personal not in targets:
+            targets.append(personal)
+    else:  # default: official
+        if not official:
+            raise HTTPException(
+                status_code=400,
+                detail="Employee has no official email saved.",
+            )
+        targets.append(official)
+    return targets
+
+
+def _build_letter_attachment(
+    emp: Employee | None,
+    template_code: str | None,
+    subject: str | None,
+    body_html: str,
+) -> list[tuple[str, bytes, str]]:
+    """Render the letter HTML to a PDF and return it as an SMTP attachment list."""
+    pdf_bytes = html_to_pdf_bytes(body_html, subject)
+    if not pdf_bytes:
+        return []
+    emp_code = emp.employee_code if emp else None
+    emp_name = emp.full_name if emp else None
+    filename = safe_pdf_filename(template_code or "Letter", emp_code, emp_name)
+    return [(filename, pdf_bytes, "pdf")]
 
 router = APIRouter()
 
@@ -166,34 +215,8 @@ def generate_letter(
     if send_email:
         emp = db.query(Employee).filter(Employee.id == employee_id).first()
         if emp:
-            targets: list[str] = []
-            official = (emp.official_email or "").strip()
-            personal = (emp.personal_email or "").strip()
-
-            if email_target == "personal":
-                if not personal:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Employee has no personal email saved. Add Personal Email in Employees and try again.",
-                    )
-                targets.append(personal)
-            elif email_target == "both":
-                if not official and not personal:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Employee has neither official nor personal email saved.",
-                    )
-                if official:
-                    targets.append(official)
-                if personal and personal not in targets:
-                    targets.append(personal)
-            else:  # default: official
-                if not official:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Employee has no official email saved.",
-                    )
-                targets.append(official)
+            targets = _resolve_targets(emp, email_target)
+            attachments = _build_letter_attachment(emp, template_code, subject, body)
             for addr in targets:
                 ok, err = send_notification(
                     db,
@@ -204,6 +227,7 @@ def generate_letter(
                     related_entity_type="LetterInstance",
                     related_entity_id=str(inst.id),
                     from_email=(overrides.from_email.strip() if overrides and overrides.from_email else None),
+                    attachments=attachments or None,
                 )
                 if not ok:
                     raise HTTPException(status_code=500, detail=f"Failed to send email to {addr}. {err or ''}".strip())
@@ -240,6 +264,8 @@ def generate_letters_bulk(
             if send_email:
                 emp = db.query(Employee).filter(Employee.id == eid).first()
                 if emp:
+                    # Bulk send: best-effort target collection (don't 400 on missing email,
+                    # just skip so the rest of the batch continues).
                     targets: list[str] = []
                     official = (emp.official_email or "").strip()
                     personal = (emp.personal_email or "").strip()
@@ -254,8 +280,15 @@ def generate_letters_bulk(
                     else:
                         if official:
                             targets.append(official)
+                    attachments = _build_letter_attachment(emp, template_code, subject, body) if targets else []
                     for addr in targets:
-                        send_notification(db, addr, subject, body, template_code=template_code)
+                        send_notification(
+                            db, addr, subject, body,
+                            template_code=template_code,
+                            related_entity_type="LetterInstance",
+                            related_entity_id=str(inst.id),
+                            attachments=attachments or None,
+                        )
                     if targets:
                         inst.sent_via_email = True
             results.append({"employee_id": eid, "letter_instance_id": inst.id})
@@ -371,6 +404,66 @@ def create_reply(
     db.commit()
     db.refresh(reply)
     return LetterReplyResponse.model_validate(reply)
+
+
+@router.post("/instances/{instance_id}/email")
+def email_letter_instance(
+    instance_id: int,
+    email_target: str = "official",
+    from_email: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """
+    Send (or resend) a previously generated letter as an email with a PDF attachment.
+
+    `email_target` ∈ {"official", "personal", "both"}.
+    Returns the list of addresses the letter was sent to.
+    """
+    inst = db.query(LetterInstance).filter(LetterInstance.id == instance_id).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Letter not found")
+    emp = db.query(Employee).filter(Employee.id == inst.employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found for this letter")
+    template = db.query(LetterTemplate).filter(LetterTemplate.id == inst.template_id).first()
+    template_code = template.code if template else None
+
+    targets = _resolve_targets(emp, email_target)
+    attachments = _build_letter_attachment(emp, template_code, inst.subject, inst.body or "")
+
+    sent_to: list[str] = []
+    last_err: str | None = None
+    for addr in targets:
+        ok, err = send_notification(
+            db,
+            addr,
+            inst.subject or "",
+            inst.body or "",
+            template_code=template_code,
+            related_entity_type="LetterInstance",
+            related_entity_id=str(inst.id),
+            from_email=(from_email.strip() if from_email else None),
+            attachments=attachments or None,
+        )
+        if ok:
+            sent_to.append(addr)
+        else:
+            last_err = err
+
+    if not sent_to:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email. {last_err or ''}".strip(),
+        )
+
+    inst.sent_via_email = True
+    db.commit()
+    return {
+        "letter_instance_id": inst.id,
+        "sent_to": sent_to,
+        "with_pdf": bool(attachments),
+    }
 
 
 @router.delete("/instances/{instance_id}")

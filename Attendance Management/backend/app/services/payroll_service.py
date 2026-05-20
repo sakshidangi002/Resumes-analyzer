@@ -89,7 +89,14 @@ def run_payroll_for_period(
         struct = get_salary_structure_for_date(db, emp.id, date(year, month, 1))
         if not struct:
             continue
-        gross = struct.basic + struct.hra + struct.allowances
+        gross = (
+            struct.basic
+            + struct.hra
+            + struct.allowances
+            + struct.medical
+            + struct.travelling
+            + struct.miscellaneous
+        )
         # Count paid days and LOP over the relevant range.
         # For past months: full calendar month.
         # For the current month: only from the 1st up to today (no future days).
@@ -309,6 +316,9 @@ def run_payroll_for_period(
         breakdown = json.dumps({
             "basic": float(struct.basic),
             "hra": float(struct.hra),
+            "medical": float(struct.medical),
+            "travelling": float(struct.travelling),
+            "miscellaneous": float(struct.miscellaneous),
             "allowances": float(struct.allowances),
             "deductions": float(struct.deductions),
             "paid_days": float(paid_days),

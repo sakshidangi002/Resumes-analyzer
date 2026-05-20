@@ -37,7 +37,7 @@ const Icons = {
 };
 
 export default function DashboardLayout() {
-  const { hasRole } = useAuth();
+  const { hasRole, token } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const isEmployeeOnly = hasRole("Employee") && !hasRole("Admin") && !hasRole("HR") && !hasRole("Manager");
 
@@ -114,9 +114,6 @@ export default function DashboardLayout() {
           {(hasRole("Admin") || hasRole("HR")) && (
             <div className="sidebar-section">
               <div className="sidebar-section-label">Operations</div>
-              <a href={`http://${window.location.hostname}:8501`} target="_blank" rel="noopener noreferrer" className="sidebar-link-external" onClick={closeSidebar}>
-                <Icons.Documents /> Resume Analyzer
-              </a>
               <NavLink to="/leave-approvals" onClick={closeSidebar}>
                 <Icons.Leave /> Leave Approvals
               </NavLink>
@@ -138,6 +135,14 @@ export default function DashboardLayout() {
               <NavLink to="/reports" onClick={closeSidebar}>
                 <Icons.Reports /> Full Reports
               </NavLink>
+              <a 
+                href={`http://${window.location.hostname}:8501/?token=${token}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                onClick={closeSidebar}
+              >
+                <Icons.Documents /> Resume Analyzer
+              </a>
             </div>
           )}
 

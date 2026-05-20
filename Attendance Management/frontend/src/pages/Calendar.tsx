@@ -18,6 +18,11 @@ interface Birthday {
   date: string;
 }
 
+interface MarriageAnniversary {
+  employee_id: number;
+  name: string;
+  date_of_marriage: string;
+}
 interface Anniversary {
   employee_id: number;
   name: string;
@@ -34,11 +39,85 @@ interface CalendarEvent {
   employee_name?: string | null;
 }
 
+/** Axios may expose `data` as a parsed array, a JSON string, or bad proxy shape — normalize to MarriageAnniversary[]. */
+function parseMarriageAnniversaryList(raw: unknown): MarriageAnniversary[] {
+  let v = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter(
+      (row): row is MarriageAnniversary =>
+        row != null &&
+        typeof row === "object" &&
+        typeof (row as MarriageAnniversary).employee_id === "number" &&
+        typeof (row as MarriageAnniversary).name === "string" &&
+        typeof (row as MarriageAnniversary).date_of_marriage === "string" &&
+        /^\d{4}-\d{2}-\d{2}/.test(String((row as MarriageAnniversary).date_of_marriage).trim()),
+    )
+    .map((row) => ({
+      employee_id: row.employee_id,
+      name: row.name.trim() || `Employee #${row.employee_id}`,
+      date_of_marriage: String(row.date_of_marriage).trim().slice(0, 10),
+    }));
+}
+
+function parseBirthdayLikeList<
+  T extends { employee_id?: unknown; name?: unknown } & Record<string, unknown>,
+>(raw: unknown, dateKey: keyof T): T[] {
+  let v = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(v)) return [];
+  return v.filter((row) => {
+    if (row == null || typeof row !== "object") return false;
+    const id = (row as T).employee_id;
+    const name = (row as T).name;
+    const d = (row as T)[dateKey];
+    return typeof id === "number" && typeof name === "string" && typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d.trim());
+  }) as T[];
+}
+
+/** Parse YYYY-MM-DD without UTC shift (fixes invalid / NaN from bad strings). */
+function localDayMonthFromIso(iso: string): { day: number; monthDaySort: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso).trim());
+  if (!m) return null;
+  const day = Number(m[3]);
+  const mo = Number(m[2]);
+  if (!Number.isFinite(day) || !Number.isFinite(mo)) return null;
+  return { day, monthDaySort: mo * 100 + day };
+}
+
+function formatBirthdayDateSafe(iso: string): string {
+  const p = localDayMonthFromIso(iso);
+  if (!p) return "—";
+  const d = new Date(2000, Math.floor(p.monthDaySort / 100) - 1, p.day, 12, 0, 0);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+
+function compareMonthDayIso(aIso: string, bIso: string): number {
+  const a = localDayMonthFromIso(aIso);
+  const b = localDayMonthFromIso(bIso);
+  if (!a || !b) return 0;
+  return a.monthDaySort - b.monthDaySort;
+}
+
 export default function Calendar() {
   const { hasRole } = useAuth();
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [anniversaries, setAnniversaries] = useState<Anniversary[]>([]);
+  const [marriageAnniversaries, setMarriageAnniversaries] = useState<MarriageAnniversary[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [loading, setLoading] = useState(true);
@@ -70,30 +149,39 @@ export default function Calendar() {
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
   };
 
-  const sortByMonthDay = (isoA: string, isoB: string) => {
-    const a = new Date(isoA + "T12:00:00");
-    const b = new Date(isoB + "T12:00:00");
-    return a.getDate() - b.getDate();
-  };
+  const sortByMonthDay = (isoA: string, isoB: string) => compareMonthDayIso(isoA, isoB);
 
   const loadData = () => {
     const y = new Date().getFullYear();
     const from = `${y}-${String(month).padStart(2, "0")}-01`;
     const to = month === 12 ? `${y}-12-31` : `${y}-${String(month + 1).padStart(2, "0")}-01`;
     setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       api.holidays({ from_date: from, to_date: to }),
       api.birthdays(month),
       api.anniversaries(month),
       api.events({ from_date: from, to_date: to }),
+      api.marriageAnniversaries(month),
     ])
-      .then(([h, b, a, ev]) => {
-        setHolidays(h.data);
-        setBirthdays(b.data);
-        setAnniversaries(a.data);
-        setEvents(ev.data);
+      .then(([h, b, a, ev, m]) => {
+        setHolidays(
+          h.status === "fulfilled" && Array.isArray(h.value.data) ? (h.value.data as Holiday[]) : [],
+        );
+        setBirthdays(
+          b.status === "fulfilled"
+            ? parseBirthdayLikeList<Birthday & Record<string, unknown>>(b.value.data, "date")
+            : [],
+        );
+        setAnniversaries(
+          a.status === "fulfilled"
+            ? parseBirthdayLikeList<Anniversary & Record<string, unknown>>(a.value.data, "date_of_joining")
+            : [],
+        );
+        setEvents(ev.status === "fulfilled" && Array.isArray(ev.value.data) ? ev.value.data : []);
+        setMarriageAnniversaries(
+          m.status === "fulfilled" ? parseMarriageAnniversaryList(m.value.data) : [],
+        );
       })
-      .catch(() => { })
       .finally(() => setLoading(false));
   };
 
@@ -263,7 +351,7 @@ export default function Calendar() {
           >
 
 
-            <div className="card" style={{ borderTop: "4px solid var(--brand-500)", margin: 0 }}>
+            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
                 <h3 style={{ marginTop: 0, marginBottom: 6 }}>Joining dates</h3>
                 <span className="text-muted" style={{ fontSize: "0.9rem" }}>
@@ -300,6 +388,49 @@ export default function Calendar() {
                 </div>
               )}
             </div>
+            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
+                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Marriage Anniversary</h3>
+                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
+                  {marriageAnniversaries.length} this month
+                </span>
+              </div>
+              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+                Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
+              </p>
+              {marriageAnniversaries.length === 0 ? (
+                <p className="text-muted">No Marriage Anniversary in this month.</p>
+              ) : (
+                <div className="table-wrap table-wrap--dark">
+                  <table className="table-modern table-modern--dark">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 70, textAlign: "center" }}>Day</th>
+                        <th style={{ textAlign: "center" }}>Employee</th>
+                        <th style={{ textAlign: "center" }}>Date of marriage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...marriageAnniversaries]
+                        .sort((a, b) => sortByMonthDay(a.date_of_marriage, b.date_of_marriage))
+                        .map((mRow) => {
+                          const dm = localDayMonthFromIso(mRow.date_of_marriage);
+                          return (
+                            <tr key={`${mRow.employee_id}-${mRow.date_of_marriage}`}>
+                              <td style={{ textAlign: "center" }}>{dm?.day ?? "—"}</td>
+                              <td style={{ fontWeight: 500, textAlign: "center" }}>{mRow.name}</td>
+                              <td style={{ fontWeight: "500", textAlign: "center" }}>
+                                {formatBirthdayDateSafe(mRow.date_of_marriage)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
             <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
                 <h3 style={{ marginTop: 0, marginBottom: 6 }}>Birthdays</h3>

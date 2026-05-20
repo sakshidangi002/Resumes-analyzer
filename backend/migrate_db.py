@@ -22,6 +22,8 @@ def run():
             conn.execute(text("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS source VARCHAR(50);"))
             conn.execute(text("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS experience_line TEXT;"))
             conn.execute(text("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS experience_tags TEXT;"))
+            conn.execute(text("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS skills TEXT;"))
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS candidate_notes (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

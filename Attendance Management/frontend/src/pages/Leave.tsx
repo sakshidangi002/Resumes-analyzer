@@ -6,6 +6,7 @@ import CustomSelect from "../components/CustomSelect";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { formatDate } from "../utils/dateFormatter";
 import ConfirmModal from "../components/ConfirmModal";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 type LeaveKind = "FULL_DAY" | "HALF_DAY" | "SHORT" | "UNPAID";
 
@@ -257,6 +258,29 @@ export default function Leave() {
   };
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  type LeaveRow = (typeof requests)[number];
+  const typeNameFor = (id: number) => types.find((t) => t.id === id)?.name ?? String(id);
+
+  const {
+    displayed: displayedRequests,
+    search: leaveSearch,
+    setSearch: setLeaveSearch,
+    sort: leaveSort,
+    toggleSort: toggleLeaveSort,
+    clearAll: clearLeaveControls,
+    hasActiveControls: leaveHasActive,
+  } = useTableControls<LeaveRow>({
+    rows: requests,
+    columns: {
+      start_date: (r) => r.start_date,
+      type: (r) => typeNameFor(r.leave_type_id),
+      reason: (r) => r.reason ?? "",
+      status: (r) => r.status,
+    },
+    searchableText: (r) =>
+      `${typeNameFor(r.leave_type_id)} ${r.status} ${r.reason ?? ""}`,
+  });
 
   const handleDelete = async () => {
     if (!confirmDeleteId) return;
@@ -571,20 +595,37 @@ export default function Leave() {
                 })()}
               </div>
             )}
+            {requests.length > 0 && (
+              <TableToolbar
+                search={leaveSearch}
+                onSearchChange={setLeaveSearch}
+                placeholder="Search by type, status, reason..."
+                showClear={leaveHasActive}
+                onClear={clearLeaveControls}
+                count={{ shown: displayedRequests.length, total: requests.length }}
+              />
+            )}
             <div className="table-wrap table-wrap--dark">
               {
                 requests.length > 0 && <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                   <thead>
                     <tr>
-                      <th style={{ width: '20%', textAlign: 'left' }}>DATES</th>
-                      <th style={{ width: '20%', textAlign: 'left' }}>TYPE</th>
-                      <th style={{ width: '20%', textAlign: 'left' }}>REASON</th>
-                      <th style={{ width: '20%', textAlign: 'left' }}>STATUS</th>
-                      <th style={{ width: '20%', textAlign: 'center' }}>ACTIONS</th>
+                      <SortableHeader label="DATES" columnKey="start_date" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
+                      <SortableHeader label="TYPE" columnKey="type" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
+                      <SortableHeader label="REASON" columnKey="reason" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
+                      <SortableHeader label="STATUS" columnKey="status" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
+                      <SortableHeader label="ACTIONS" columnKey="__actions" sort={leaveSort} onToggle={toggleLeaveSort} notSortable align="center" style={{ width: '20%' }} />
                     </tr>
                   </thead>
                   <tbody>
-                    {requests.map((r) => {
+                    {displayedRequests.length === 0 && (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                          No leave requests match your search.
+                        </td>
+                      </tr>
+                    )}
+                    {displayedRequests.map((r) => {
                       const leaveType = types.find((t) => t.id === r.leave_type_id);
                       const typeName = leaveType?.name ?? String(r.leave_type_id);
                       const typeCode = leaveType?.code ?? "";

@@ -16,11 +16,20 @@ interface ReminderBirthday {
   date: string;
 }
 
-interface ReminderAnniversary {
+interface ReminderWorkAnniversary {
   employee_id: number;
   employee_code: string;
   name: string;
   date_of_joining: string;
+  date: string;
+  years: number;
+}
+
+interface ReminderMarriageAnniversary {
+  employee_id: number;
+  employee_code: string;
+  name: string;
+  date_of_marriage: string;
   date: string;
   years: number;
 }
@@ -35,11 +44,22 @@ interface ReminderEvent {
   employee_name?: string | null;
 }
 
-interface RemindersData {
+interface ReminderDay {
   for_date: string;
   birthdays: ReminderBirthday[];
-  work_anniversaries: ReminderAnniversary[];
+  work_anniversaries: ReminderWorkAnniversary[];
+  marriage_anniversaries?: ReminderMarriageAnniversary[];
   events: ReminderEvent[];
+}
+
+type CelebrationKind = "birthday" | "work" | "marriage";
+
+interface CelebrationItem {
+  key: string;
+  kind: CelebrationKind;
+  name: string;
+  date: string;
+  years?: number;
 }
 
 function formatLocalDate(d: Date): string {
@@ -89,7 +109,7 @@ export default function Dashboard() {
   const isHR = hasRole("HR");
   const isAdminOrHr = isAdmin || isHR;
 
-  const [reminders, setReminders] = useState<RemindersData | null>(null);
+  const [reminderDays, setReminderDays] = useState<ReminderDay[]>([]);
   const [holidays, setHolidays] = useState<HolidayRow[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [empDetails, setEmpDetails] = useState<any>(null);
@@ -122,6 +142,58 @@ export default function Dashboard() {
     d.setDate(d.getDate() + 1);
     return formatLocalDate(d);
   }, []);
+
+  const relativeDayLabel = (iso: string): string => {
+    if (iso === todayISO) return "Today";
+    if (iso === tomorrowISO) return "Tomorrow";
+    const target = new Date(iso + "T00:00:00");
+    const base = new Date(todayISO + "T00:00:00");
+    const diff = Math.round((target.getTime() - base.getTime()) / (24 * 60 * 60 * 1000));
+    if (diff > 1) return `In ${diff} days`;
+    const fmt = target.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+    return fmt;
+  };
+
+  const upcomingCelebrations = useMemo<CelebrationItem[]>(() => {
+    const items: CelebrationItem[] = [];
+    reminderDays.forEach((day) => {
+      (day.birthdays || []).forEach((b) =>
+        items.push({
+          key: `b-${b.employee_id}-${day.for_date}`,
+          kind: "birthday",
+          name: b.name,
+          date: day.for_date,
+        })
+      );
+      (day.work_anniversaries || []).forEach((w) =>
+        items.push({
+          key: `w-${w.employee_id}-${day.for_date}`,
+          kind: "work",
+          name: w.name,
+          date: day.for_date,
+          years: w.years,
+        })
+      );
+      (day.marriage_anniversaries || []).forEach((m) =>
+        items.push({
+          key: `m-${m.employee_id}-${day.for_date}`,
+          kind: "marriage",
+          name: m.name,
+          date: day.for_date,
+          years: m.years,
+        })
+      );
+    });
+    return items.sort((a, b) => a.date.localeCompare(b.date));
+  }, [reminderDays]);
+
+  const upcomingEvents = useMemo<ReminderEvent[]>(() => {
+    const all: ReminderEvent[] = [];
+    reminderDays.forEach((day) => {
+      (day.events || []).forEach((e) => all.push(e));
+    });
+    return all.sort((a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
+  }, [reminderDays]);
 
   const weekDates = useMemo(() => {
     const out: string[] = [];
@@ -294,12 +366,19 @@ export default function Dashboard() {
   }, [user?.employee_id, empDetails, holidays.length]);
 
   useEffect(() => {
-    calendarApi.reminders(tomorrowISO).then(r => setReminders(r.data)).catch(() => setReminders(null));
+    calendarApi
+      .reminders(todayISO, 7)
+      .then((r) => {
+        const raw = r.data;
+        const list: ReminderDay[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
+        setReminderDays(list);
+      })
+      .catch(() => setReminderDays([]));
     companyApi.holidays().then(r => setHolidays(r.data)).catch(() => setHolidays([]));
 
     leaveApi.approvals({ status: "PENDING" }).then(res => setPendingLeaveList(Array.isArray(res.data) ? res.data.slice(0, 4) : []))
       .catch(() => setPendingLeaveList([]));
-  }, [tomorrowISO]);
+  }, [todayISO]);
 
   useEffect(() => {
     companyApi.stats().then(res => {
@@ -644,30 +723,113 @@ export default function Dashboard() {
           <div className="card-top">
             <div className="card-title-group">
               <Icons.Birthday />
-              <span>Birthday's Today</span>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>Upcoming Celebrations</span>
+                <span style={{ fontSize: "0.75rem", opacity: 0.5, fontWeight: 500 }}>Next 7 days</span>
+              </div>
             </div>
-
+            <NavLink to="/calendar" className="view-link">View all →</NavLink>
           </div>
-          <div className="birthday-body">
-            {reminders?.birthdays?.length ? (
-              reminders.birthdays.map(b => (
-                <div key={b.employee_id} className="birthday-item">
-                  <div className="avatar">{b.name[0]}</div>
-                  <span>{b.name}</span>
+          {upcomingCelebrations.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                marginBottom: "0.75rem",
+                flexWrap: "wrap",
+              }}
+            >
+              {[
+                { label: "Birthdays", count: upcomingCelebrations.filter((c) => c.kind === "birthday").length, color: "rgba(236, 72, 153, 0.18)", border: "rgba(236, 72, 153, 0.45)", emoji: "🎂" },
+                { label: "Work", count: upcomingCelebrations.filter((c) => c.kind === "work").length, color: "rgba(34, 197, 94, 0.18)", border: "rgba(34, 197, 94, 0.45)", emoji: "💼" },
+                { label: "Marriage", count: upcomingCelebrations.filter((c) => c.kind === "marriage").length, color: "rgba(168, 85, 247, 0.18)", border: "rgba(168, 85, 247, 0.45)", emoji: "💍" },
+              ].map((s) => (
+                <div
+                  key={s.label}
+                  style={{
+                    flex: 1,
+                    minWidth: 80,
+                    padding: "0.5rem 0.6rem",
+                    borderRadius: "10px",
+                    background: s.color,
+                    border: `1px solid ${s.border}`,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: "2px",
+                  }}
+                >
+                  <span style={{ fontSize: "0.7rem", fontWeight: 600, opacity: 0.85, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    {s.emoji} {s.label}
+                  </span>
+                  <span style={{ fontSize: "1.2rem", fontWeight: 800, color: "rgba(255,255,255,0.92)", lineHeight: 1 }}>{s.count}</span>
                 </div>
-              ))
-            ) : (
+              ))}
+            </div>
+          )}
+          <div className="birthday-body" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {upcomingCelebrations.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-icon"><Icons.Birthday /></div>
-                <p>No Birthdays Today</p>
-                <span>Great! No birthdays to celebrate today.</span>
+                <p>No Celebrations This Week</p>
+                <span>Nothing on the calendar for the next 7 days.</span>
               </div>
+            ) : (
+              upcomingCelebrations.slice(0, 8).map((c) => {
+                const tagColor =
+                  c.kind === "birthday"
+                    ? "rgba(236, 72, 153, 0.18)"
+                    : c.kind === "work"
+                    ? "rgba(34, 197, 94, 0.18)"
+                    : "rgba(168, 85, 247, 0.18)";
+                const tagBorder =
+                  c.kind === "birthday"
+                    ? "rgba(236, 72, 153, 0.45)"
+                    : c.kind === "work"
+                    ? "rgba(34, 197, 94, 0.45)"
+                    : "rgba(168, 85, 247, 0.45)";
+                const tagText =
+                  c.kind === "birthday"
+                    ? "🎂 Birthday"
+                    : c.kind === "work"
+                    ? `💼 ${c.years} yr work`
+                    : `💍 ${c.years} yr marriage`;
+                return (
+                  <div
+                    key={c.key}
+                    className="birthday-item"
+                    style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.55rem 0.5rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)" }}
+                  >
+                    <div className="avatar" style={{ flexShrink: 0 }}>{c.name[0]}</div>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, fontSize: "0.92rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          padding: "1px 8px",
+                          borderRadius: "8px",
+                          background: tagColor,
+                          border: `1px solid ${tagBorder}`,
+                          color: "rgba(255,255,255,0.88)",
+                          alignSelf: "flex-start",
+                          marginTop: "2px",
+                        }}
+                      >
+                        {tagText}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: "0.78rem", fontWeight: 600, opacity: 0.7, whiteSpace: "nowrap" }}>{relativeDayLabel(c.date)}</span>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
-        {/* Row 4: Pending Leaves */}
+
+        {/* Row 4: Pending Leaves (admin/HR, 2 cols) + Upcoming Events (1 col) */}
         {isAdminOrHr && (
-          <div className="dash-card dash-card--full">
+          <div className="dash-card dash-card--wide">
             <div className="card-top">
               <div className="card-title-group">
                 <Icons.Calendar />
@@ -700,6 +862,68 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        <div className={`dash-card ${isAdminOrHr ? "" : "dash-card--full"}`}>
+          <div className="card-top">
+            <div className="card-title-group">
+              <Icons.Calendar />
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>Upcoming Events</span>
+                <span style={{ fontSize: "0.75rem", opacity: 0.5, fontWeight: 500 }}>Next 7 days</span>
+              </div>
+            </div>
+            <NavLink to="/calendar" className="view-link">View all →</NavLink>
+          </div>
+          <div className="birthday-body" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {upcomingEvents.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon"><Icons.Calendar /></div>
+                <p>No Events This Week</p>
+                <span>The calendar is clear for the next 7 days.</span>
+              </div>
+            ) : (
+              upcomingEvents.slice(0, 6).map((e) => (
+                <div
+                  key={e.id}
+                  className="birthday-item"
+                  style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.55rem 0.5rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)" }}
+                  title={e.description || undefined}
+                >
+                  <div
+                    className="avatar"
+                    style={{ flexShrink: 0, background: "rgba(59, 130, 246, 0.2)" }}
+                  >
+                    <Icons.Calendar />
+                  </div>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontWeight: 600, fontSize: "0.92rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {e.title}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "0.7rem",
+                        fontWeight: 600,
+                        padding: "1px 8px",
+                        borderRadius: "8px",
+                        background: "rgba(59,130,246,0.18)",
+                        border: "1px solid rgba(59,130,246,0.45)",
+                        color: "rgba(255,255,255,0.88)",
+                        alignSelf: "flex-start",
+                        marginTop: "2px",
+                      }}
+                    >
+                      {e.event_type}
+                      {e.employee_name ? ` • ${e.employee_name}` : ""}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: "0.78rem", fontWeight: 600, opacity: 0.7, whiteSpace: "nowrap" }}>
+                    {relativeDayLabel(e.date)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <footer className="dash-footer">

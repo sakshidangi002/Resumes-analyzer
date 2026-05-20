@@ -6,16 +6,32 @@ import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import CustomSelect from "../components/CustomSelect";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 interface SalaryStructure {
   id: number;
   employee_id: number;
   basic: number;
   hra: number;
+  medical: number;
+  travelling: number;
+  miscellaneous: number;
   allowances: number;
   deductions: number;
   effective_from: string;
   effective_to?: string | null;
+}
+
+/** Monthly gross = Basic + HRA + Medical + Travelling + Miscellaneous + Allowances */
+function structureMonthlyGross(s: SalaryStructure): number {
+  return (
+    Number(s.basic ?? 0) +
+    Number(s.hra ?? 0) +
+    Number(s.medical ?? 0) +
+    Number(s.travelling ?? 0) +
+    Number(s.miscellaneous ?? 0) +
+    Number(s.allowances ?? 0)
+  );
 }
 
 interface EmployeeOption {
@@ -107,6 +123,9 @@ export default function PayrollManagement() {
     employee_id: "",
     basic: "",
     hra: "",
+    medical: "",
+    travelling: "",
+    miscellaneous: "",
     allowances: "",
     deductions: "",
     effective_from: "",
@@ -129,24 +148,40 @@ export default function PayrollManagement() {
 
   const loadData = () => {
     setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       payrollApi.salaryStructures(),
-      employeesApi.list(),
+      employeesApi.list({ status: "Active" }),
       payrollApi.periods(),
     ])
       .then(([sRes, eRes, pRes]) => {
-        setStructures(sRes.data);
-        setEmployees(
-          (eRes.data as any[]).map((e: any) => ({
-            id: e.id,
-            employee_code: e.employee_code,
-            full_name: e.full_name,
-            expected_working_hours: e.expected_working_hours ?? 9.0,
-          }))
-        );
-        setPeriods(pRes.data);
+        if (sRes.status === "fulfilled") {
+          setStructures(sRes.value.data || []);
+        } else {
+          setStructures([]);
+          console.error("[Payroll] salary-structures failed:", sRes.reason);
+        }
+
+        if (eRes.status === "fulfilled") {
+          setEmployees(
+            ((eRes.value.data as any[]) || []).map((e: any) => ({
+              id: e.id,
+              employee_code: e.employee_code,
+              full_name: e.full_name,
+              expected_working_hours: e.expected_working_hours ?? 9.0,
+            }))
+          );
+        } else {
+          setEmployees([]);
+          console.error("[Payroll] employees failed:", eRes.reason);
+        }
+
+        if (pRes.status === "fulfilled") {
+          setPeriods(pRes.value.data || []);
+        } else {
+          setPeriods([]);
+          console.error("[Payroll] periods failed:", pRes.reason);
+        }
       })
-      .catch(() => { })
       .finally(() => setLoading(false));
   };
 
@@ -207,7 +242,7 @@ export default function PayrollManagement() {
       .map((emp) => {
         const structure = monthStructures.get(emp.id)!;
         const payslip = payslips.find((p) => p.employee_id === emp.id) ?? null;
-        const gross = Number(structure.basic) + Number(structure.hra) + Number(structure.allowances);
+        const gross = structureMonthlyGross(structure);
         return { employee: emp, structure, payslip, gross };
       })
       .sort((a, b) => {
@@ -223,12 +258,41 @@ export default function PayrollManagement() {
       });
   }, [employees, monthStructures, payslips]);
 
+  type PayrollRow = (typeof rows)[number];
+
+  const {
+    displayed: displayedRows,
+    search: rowSearch,
+    setSearch: setRowSearch,
+    sort: rowSort,
+    toggleSort: toggleRowSort,
+    clearAll: clearRowControls,
+    hasActiveControls: rowHasActive,
+  } = useTableControls<PayrollRow>({
+    rows,
+    columns: {
+      employee: (r) => r.employee.full_name,
+      paid_days: (r) => (r.payslip ? Number(r.payslip.paid_days) : -1),
+      lop_days: (r) => (r.payslip ? Number(r.payslip.lop_days) : -1),
+      gross: (r) => r.gross,
+      earnings: (r) => (r.payslip ? Number(r.payslip.total_earnings) : -1),
+      deductions: (r) => (r.payslip ? Number(r.payslip.total_deductions) : -1),
+      net: (r) => (r.payslip ? Number(r.payslip.net_salary) : -1),
+      payslip_status: (r) => (r.payslip ? "Generated" : "Not run"),
+    },
+    searchableText: (r) =>
+      `${r.employee.employee_code} ${r.employee.full_name} ${r.payslip ? "Generated" : "Not run"}`,
+  });
+
   const openAdd = () => {
     setEditing(null);
     setForm({
       employee_id: "",
       basic: "",
       hra: "",
+      medical: "",
+      travelling: "",
+      miscellaneous: "",
       allowances: "",
       deductions: "",
       effective_from: `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`,
@@ -243,6 +307,9 @@ export default function PayrollManagement() {
       employee_id: String(s.employee_id),
       basic: String(s.basic),
       hra: String(s.hra),
+      medical: String(s.medical ?? 0),
+      travelling: String(s.travelling ?? 0),
+      miscellaneous: String(s.miscellaneous ?? 0),
       allowances: String(s.allowances),
       deductions: String(s.deductions),
       effective_from: s.effective_from,
@@ -266,6 +333,9 @@ export default function PayrollManagement() {
       employee_id: Number(form.employee_id),
       basic: Number(form.basic),
       hra: Number(form.hra),
+      medical: form.medical ? Number(form.medical) : 0,
+      travelling: form.travelling ? Number(form.travelling) : 0,
+      miscellaneous: form.miscellaneous ? Number(form.miscellaneous) : 0,
       allowances: form.allowances ? Number(form.allowances) : 0,
       deductions: form.deductions ? Number(form.deductions) : 0,
       effective_from: form.effective_from,
@@ -345,16 +415,26 @@ export default function PayrollManagement() {
       </div>
 
       <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
           <h3 style={{ margin: 0 }}>
             Employees - {monthYearLabel()}
           </h3>
-          {canEdit && (
-            <button type="button" className="btn btn-primary btn-uniform" onClick={openAdd} title="Add New Salary Structure/Payroll">
-              Add Payroll
-            </button>
-          )}
         </div>
+        <TableToolbar
+          search={rowSearch}
+          onSearchChange={setRowSearch}
+          placeholder="Search employee or payslip status..."
+          showClear={rowHasActive}
+          onClear={clearRowControls}
+          count={{ shown: displayedRows.length, total: rows.length }}
+          rightControls={
+            canEdit ? (
+              <button type="button" className="btn btn-primary btn-uniform" onClick={openAdd} title="Add New Salary Structure/Payroll">
+                Add Payroll
+              </button>
+            ) : null
+          }
+        />
 
         {loading ? (
           <SectionLoader rows={5} />
@@ -377,20 +457,27 @@ export default function PayrollManagement() {
               </colgroup>
               <thead>
                 <tr>
-                  <th className="hide-md" style={{ textAlign: "center", whiteSpace: "nowrap" }}>S.NO</th>
-                  <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>EMPLOYEE</th>
-                  <th className="hide-sm" style={{ textAlign: "center", whiteSpace: "nowrap" }}>PAID DAYS</th>
-                  <th className="hide-sm" style={{ textAlign: "center", whiteSpace: "nowrap" }}>LOP DAYS</th>
-                  <th className="hide-md" style={{ textAlign: "center", whiteSpace: "nowrap" }}>GROSS (MONTH)</th>
-                  <th className="hide-lg" style={{ textAlign: "center", whiteSpace: "nowrap" }}>EARNINGS</th>
-                  <th className="hide-lg" style={{ textAlign: "center", whiteSpace: "nowrap" }}>DEDUCTIONS</th>
-                  <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>NET SALARY</th>
-                  <th className="hide-sm" style={{ textAlign: "center", whiteSpace: "nowrap" }}>PAYSLIP</th>
-                  <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>ACTIONS</th>
+                  <SortableHeader className="hide-md" label="S.NO" columnKey="__sno" sort={rowSort} onToggle={toggleRowSort} align="center" notSortable style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader label="EMPLOYEE" columnKey="employee" sort={rowSort} onToggle={toggleRowSort} style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-sm" label="PAID DAYS" columnKey="paid_days" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-sm" label="LOP DAYS" columnKey="lop_days" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-md" label="GROSS (MONTH)" columnKey="gross" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-lg" label="EARNINGS" columnKey="earnings" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-lg" label="DEDUCTIONS" columnKey="deductions" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader label="NET SALARY" columnKey="net" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader className="hide-sm" label="PAYSLIP" columnKey="payslip_status" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
+                  <SortableHeader label="ACTIONS" columnKey="__actions" sort={rowSort} onToggle={toggleRowSort} align="center" notSortable style={{ whiteSpace: "nowrap" }} />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, idx) => {
+                {displayedRows.length === 0 && (
+                  <tr>
+                    <td colSpan={10} style={{ textAlign: "center", padding: "1.25rem", opacity: 0.65 }}>
+                      No rows match your search.
+                    </td>
+                  </tr>
+                )}
+                {displayedRows.map((row, idx) => {
                   const p = row.payslip;
                   const paidDays = p ? Number(p.paid_days) : 0;
                   const lopDays = p ? Number(p.lop_days) : 0;
@@ -488,8 +575,11 @@ export default function PayrollManagement() {
                     {(() => {
                       const basic = Number(form.basic) || 0;
                       const hra = Number(form.hra) || 0;
+                      const medical = Number(form.medical) || 0;
+                      const travelling = Number(form.travelling) || 0;
+                      const miscellaneous = Number(form.miscellaneous) || 0;
                       const allow = Number(form.allowances) || 0;
-                      const gross = basic + hra + allow;
+                      const gross = basic + hra + medical + travelling + miscellaneous + allow;
                       const perDay = gross / 30;
                       const payable = perDay * modalAttendance.paidDays;
                       const ded = (Number(form.deductions) || 0) / 30 * modalAttendance.paidDays;
@@ -497,15 +587,15 @@ export default function PayrollManagement() {
                       return (
                         <div style={{ fontSize: "0.9rem", color: "rgba(255, 255, 255, 0.82)", marginTop: "0.5rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(255, 255, 255, 0.12)" }}>
                           <div style={{ fontWeight: 600, marginBottom: 4 }}>Salary calculated on a fixed 30-day month:</div>
-                          <div>Per day = Gross Ã· 30 = â‚¹ {perDay.toFixed(2)}</div>
+                          <div>Per day = Gross ÷ 30 = ₹ {perDay.toFixed(2)}</div>
                           {(() => {
                             const emp = employees.find(e => e.id === Number(form.employee_id));
                             const expHrs = emp?.expected_working_hours || 9.0;
                             const perHour = perDay / expHrs;
-                            return <div>Per hour = Per day Ã· {expHrs} hrs = <strong>â‚¹ {perHour.toFixed(2)}</strong></div>;
+                            return <div>Per hour = Per day ÷ {expHrs} hrs = <strong>₹ {perHour.toFixed(2)}</strong></div>;
                           })()}
-                          <div>Salary payable = â‚¹ {perDay.toFixed(2)} Ã— {modalAttendance.paidDays} days = <strong>â‚¹ {payable.toFixed(2)}</strong></div>
-                          <div>Deductions (proportional) = â‚¹ {ded.toFixed(2)} â†’ <strong>Net â‰ˆ â‚¹ {net.toFixed(2)}</strong></div>
+                          <div>Salary payable = ₹ {perDay.toFixed(2)} × {modalAttendance.paidDays} days = <strong>₹ {payable.toFixed(2)}</strong></div>
+                          <div>Deductions (proportional) = ₹ {ded.toFixed(2)} → <strong>Net ≈ ₹ {net.toFixed(2)}</strong></div>
                         </div>
                       );
                     })()}
@@ -572,6 +662,45 @@ export default function PayrollManagement() {
 
               <div className="form-grid-2" style={{ marginBottom: "1rem" }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Medical allowance</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    style={{ width: "100%" }}
+                    placeholder="0"
+                    value={form.medical}
+                    onChange={(e) => setForm((f) => ({ ...f, medical: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Travelling</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    style={{ width: "100%" }}
+                    placeholder="0"
+                    value={form.travelling}
+                    onChange={(e) => setForm((f) => ({ ...f, travelling: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="form-grid-2" style={{ marginBottom: "1rem" }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Miscellaneous</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    style={{ width: "100%" }}
+                    placeholder="0"
+                    value={form.miscellaneous}
+                    onChange={(e) => setForm((f) => ({ ...f, miscellaneous: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Allowances</label>
                   <input
                     type="number"
@@ -580,6 +709,10 @@ export default function PayrollManagement() {
                     onChange={(e) => setForm((f) => ({ ...f, allowances: e.target.value }))}
                   />
                 </div>
+              </div>
+
+              <div className="form-grid-2" style={{ marginBottom: "1rem" }}>
+              
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Deductions</label>
                   <input
@@ -620,33 +753,36 @@ export default function PayrollManagement() {
               Salary- {detailDialog.employee.full_name}
             </h3>
             <div className="text-muted" style={{ marginBottom: "1rem", fontSize: "0.9rem" }}>
-              {detailDialog.employee.employee_code} Â· {monthYearLabel()}
+              {detailDialog.employee.employee_code} · {monthYearLabel()}
             </div>
 
             <section style={{ marginBottom: "1.25rem" }}>
               <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Monthly structure</div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
                 <tbody>
-                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Basic</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.structure.basic).toFixed(2)}</td></tr>
-                  <tr><td style={{ padding: "4px 8px 4px 0" }}>HRA</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.structure.hra).toFixed(2)}</td></tr>
-                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Allowances</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.structure.allowances).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Basic</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.basic).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>HRA</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.hra).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Medical</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.medical ?? 0).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Travelling</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.travelling ?? 0).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Miscellaneous</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.miscellaneous ?? 0).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Allowances</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.allowances).toFixed(2)}</td></tr>
                   <tr style={{ borderTop: "1px solid rgba(255, 255, 255, 0.10)" }}>
                     <td style={{ padding: "6px 8px 6px 0" }}><strong>Gross</strong></td>
                     <td style={{ textAlign: "right" }}>
                       <strong>
-                        â‚¹ {(Number(detailDialog.structure.basic) + Number(detailDialog.structure.hra) + Number(detailDialog.structure.allowances)).toFixed(2)}
+                        ₹ {structureMonthlyGross(detailDialog.structure).toFixed(2)}
                       </strong>
                     </td>
                   </tr>
-                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Deductions</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.structure.deductions).toFixed(2)}</td></tr>
+                  <tr><td style={{ padding: "4px 8px 4px 0" }}>Deductions</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.structure.deductions).toFixed(2)}</td></tr>
                   <tr style={{ borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
                     <td style={{ padding: "4px 8px 4px 0", color: "var(--brand-300)" }}>Per hour salary</td>
                     <td style={{ textAlign: "right", color: "var(--brand-300)" }}>
                       {(() => {
-                        const gross = Number(detailDialog.structure.basic) + Number(detailDialog.structure.hra) + Number(detailDialog.structure.allowances);
+                        const gross = structureMonthlyGross(detailDialog.structure);
                         const perDay = gross / 30;
                         const expHrs = detailDialog.employee.expected_working_hours || 9.0;
-                        return <strong>â‚¹ {(perDay / expHrs).toFixed(2)}</strong>;
+                        return <strong>₹ {(perDay / expHrs).toFixed(2)}</strong>;
                       })()}
                     </td>
                   </tr>
@@ -662,11 +798,11 @@ export default function PayrollManagement() {
                   <tbody>
                     <tr><td style={{ padding: "4px 8px 4px 0" }}>Paid days</td><td style={{ textAlign: "right" }}>{detailDialog.payslip.paid_days}</td></tr>
                     <tr><td style={{ padding: "4px 8px 4px 0" }}>LOP days</td><td style={{ textAlign: "right" }}>{detailDialog.payslip.lop_days}</td></tr>
-                    <tr><td style={{ padding: "4px 8px 4px 0" }}>Total earnings</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.payslip.total_earnings).toFixed(2)}</td></tr>
-                    <tr><td style={{ padding: "4px 8px 4px 0" }}>Total deductions</td><td style={{ textAlign: "right" }}>â‚¹ {Number(detailDialog.payslip.total_deductions).toFixed(2)}</td></tr>
+                    <tr><td style={{ padding: "4px 8px 4px 0" }}>Total earnings</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.payslip.total_earnings).toFixed(2)}</td></tr>
+                    <tr><td style={{ padding: "4px 8px 4px 0" }}>Total deductions</td><td style={{ textAlign: "right" }}>₹ {Number(detailDialog.payslip.total_deductions).toFixed(2)}</td></tr>
                     <tr style={{ borderTop: "1px solid rgba(255, 255, 255, 0.10)" }}>
                       <td style={{ padding: "6px 8px 6px 0" }}><strong>Net salary</strong></td>
-                      <td style={{ textAlign: "right", fontWeight: 700 }}>â‚¹ {Number(detailDialog.payslip.net_salary).toFixed(2)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 700 }}>₹ {Number(detailDialog.payslip.net_salary).toFixed(2)}</td>
                     </tr>
                   </tbody>
                 </table>

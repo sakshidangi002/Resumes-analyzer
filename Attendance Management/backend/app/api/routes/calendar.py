@@ -218,6 +218,31 @@ def list_anniversaries(
     return result
 
 
+@router.get("/marriage-anniversaries")
+def list_marriage_anniversaries(
+    month: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    employees = (
+        db.query(Employee)
+        .filter(
+            Employee.employment_status == "Active",
+            Employee.date_of_marriage.isnot(None),
+        )
+        .all()
+    )
+    result = []
+    for e in employees:
+        if e.date_of_marriage and e.date_of_marriage.month == month:
+            result.append({
+                "employee_id": e.id,
+                "name": e.full_name,
+                "date_of_marriage": e.date_of_marriage.isoformat(),
+            })
+    return result
+
+
 @router.get("/reminders")
 def list_reminders(
     for_date: date | None = Query(None, description="Start date for reminders"),
@@ -229,7 +254,7 @@ def list_reminders(
     Reminders for HR/Admin: birthdays, work anniversaries, and custom events.
     Batch-optimized to fetch all data for the range in a few queries instead of a loop.
     """
-    from sqlalchemy import extract
+    from sqlalchemy import extract, func
     
     if for_date is None:
         for_date = date.today() + timedelta(days=1)
@@ -294,15 +319,37 @@ def list_reminders(
                         "date": curr_iso,
                         "years": curr.year - e.date_of_joining.year,
                     })
-        
+
+        # Filter marriage anniversaries for this specific day in the range
+        marriage_anniversaries = []
+        for e in employees:
+            dom = getattr(e, "date_of_marriage", None)
+            if dom and dom.month == curr.month and dom.day == curr.day:
+                # Only count if marriage year is before current year
+                if dom.year < curr.year:
+                    marriage_anniversaries.append({
+                        "employee_id": e.id,
+                        "employee_code": e.employee_code,
+                        "name": e.full_name,
+                        "date_of_marriage": dom.isoformat(),
+                        "date": curr_iso,
+                        "years": curr.year - dom.year,
+                    })
+
         day_events = events_by_date.get(curr_iso, [])
-        
+
         results.append({
             "for_date": curr_iso,
             "birthdays": birthdays,
             "work_anniversaries": work_anniversaries,
+            "marriage_anniversaries": marriage_anniversaries,
             "events": day_events,
-            "total": len(birthdays) + len(work_anniversaries) + len(day_events)
+            "total": (
+                len(birthdays)
+                + len(work_anniversaries)
+                + len(marriage_anniversaries)
+                + len(day_events)
+            ),
         })
         curr += timedelta(days=1)
         

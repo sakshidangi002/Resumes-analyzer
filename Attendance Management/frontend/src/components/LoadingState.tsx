@@ -4,6 +4,7 @@ type SectionLoaderProps = {
   size?: "sm" | "md" | "lg";
   fullPage?: boolean;
   className?: string;
+  text?: string;
 };
 
 export function AppLoadingScreen() {
@@ -18,7 +19,7 @@ export function AppLoadingScreen() {
   );
 }
 
-export function SectionLoader({ rows, compact = false, size, fullPage = false, className = "" }: SectionLoaderProps) {
+export function SectionLoader({ rows, compact = false, size, fullPage = false, className = "", text = "Loading data..." }: SectionLoaderProps) {
   let finalSize = size;
   if (!finalSize) {
     if (compact) finalSize = "sm";
@@ -31,7 +32,7 @@ export function SectionLoader({ rows, compact = false, size, fullPage = false, c
   const loaderContent = (
     <div className={`section-loader section-loader--${finalSize} ${className}`.trim()}>
       <div className={`section-loader__spinner section-loader__spinner--${finalSize}`} aria-hidden />
-      <div className="section-loader__text">Loading data...</div>
+      <div className="section-loader__text">{text}</div>
     </div>
   );
 

@@ -254,6 +254,8 @@ def create_employee(
         reporting_manager_id=data.reporting_manager_id,
         employment_status=data.employment_status,
         date_of_birth=data.date_of_birth,
+        date_of_marriage=data.date_of_marriage,
+        marital_status=data.marital_status,
         date_of_leaving=data.date_of_leaving,
         pan_number=data.pan_number,
         aadhar_number=data.aadhar_number,

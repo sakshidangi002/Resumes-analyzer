@@ -59,6 +59,8 @@ class Employee(Base):
     reporting_manager_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     employment_status = Column(String(20), default=EmploymentStatus.ACTIVE.value)
     date_of_birth = Column(Date, nullable=True)
+    date_of_marriage = Column(Date, nullable=True)
+    marital_status = Column(String(20), nullable=True)
     date_of_leaving = Column(Date, nullable=True)
     expected_working_hours = Column(Float, default=9.0, nullable=False)
     # Important documents (metadata only; no file storage)

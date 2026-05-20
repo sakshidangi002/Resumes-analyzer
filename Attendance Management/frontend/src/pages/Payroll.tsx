@@ -5,6 +5,7 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import CustomSelect from "../components/CustomSelect";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 
 interface PayrollPeriod {
@@ -128,6 +129,26 @@ export default function Payroll() {
       .finally(() => setSubmitting(false));
   };
 
+  const monthName = (m: number) => new Date(2000, m - 1).toLocaleString("default", { month: "long" });
+
+  const {
+    displayed: displayedPeriods,
+    search: periodSearch,
+    setSearch: setPeriodSearch,
+    sort: periodSort,
+    toggleSort: togglePeriodSort,
+    clearAll: clearPeriodControls,
+    hasActiveControls: periodHasActive,
+  } = useTableControls<PayrollPeriod>({
+    rows: periods,
+    columns: {
+      month: (p) => p.month,
+      year: (p) => p.year,
+      status: (p) => p.status,
+    },
+    searchableText: (p) => `${monthName(p.month)} ${p.year} ${p.status}`,
+  });
+
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
@@ -160,16 +181,26 @@ export default function Payroll() {
         <GlobalHeaderControls />
       </div>
       <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ marginTop: 0 }}>Payroll periods</h3>
-          <button
-            type="button"
-            className="btn btn-primary btn-uniform"
-            onClick={() => setShowAdd(true)}
-          >
-            Add period
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+          <h3 style={{ marginTop: 0, marginBottom: 0 }}>Payroll periods</h3>
         </div>
+        <TableToolbar
+          search={periodSearch}
+          onSearchChange={setPeriodSearch}
+          placeholder="Search by month, year, status..."
+          showClear={periodHasActive}
+          onClear={clearPeriodControls}
+          count={{ shown: displayedPeriods.length, total: periods.length }}
+          rightControls={
+            <button
+              type="button"
+              className="btn btn-primary btn-uniform"
+              onClick={() => setShowAdd(true)}
+            >
+              Add period
+            </button>
+          }
+        />
         {loading ? (
           <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
         ) : periods.length === 0 ? (
@@ -179,24 +210,31 @@ export default function Payroll() {
             <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
               <thead>
                 <tr>
-                  <th style={{ width: '25%', textAlign: 'left', paddingLeft: '1.5rem' }}>Month</th>
-                  <th style={{ width: '25%' }}>Year</th>
-                  <th style={{ width: '25%' }}>Status</th>
-                  <th style={{ width: '25%' }}>Action</th>
+                  <SortableHeader label="Month" columnKey="month" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%', paddingLeft: '1.5rem' }} />
+                  <SortableHeader label="Year" columnKey="year" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%' }} />
+                  <SortableHeader label="Status" columnKey="status" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%' }} />
+                  <SortableHeader label="Action" columnKey="__actions" sort={periodSort} onToggle={togglePeriodSort} notSortable align="right" style={{ width: '25%' }} />
                 </tr>
               </thead>
               <tbody>
-                {periods.map((p) => (
+                {displayedPeriods.length === 0 && (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                      No payroll periods match your search.
+                    </td>
+                  </tr>
+                )}
+                {displayedPeriods.map((p) => (
                   <tr key={p.id}>
-                    <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{new Date(2000, p.month - 1).toLocaleString("default", { month: "long" })}</td>
+                    <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{monthName(p.month)}</td>
                     <td>{p.year}</td>
                     <td>{p.status}</td>
                     <td className="actions-center">
                       <div className="actions-stack">
-                        <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openEdit(p)} title="Edit Period" style={{ textAlign: "left" }}>
+                        <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openEdit(p)} title="Edit Period">
                           <Icons.Edit />
                         </button>
-                        <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => deletePeriod(p)} title="Delete Period" style={{ textAlign: "left" }}>
+                        <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => deletePeriod(p)} title="Delete Period">
                           <Icons.Delete />
                         </button>
                         {canRun && p.status === "OPEN" && (

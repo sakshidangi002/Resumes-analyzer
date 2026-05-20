@@ -8,6 +8,9 @@ class SalaryStructureCreate(BaseModel):
     employee_id: int
     basic: Decimal
     hra: Decimal
+    medical: Decimal = Decimal("0")
+    travelling: Decimal = Decimal("0")
+    miscellaneous: Decimal = Decimal("0")
     allowances: Decimal = Decimal("0")
     deductions: Decimal = Decimal("0")
     effective_from: date
@@ -20,6 +23,9 @@ class SalaryStructureUpdate(BaseModel):
     deductions: Optional[Decimal] = None
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
+    medical: Optional[Decimal] = None
+    travelling: Optional[Decimal] = None
+    miscellaneous: Optional[Decimal] = None
 
 
 class SalaryStructureResponse(BaseModel):
@@ -27,6 +33,9 @@ class SalaryStructureResponse(BaseModel):
     employee_id: int
     basic: Decimal
     hra: Decimal
+    medical: Decimal
+    travelling: Decimal
+    miscellaneous: Decimal
     allowances: Decimal
     deductions: Decimal
     effective_from: date

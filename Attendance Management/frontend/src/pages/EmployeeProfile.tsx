@@ -25,6 +25,7 @@ type TabKey =
 
 const EMPLOYMENT_TYPES = ["Full-time", "Intern", "Contract"];
 const EMPLOYMENT_STATUSES = ["Active", "Resigned", "Terminated"];
+const MARITAL_STATUSES = ["Single", "Married", "Divorced", "Widowed"];
 
 const maxDobDate = (() => {
   const d = new Date();
@@ -41,6 +42,8 @@ type ProfileForm = {
   phone: string;
   date_of_joining: string;
   date_of_birth: string;
+  date_of_marriage: string;
+  marital_status: string;
   date_of_leaving: string;
   designation_id: number | "";
   department_id: number | "";
@@ -66,6 +69,8 @@ function empToForm(e: Emp): ProfileForm {
     phone: e.phone || "",
     date_of_joining: (e.date_of_joining || "").slice(0, 10),
     date_of_birth: (e.date_of_birth || "").slice(0, 10),
+    date_of_marriage: (e.date_of_marriage || "").slice(0, 10),
+    marital_status: e.marital_status || "",
     date_of_leaving: (e.date_of_leaving || "").slice(0, 10),
     designation_id: e.designation_id ?? "",
     department_id: e.department_id ?? "",
@@ -104,6 +109,8 @@ interface Emp {
   employment_status: string;
   expected_working_hours: number;
   date_of_birth?: string | null;
+  date_of_marriage?: string | null;
+  marital_status?: string | null;
   date_of_leaving?: string | null;
   pan_number?: string | null;
   aadhar_number?: string | null;
@@ -170,6 +177,9 @@ interface SalaryStructure {
   employee_id: number;
   basic: number;
   hra: number;
+  medical: number;
+  travelling: number;
+  miscellaneous: number;
   allowances: number;
   deductions: number;
   effective_from: string;
@@ -542,6 +552,8 @@ export default function EmployeeProfile() {
       employment_status: form.employment_status,
       expected_working_hours: Number(form.expected_working_hours) || 9.0,
       date_of_birth: form.date_of_birth.trim() || null,
+      date_of_marriage: form.date_of_marriage.trim() || null,
+      marital_status: form.marital_status.trim() || null,
       date_of_leaving: form.date_of_leaving.trim() || null,
       reporting_manager_id: form.reporting_manager_id === "" ? null : Number(form.reporting_manager_id),
       pan_number: form.pan_number.trim() || null,
@@ -779,6 +791,8 @@ export default function EmployeeProfile() {
                     <DetailField label="Full name" value={fullName} />
                     <DetailField label="Employee ID" value={emp.employee_code} />
                     <DetailField label="Date of birth" value={emp.date_of_birth?.split('-').reverse().join('-') || "-"} />
+                    <DetailField label="Marital status" value={emp.marital_status || "-"} />
+                    <DetailField label="Date of marriage" value={emp.date_of_marriage?.split('-').reverse().join('-') || "-"} />
                     <DetailField label="Date of joining" value={emp.date_of_joining?.split('-').reverse().join('-')} />
                     <DetailField label="Date of leaving" value={emp.date_of_leaving?.split('-').reverse().join('-') || "-"} />
                   </div>
@@ -923,6 +937,34 @@ export default function EmployeeProfile() {
                       />
                     </div>
                     <div className="form-group">
+                      <label>Marital status</label>
+                      <CustomSelect
+                        value={form.marital_status}
+                        onChange={(val) =>
+                          setForm({
+                            ...form,
+                            marital_status: val,
+                            date_of_marriage: val === "Married" ? form.date_of_marriage : "",
+                          })
+                        }
+                        placeholder="Select Marital Status"
+                        options={[
+                          { value: "", label: "Select Marital Status" },
+                          ...MARITAL_STATUSES.map((s) => ({ value: s, label: s })),
+                        ]}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Date of marriage</label>
+                      <input
+                        type="date"
+                        value={form.date_of_marriage}
+                        onChange={(e) => setForm({ ...form, date_of_marriage: e.target.value })}
+                        disabled={form.marital_status !== "Married"}
+                        title={form.marital_status !== "Married" ? "Available only when Marital Status is Married" : undefined}
+                      />
+                    </div>
+                    <div className="form-group">
                       <label>Date of joining</label>
                       <input
                         type="date"
@@ -943,12 +985,42 @@ export default function EmployeeProfile() {
                         type="date"
                         value={form.date_of_leaving}
                         min={form.date_of_joining}
-                        onChange={(e) => setForm({ ...form, date_of_leaving: e.target.value })}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setForm((f) => {
+                            if (!f) return f;
+                            const next: ProfileForm = { ...f, date_of_leaving: val };
+                            if (val) {
+                              if (next.employment_status === "Active") {
+                                next.employment_status = "Resigned";
+                              }
+                            } else {
+                              next.employment_status = "Active";
+                            }
+                            return next;
+                          });
+                        }}
                       />
                       <span className="text-muted" style={{ fontSize: "0.78rem", display: "block", marginTop: "0.35rem" }}>
                         Last working day (if resigned or terminated). Leave blank if still employed.
                       </span>
                     </div>
+                    {form.date_of_leaving && (
+                      <div className="form-group">
+                        <label>Reason for leaving *</label>
+                        <CustomSelect
+                          value={form.employment_status === "Active" ? "Resigned" : form.employment_status}
+                          onChange={(val) => setForm({ ...form, employment_status: val })}
+                          options={[
+                            { value: "Resigned", label: "Resigned" },
+                            { value: "Terminated", label: "Terminated" },
+                          ]}
+                        />
+                        <span className="text-muted" style={{ fontSize: "0.78rem", display: "block", marginTop: "0.35rem" }}>
+                          Required when a date of leaving is set.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </section>
 
@@ -1307,22 +1379,34 @@ export default function EmployeeProfile() {
                 <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed' }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>Effective from</th>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>Basic</th>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>HRA</th>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>Allowances</th>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>Gross</th>
-                      <th style={{ textAlign: 'center', width: '16.66%' }}>Deductions</th>
+                      <th style={{ textAlign: 'center', width: '12%' }}>Effective from</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>Basic</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>HRA</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>Medical</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>Travelling</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>Misc.</th>
+                      <th style={{ textAlign: 'center', width: '10%' }}>Allowances</th>
+                      <th style={{ textAlign: 'center', width: '12%' }}>Gross</th>
+                      <th style={{ textAlign: 'center', width: '12%' }}>Deductions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {structures.map((s) => {
-                      const gross = Number(s.basic) + Number(s.hra) + Number(s.allowances);
+                      const gross =
+                        Number(s.basic) +
+                        Number(s.hra) +
+                        Number(s.medical ?? 0) +
+                        Number(s.travelling ?? 0) +
+                        Number(s.miscellaneous ?? 0) +
+                        Number(s.allowances);
                       return (
                         <tr key={s.id}>
                           <td style={{ textAlign: 'center' }}>{formatNiceDate(s.effective_from)}</td>
                           <td style={{ textAlign: 'center' }}>₹ {Number(s.basic).toFixed(2)}</td>
                           <td style={{ textAlign: 'center' }}>₹ {Number(s.hra).toFixed(2)}</td>
+                          <td style={{ textAlign: 'center' }}>₹ {Number(s.medical ?? 0).toFixed(2)}</td>
+                          <td style={{ textAlign: 'center' }}>₹ {Number(s.travelling ?? 0).toFixed(2)}</td>
+                          <td style={{ textAlign: 'center' }}>₹ {Number(s.miscellaneous ?? 0).toFixed(2)}</td>
                           <td style={{ textAlign: 'center' }}>₹ {Number(s.allowances).toFixed(2)}</td>
                           <td style={{ textAlign: 'center', fontWeight: 600 }}>₹ {gross.toFixed(2)}</td>
                           <td style={{ textAlign: 'center' }}>₹ {Number(s.deductions).toFixed(2)}</td>

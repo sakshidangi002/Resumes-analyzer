@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 import os
+from typing import Optional
 
 import pdfplumber
 from docx import Document as DocxDocument
@@ -75,98 +77,355 @@ def preload_chat_model() -> None:
 # File text extraction
 # ---------------------------------------------------------------------------
 
-def extract_text_from_pdf(path: str) -> str:
-    """
-    Extract plain text from PDF.
-    Default uses pdfplumber (better layout but slower). You can opt into
-    a faster extractor by setting PDF_EXTRACTOR=pypdf.
-    """
-    def _extract_with_pypdf() -> str:
-        from pypdf import PdfReader
-
-        reader = PdfReader(path)
-        out: list[str] = []
-        for page in reader.pages:
-            try:
-                t = page.extract_text() or ""
-            except Exception:
-                t = ""
-            if t.strip():
-                out.append(t)
-        return "\n".join(out).strip()
-
-    def _extract_with_pdfplumber() -> str:
-        text = ""
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        return text.strip()
-
-    extractor = (os.getenv("PDF_EXTRACTOR", "") or "").strip().lower()
-    preferred = "pypdf" if extractor in {"pypdf", "pdf"} else "pdfplumber"
-
-    t1 = ""
-    t2 = ""
-    try:
-        t1 = _extract_with_pypdf() if preferred == "pypdf" else _extract_with_pdfplumber()
-    except Exception:
-        t1 = ""
-    try:
-        t2 = _extract_with_pdfplumber() if preferred == "pypdf" else _extract_with_pypdf()
-    except Exception:
-        t2 = ""
-
-    if not t2:
-        return (t1 or "").strip()
-    if not t1:
-        return (t2 or "").strip()
-
-    def _format_score(txt: str) -> float:
-        """
-        Prefer outputs that preserve section structure (line breaks) and contain
-        expected headers. This avoids pypdf-style collapsed lines polluting skills.
-        """
-        if not txt:
-            return 0.0
-        c, meta = _compute_extraction_confidence(txt)
-        # Reward line structure + header presence
-        lines = [ln for ln in txt.splitlines() if ln.strip()]
-        line_bonus = min(0.15, len(lines) / 200.0)
-        header_bonus = 0.0
-        low = txt.lower()
-        if "skills" in low:
-            header_bonus += 0.08
-        if "experience" in low:
-            header_bonus += 0.05
-        if "projects" in low:
-            header_bonus += 0.03
-        # Penalize very long lines (collapsed formatting)
-        long_lines = sum(1 for ln in lines[:80] if len(ln) > 140)
-        collapse_penalty = min(0.20, long_lines * 0.03)
-        return float(c) + line_bonus + header_bonus - collapse_penalty
-
-    # Normalize both candidates before choosing so downstream parsing sees stable text.
-    n1, meta1 = normalize_resume_text(t1)
-    n2, meta2 = normalize_resume_text(t2)
-
-    # Choose the extraction with higher confidence (better line structure, less junk).
-    # Score using normalized text (more representative of parsing inputs).
-    s1 = _format_score(n1)
-    s2 = _format_score(n2)
-    if s2 > s1 + 0.03:
-        return n2.strip()
-    if s1 > s2 + 0.03:
-        return n1.strip()
-    # Otherwise prefer the longer normalized text (more content)
-    return (n1 if len(n1) >= len(n2) else n2).strip()
-
-
 def extract_text_from_docx(path: str) -> str:
     """Extract plain text from a DOCX file."""
     doc = DocxDocument(path)
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+# ---------------------------------------------------------------------------
+# PDF extraction reliability layer
+# ---------------------------------------------------------------------------
+
+def _cleanup_markdown_text(text: str) -> str:
+    """
+    Convert layout-aware markdown into parser-friendly text without removing
+    useful structure such as headings, bullets, or table line breaks.
+    """
+    if not text:
+        return ""
+    out = (text or "").replace("\r", "\n")
+    # Keep content, remove markdown noise that can interfere with regex heuristics.
+    out = re.sub(r"(?m)^\s*```(?:markdown|md)?\s*$", "", out)
+    out = out.replace("```", "")
+    out = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^\)]+\)", r"\1", out)
+    out = re.sub(r"(?m)^\s*#{1,6}\s*", "", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
+def extract_with_pymupdf4llm(path: str, *, force_ocr: bool = False) -> str:
+    """
+    Primary PDF extractor.
+    pymupdf4llm preserves reading order and layout better than plain text
+    extractors, which helps multi-column, table-heavy, and icon-heavy resumes.
+    OCR stays disabled unless explicitly requested so clean text PDFs remain fast.
+    """
+    try:
+        import pymupdf4llm
+    except Exception as exc:
+        logger.debug("pymupdf4llm unavailable: %s", exc)
+        return ""
+
+    try:
+        md_text = pymupdf4llm.to_markdown(
+            path,
+            use_ocr=bool(force_ocr),
+            force_ocr=bool(force_ocr),
+            page_separators=True,
+            table_strategy="lines_strict",
+        )
+        return _cleanup_markdown_text(str(md_text or ""))
+    except Exception as exc:
+        logger.debug("pymupdf4llm extraction failed for %s: %s", path, exc)
+        return ""
+
+
+def _extract_with_pdfplumber_text(path: str) -> str:
+    text = ""
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+    return text.strip()
+
+
+def _extract_with_pypdf_text(path: str) -> str:
+    from pypdf import PdfReader
+
+    reader = PdfReader(path)
+    out: list[str] = []
+    for page in reader.pages:
+        try:
+            t = page.extract_text() or ""
+        except Exception:
+            t = ""
+        if t.strip():
+            out.append(t)
+    return "\n".join(out).strip()
+
+
+def score_extraction_quality(text: str) -> dict:
+    """
+    Score extracted PDF text before it enters the heuristics pipeline.
+    The score intentionally favors readable structure over raw character count.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {
+            "score": 0.0,
+            "length_score": 0.0,
+            "section_score": 0.0,
+            "broken_line_ratio": 1.0,
+            "symbol_ratio": 1.0,
+            "whitespace_score": 0.0,
+            "noise_score": 0.0,
+            "text_length": 0,
+            "line_count": 0,
+            "word_count": 0,
+            "section_hits": 0,
+        }
+
+    lines = [ln.rstrip() for ln in raw.splitlines()]
+    non_empty = [ln for ln in lines if ln.strip()]
+    low = raw.lower()
+    words = re.findall(r"\b[\w#+./-]+\b", raw)
+    text_length = len(raw)
+    word_count = len(words)
+    line_count = len(non_empty)
+
+    headings = (
+        "skills",
+        "technical skills",
+        "experience",
+        "work experience",
+        "education",
+        "projects",
+        "summary",
+        "certifications",
+        "professional experience",
+    )
+    section_hits = 0
+    for heading in headings:
+        if re.search(rf"(?im)^\s*{re.escape(heading)}\b", raw) or heading in low:
+            section_hits += 1
+
+    # Broken-line ratio catches collapsed PDFs where each line contains fragments.
+    short_lines = sum(1 for ln in non_empty if len(ln.split()) <= 2 and len(ln) <= 24)
+    hyphenated = sum(1 for ln in non_empty if ln.rstrip().endswith("-"))
+    broken_line_ratio = min(1.0, (short_lines + hyphenated) / max(1, line_count))
+
+    symbol_count = sum(1 for ch in raw if not (ch.isalnum() or ch.isspace()))
+    symbol_ratio = symbol_count / max(1, text_length)
+
+    whitespace_issue_lines = sum(1 for ln in non_empty if re.search(r"\s{3,}", ln))
+    whitespace_score = max(0.0, 1.0 - (whitespace_issue_lines / max(1, line_count)))
+
+    length_score = min(1.0, text_length / 2500.0)
+    word_score = min(1.0, word_count / 350.0)
+    section_score = min(1.0, section_hits / 4.0)
+    structure_score = max(0.0, 1.0 - broken_line_ratio)
+    noise_score = max(0.0, 1.0 - min(1.0, symbol_ratio * 3.0))
+
+    score = (
+        0.22 * length_score
+        + 0.16 * word_score
+        + 0.18 * section_score
+        + 0.18 * structure_score
+        + 0.16 * noise_score
+        + 0.10 * whitespace_score
+    )
+    score = max(0.0, min(1.0, score))
+    return {
+        "score": round(score, 4),
+        "length_score": round(length_score, 4),
+        "section_score": round(section_score, 4),
+        "broken_line_ratio": round(broken_line_ratio, 4),
+        "symbol_ratio": round(symbol_ratio, 4),
+        "whitespace_score": round(whitespace_score, 4),
+        "noise_score": round(noise_score, 4),
+        "text_length": text_length,
+        "line_count": line_count,
+        "word_count": word_count,
+        "section_hits": section_hits,
+    }
+
+
+def needs_ocr(text: str, quality: Optional[dict] = None) -> bool:
+    """
+    Decide whether to run OCR.
+    OCR is reserved for scanned/image-heavy PDFs or clearly broken text layers,
+    because it is much slower than native extraction.
+    """
+    metrics = quality or score_extraction_quality(text)
+    text_length = int(metrics.get("text_length") or len((text or "").strip()))
+    score = float(metrics.get("score") or 0.0)
+    section_hits = int(metrics.get("section_hits") or 0)
+    broken_line_ratio = float(metrics.get("broken_line_ratio") or 0.0)
+    symbol_ratio = float(metrics.get("symbol_ratio") or 0.0)
+
+    if text_length < 250:
+        return True
+    if score < 0.38:
+        return True
+    if text_length < 700 and section_hits == 0 and broken_line_ratio > 0.35:
+        return True
+    if text_length < 900 and symbol_ratio > 0.22:
+        return True
+    return False
+
+
+def _extract_with_pymupdf_ocr(path: str) -> str:
+    """
+    OCR fallback using PyMuPDF if the native text layer is missing or unusable.
+    This stays CPU-friendly because it only runs after the quality gate fails.
+    """
+    try:
+        import fitz
+    except Exception as exc:
+        logger.debug("PyMuPDF OCR unavailable: %s", exc)
+        return ""
+
+    parts: list[str] = []
+    try:
+        with fitz.open(path) as doc:
+            for page in doc:
+                tp = page.get_textpage_ocr(language="eng", dpi=150)
+                parts.append(page.get_text(textpage=tp))
+        return "\n".join(p for p in parts if p).strip()
+    except Exception as exc:
+        logger.debug("PyMuPDF OCR failed for %s: %s", path, exc)
+        return ""
+
+
+def _extract_with_pytesseract_ocr(path: str) -> str:
+    """
+    Last-resort OCR fallback.
+    Uses pytesseract only if PyMuPDF OCR is unavailable or fails.
+    """
+    try:
+        import fitz
+        import pytesseract
+        from io import BytesIO
+        from PIL import Image
+    except Exception as exc:
+        logger.debug("pytesseract OCR unavailable: %s", exc)
+        return ""
+
+    parts: list[str] = []
+    try:
+        with fitz.open(path) as doc:
+            for page in doc:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                if pix.n - pix.alpha > 3:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                img = Image.open(BytesIO(pix.tobytes("png")))
+                text = pytesseract.image_to_string(img, config="--psm 6")
+                if text.strip():
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    except Exception as exc:
+        logger.debug("pytesseract OCR failed for %s: %s", path, exc)
+        return ""
+
+
+def run_fallback_extraction(path: str) -> tuple[str, dict]:
+    """
+    Extract PDF text with a primary layout-aware extractor, then fall back to the
+    existing parsers and OCR only when the quality gate says the text layer is poor.
+    """
+    started = time.perf_counter()
+    candidates: list[dict] = []
+
+    def _add_candidate(source: str, text: str, *, ocr: bool = False) -> None:
+        cleaned = _cleanup_markdown_text(text or "")
+        quality = score_extraction_quality(cleaned)
+        candidates.append(
+            {
+                "source": source,
+                "ocr": ocr,
+                "text": cleaned,
+                "quality": quality,
+                "length": len(cleaned),
+            }
+        )
+
+    # Primary: layout-aware markdown extraction. OCR stays off unless the quality gate fails.
+    _add_candidate("pymupdf4llm", extract_with_pymupdf4llm(path, force_ocr=False), ocr=False)
+    best = max(candidates, key=lambda c: (c["quality"]["score"], c["length"]))
+
+    if not needs_ocr(best["text"], best["quality"]):
+        elapsed = time.perf_counter() - started
+        logger.info(
+            "[PDF Extraction] source=%s ocr=%s quality=%.3f chars=%d time=%.3fs",
+            best["source"],
+            best["ocr"],
+            best["quality"]["score"],
+            best["length"],
+            elapsed,
+        )
+        return best["text"], {
+            "source": best["source"],
+            "ocr": best["ocr"],
+            "quality": best["quality"],
+            "elapsed_seconds": round(elapsed, 4),
+            "candidates": [
+                {"source": c["source"], "ocr": c["ocr"], "score": c["quality"]["score"], "chars": c["length"]}
+                for c in candidates
+            ],
+        }
+
+    # Fallback chain: existing parsers. We only pay this cost when the primary text
+    # looks broken, because plain text extraction can still be cheaper for clean PDFs.
+    for source, extractor in (
+        ("pdfplumber", _extract_with_pdfplumber_text),
+        ("pypdf", _extract_with_pypdf_text),
+    ):
+        try:
+            _add_candidate(source, extractor(path), ocr=False)
+        except Exception as exc:
+            logger.debug("%s extraction failed for %s: %s", source, path, exc)
+
+    best = max(candidates, key=lambda c: (c["quality"]["score"], c["length"]))
+
+    if needs_ocr(best["text"], best["quality"]):
+        # OCR only runs after the quality gate says the text layer is too sparse or noisy.
+        ocr_text = extract_with_pymupdf4llm(path, force_ocr=True)
+        if ocr_text:
+            _add_candidate("pymupdf4llm_ocr", ocr_text, ocr=True)
+        else:
+            ocr_text = _extract_with_pymupdf_ocr(path)
+            if ocr_text:
+                _add_candidate("pymupdf_ocr", ocr_text, ocr=True)
+            else:
+                ocr_text = _extract_with_pytesseract_ocr(path)
+                if ocr_text:
+                    _add_candidate("pytesseract_ocr", ocr_text, ocr=True)
+
+        if candidates:
+            best = max(candidates, key=lambda c: (c["quality"]["score"], c["length"]))
+
+    elapsed = time.perf_counter() - started
+    logger.info(
+        "[PDF Extraction] source=%s ocr=%s quality=%.3f chars=%d fallback=%s time=%.3fs",
+        best["source"],
+        best["ocr"],
+        best["quality"]["score"],
+        best["length"],
+        [c["source"] for c in candidates if c["source"] != "pymupdf4llm"],
+        elapsed,
+    )
+    return best["text"], {
+        "source": best["source"],
+        "ocr": best["ocr"],
+        "quality": best["quality"],
+        "elapsed_seconds": round(elapsed, 4),
+        "candidates": [
+            {"source": c["source"], "ocr": c["ocr"], "score": c["quality"]["score"], "chars": c["length"]}
+            for c in candidates
+        ],
+    }
+
+
+def extract_text_from_pdf(path: str) -> str:
+    """
+    Extract resume text from PDF with a layout-aware primary extractor and
+    quality-gated fallbacks. The returned string still feeds the existing
+    normalization and heuristic extraction pipeline unchanged.
+    """
+    text, _meta = run_fallback_extraction(path)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +569,11 @@ _SKILL_GENERIC_WORDS = {
     "software",
     "technology",
     "tools",
+    "core",
+    "web",
+    "api",
+    "rest",
+    "optimization",
     "full",
     "stack",
     "developer",
@@ -338,6 +602,26 @@ _SKILL_ADJECTIVES = {"scalable", "dynamic", "efficient", "robust", "reliable", "
 _SKILL_VAGUE_PHRASES = {
     "dynamic content rendering",
     "api consumption",
+}
+_TECH_SKILL_ALLOWLIST = {
+    # Common multi-word skills that should survive strict filtering.
+    "asp.net core",
+    "asp.net core web api",
+    "asp.net web api",
+    ".net core",
+    ".net framework",
+    "azure devops",
+    "entity framework",
+    "entity framework core",
+    "web api",
+    "rest api",
+    "restful api",
+    "sql server",
+    "react js",
+    "react native",
+    "shadcn ui",
+    "shadcn ui components",
+    "console app",
 }
 
 
@@ -458,6 +742,18 @@ def _normalize_skill_token(tok: str) -> str:
         t = canon
     # Consolidations
     low = _norm_header(t)
+    if low in {"sql"}:
+        return "SQL"
+    if low in {"api"}:
+        return "API"
+    if low in {"git"}:
+        return "Git"
+    if low in {"jira"}:
+        return "Jira"
+    if low in {"aws"}:
+        return "AWS"
+    if low in {"gcp"}:
+        return "GCP"
     if low in {"asp.net core mvc", "asp.net core", "aspnetcore", "aspnet core"}:
         return "ASP.NET Core"
     if low in {"ci", "cd", "ci/cd", "ci cd", "ci cd automation", "cicd"}:
@@ -500,6 +796,86 @@ def _skill_is_noise(tok: str) -> bool:
     ):
         return True
     return False
+
+
+def _is_tech_like_skill_token(tok: str) -> bool:
+    """
+    Strict positive gate for skill candidates.
+    Keeps concrete technologies and drops prose that was extracted from the
+    same visual area as the skills section.
+    """
+    if not tok:
+        return False
+    raw = _strip_skill_decorators(_strip_footnote_numbers(str(tok))).strip()
+    if not raw or _skill_is_noise(raw):
+        return False
+
+    low = _norm_header(raw)
+    if low in _TECH_SKILL_ALLOWLIST:
+        return True
+    if low in _SKILL_CANONICAL:
+        return True
+    if low in {"git", "jira", "postman", "figma", "sketch", "tableau", "sql", "api", "azure", "aws", "gcp"}:
+        return True
+    if any(kw in low for kw in _CORE_TECH_PRIMARY):
+        return True
+    if _looks_like_certification(low):
+        return True
+
+    # Reject prose-like tokens early. These are not skills, even if they appear
+    # inside the same block as genuine skills.
+    if any(
+        phrase in low
+        for phrase in (
+            "functionality",
+            "platform",
+            "platforms",
+            "workflow",
+            "workflows",
+            "operational",
+            "efficiency",
+            "improving",
+            "improved",
+            "manual",
+            "smoother",
+            "better",
+            "scalability",
+            "project",
+            "name",
+            "solution",
+            "solutions",
+            "role",
+            "version control",
+            "enterprise resource",
+            "user interface",
+            "user interfaces",
+            "styled",
+            "supporting",
+            "supported",
+            "used",
+            "using",
+        )
+    ):
+        return False
+
+    parts = [p for p in re.split(r"\s+", raw) if p]
+    if not parts:
+        return False
+    if len(parts) == 1:
+        if raw.isupper() and 2 <= len(raw) <= 6 and raw not in {"HR", "CV", "CEO", "VP"}:
+            return True
+        if re.match(r"^[A-Za-z][a-z0-9]*([A-Z][a-z0-9]*)+$", raw):
+            return True
+        return False
+
+    if len(parts) > 5:
+        return False
+    if any(ch in raw for ch in (".", "#", "+", "/")):
+        return True
+    return any(
+        part.lower() in _TECH_SKILL_ALLOWLIST or part.lower() in _CORE_TECH_PRIMARY
+        for part in parts
+    )
 
 
 def _name_tokens_for_skill_exclusion(full_name: str) -> set[str]:
@@ -679,7 +1055,12 @@ _SKILLS_SECTION_HEADERS = {
 }
 
 _COMMON_SECTION_HEADERS = {
+    "resume",
+    "curriculum vitae",
+    "cv",
     "profile",
+    "about",
+    "about me",
     "summary",
     "objective",
     "career objective",
@@ -689,6 +1070,7 @@ _COMMON_SECTION_HEADERS = {
     "work experience",
     "experience",
     "education",
+    "skills",
     "projects",
     "certifications",
     "achievements",
@@ -1119,6 +1501,9 @@ _HEADER_BAD_NAMES = {
     "inside sales",
     "account manager",
     "marketing manager",
+    "skills",
+    "experience",
+    "education",
 }
 
 
@@ -1148,6 +1533,8 @@ def _is_plausible_person_name(candidate: str) -> bool:
         return False
     # Common header-y phrases that show up as "names" in PDFs
     if any(x in norm for x in ("key skills", "technical skills", "programming languages", "languages")):
+        return False
+    if any(tok in norm for tok in _GENERIC_NAME_REJECT_WORDS):
         return False
     if norm in {"phone", "email", "location", "experience"}:
         return False
@@ -1183,6 +1570,8 @@ def _is_plausible_person_name(candidate: str) -> bool:
     ]
     if any(tok in norm for tok in ROLE_TOKENS):
         return False
+    if any(tok in norm for tok in _INSTITUTION_WORDS):
+        return False
     # Reject company/org-like strings that often appear near the header in PDFs
     COMPANY_TOKENS = [
         "informatics",
@@ -1211,8 +1600,10 @@ def _is_plausible_person_name(candidate: str) -> bool:
     if not re.fullmatch(r"[A-Za-z][A-Za-z .'\-]{1,58}[A-Za-z]?", c):
         return False
     parts = [p for p in re.split(r"\s+", c) if p]
-    # Require at least 2 tokens to avoid selecting skills like "Wordpress" as a "name".
-    if not (2 <= len(parts) <= 4):
+    # Allow plausible single-token names when they have enough shape/support.
+    if not (1 <= len(parts) <= 4):
+        return False
+    if len(parts) == 1 and len(re.sub(r"[^A-Za-z]", "", parts[0])) < 3:
         return False
     if any(p.lower() in {"and", "or", "of", "the"} for p in parts):
         return False
@@ -1308,6 +1699,334 @@ def _extract_person_spans(text: str) -> list[str]:
         return []
 
 
+def _is_contact_hint_line(line: str) -> bool:
+    low = (line or "").lower()
+    return bool(
+        re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", low)
+        or re.search(r"(?:\+?\d{1,3}[\s-]?)?(?:\d[\s-]?){6,14}\d", low)
+        or any(k in low for k in ("linkedin", "github", "portfolio", "website", "behance", "dribbble"))
+    )
+
+
+def _looks_like_layout_title_line(line: str) -> bool:
+    cleaned = _strip_contact_noise(line or "")
+    if not cleaned:
+        return False
+    if _looks_like_header(cleaned):
+        return False
+    norm = _norm_header(cleaned)
+    if norm in _HEADER_BAD_NAMES or norm in _COMMON_SECTION_HEADERS or norm in _SKILLS_SECTION_HEADERS:
+        return False
+    if any(tok in norm for tok in ("developer", "engineer", "manager", "consultant", "analyst", "intern", "specialist")):
+        return False
+    if len(cleaned) > 70:
+        return False
+    if any(ch.isdigit() for ch in cleaned):
+        return False
+    parts = [p for p in re.split(r"\s+", cleaned) if p]
+    if not (1 <= len(parts) <= 5):
+        return False
+    if cleaned.isupper() and len(cleaned) > 3:
+        return True
+    return len(parts) <= 4 and sum(1 for p in parts if p[:1].isupper()) >= max(1, len(parts) - 1)
+
+
+def _collect_name_candidate_records(resume_text: str, email: str) -> list[dict]:
+    """
+    Gather name candidates with lightweight provenance so scoring can boost
+    PERSON entities, contact-neighbor lines and layout-like title lines.
+    """
+    records: dict[str, dict] = {}
+
+    def add(value: str, source: str, line_index: int | None = None) -> None:
+        cleaned = _strip_contact_noise(value or "").strip()
+        if not cleaned or len(cleaned) > 60:
+            return
+        norm = _norm_header(cleaned)
+        if not norm:
+            return
+        rec = records.get(norm)
+        if not rec:
+            rec = {"value": cleaned, "sources": set(), "line_indices": set()}
+            records[norm] = rec
+        if source:
+            rec["sources"].add(source)
+        if line_index is not None:
+            rec["line_indices"].add(int(line_index))
+        if len(cleaned) > len(rec["value"]) or (cleaned.istitle() and not rec["value"].istitle()):
+            rec["value"] = cleaned
+
+    text = resume_text or ""
+    raw_lines = text.splitlines()
+    lines = [ln.strip() for ln in raw_lines if ln.strip()]
+    top = lines[:25]
+
+    for person in _extract_person_spans(text):
+        add(person, "ner")
+
+    for idx, ln in enumerate(top):
+        cand = _strip_contact_noise(ln)
+        for sep in ("|", "â€¢", "•"):
+            if sep in cand:
+                cand = cand.split(sep, 1)[0].strip()
+        if cand:
+            add(cand, "header", idx)
+            parts = [p for p in re.split(r"\s+", cand) if p]
+            if len(parts) >= 2:
+                first = re.sub(r"[^A-Za-z]+", "", parts[0]).strip()
+                tail = " ".join(parts[1:]).lower()
+                if (
+                    first
+                    and len(first) >= 3
+                    and parts[0][0].isalpha()
+                    and parts[0][0].isupper()
+                    and any(tok in tail for tok in ("developer", "engineer", "manager", "consultant", "analyst", "intern", "specialist"))
+                ):
+                    add(first, "header", idx)
+            if _looks_like_layout_title_line(cand):
+                add(cand, "layout", idx)
+
+    contact_indices: set[int] = set()
+    for i, ln in enumerate(raw_lines[:60]):
+        if _is_contact_hint_line(ln):
+            contact_indices.add(i)
+            for j in range(max(0, i - 2), min(len(raw_lines), i + 3)):
+                contact_indices.add(j)
+
+    for i in sorted(contact_indices):
+        if i >= len(raw_lines):
+            continue
+        ln = raw_lines[i].strip()
+        if not ln:
+            continue
+        cleaned = _strip_contact_noise(ln)
+        if not cleaned or _looks_like_header(cleaned):
+            continue
+        for sep in ("|", "â€¢", "•", "/", "â€“", "-"):
+            if sep in cleaned:
+                for part in cleaned.split(sep):
+                    part_clean = part.strip()
+                    if not part_clean:
+                        continue
+                    n = _norm_header(part_clean)
+                    if n in _HEADER_BAD_NAMES or n in _COMMON_SECTION_HEADERS or n in _SKILLS_SECTION_HEADERS:
+                        continue
+                    add(part_clean, "contact", i)
+        add(cleaned, "contact", i)
+
+    if email:
+        local = email.split("@", 1)[0]
+        local = re.sub(r"[._\-]+", " ", local).strip()
+        if local and any(ch.isalpha() for ch in local):
+            parts = [p for p in local.split() if p]
+            if 1 <= len(parts) <= 4:
+                add(" ".join(w.capitalize() for w in parts), "email")
+
+    for idx, ln in enumerate(lines[:40]):
+        if _looks_like_layout_title_line(ln):
+            add(ln, "layout", idx)
+
+    return list(records.values())
+
+
+def _score_name_record(record: dict, resume_text: str, email: str) -> tuple[float, float, list[str], str]:
+    candidate = str(record.get("value") or "").strip()
+    sources = set(record.get("sources") or set())
+    line_indices = {int(i) for i in (record.get("line_indices") or set()) if str(i).isdigit() or isinstance(i, int)}
+    reasons: list[str] = []
+    if not candidate:
+        return (-1.0, 0.0, ["empty"], "")
+
+    norm = _norm_header(candidate)
+    if not norm:
+        return (-1.0, 0.0, ["empty_norm"], candidate)
+
+    if norm in _HEADER_BAD_NAMES or norm in _COMMON_SECTION_HEADERS or norm in _SKILLS_SECTION_HEADERS:
+        return (-1.0, 0.0, ["section_header"], candidate)
+    if any(tok in norm for tok in ("developer", "engineer", "manager", "architect", "consultant", "analyst", "intern", "specialist")):
+        return (-1.0, 0.0, ["role_title"], candidate)
+    if any(tok in norm for tok in ("key skills", "technical skills", "skills", "experience", "education", "summary", "resume", "curriculum vitae", "cv")):
+        return (-1.0, 0.0, ["section_header"], candidate)
+    if any(tok in norm for tok in _INSTITUTION_WORDS):
+        return (-1.0, 0.0, ["institution_like"], candidate)
+    if any(tok in norm for tok in _GENERIC_NAME_REJECT_WORDS):
+        return (-1.0, 0.0, ["generic_section_title"], candidate)
+    if _looks_like_header(candidate) and "layout" not in sources and "header" not in sources:
+        return (-0.5, 0.05, ["header_like"], candidate)
+    if not _is_plausible_person_name(candidate):
+        return (-1.5, 0.1, ["shape_reject"], candidate)
+
+    score = 0.0
+    text = resume_text or ""
+    email_local = (email or "").split("@", 1)[0].lower()
+    raw_lines = text.splitlines()
+    contact_marker_lines = [i for i, ln in enumerate(raw_lines) if _is_contact_hint_line(ln)]
+
+    if "ner" in sources:
+        score += 1.0
+        reasons.append("person_entity")
+    if "email" in sources:
+        score += 0.9
+        reasons.append("email_localpart")
+    if "contact" in sources:
+        score += 0.8
+        reasons.append("contact_neighbor")
+    if "layout" in sources:
+        score += 0.45
+        reasons.append("layout_title")
+    if "header" in sources:
+        score += 0.35
+        reasons.append("header_region")
+
+    if line_indices:
+        if min(line_indices) <= 6:
+            score += 0.35
+            reasons.append("near_top")
+        if any(i <= 12 for i in line_indices):
+            score += 0.2
+        if contact_marker_lines and any(min(abs(i - j) for j in contact_marker_lines) <= 2 for i in line_indices):
+            score += 0.55
+            reasons.append("contact_proximity")
+
+    parts = [p for p in re.split(r"\s+", candidate) if p]
+    if 2 <= len(parts) <= 3:
+        score += 0.25
+        reasons.append("realistic_length")
+    elif len(parts) == 4:
+        score += 0.1
+        reasons.append("longer_name")
+    else:
+        score -= 0.3
+
+    if candidate.istitle():
+        score += 0.2
+        reasons.append("title_case")
+    elif all(p[:1].isupper() for p in parts if p):
+        score += 0.12
+        reasons.append("capitalized")
+
+    if candidate.isupper() and len(candidate) > 3:
+        score -= 0.5
+        reasons.append("all_caps_heading")
+
+    if len(candidate) > 30:
+        score -= 0.35
+        reasons.append("long_phrase")
+    if re.search(r"[^A-Za-z .'\-]", candidate):
+        score -= 0.4
+        reasons.append("symbols_numbers")
+    if re.search(r"\d", candidate) and not re.search(r"\b(II|III|IV|Jr|Sr)\b", candidate, re.I):
+        score -= 0.45
+        reasons.append("contains_number")
+    if any(w in norm for w in _INSTITUTION_WORDS):
+        score -= 0.65
+        reasons.append("institution_like")
+    if any(w in norm for w in _EDUCATION_DEGREE_WORDS):
+        score -= 0.75
+        reasons.append("education_like")
+    if " of " in norm:
+        score -= 0.35
+        reasons.append("phrase_pattern")
+    if any(w in norm for w in ("punjab", "mohali", "chandigarh", "india", "delhi", "mumbai", "bangalore", "hyderabad", "dharamshala", "talwara")):
+        score -= 0.55
+        reasons.append("location_like")
+    if _is_core_tech_label(candidate) or any(
+        kw in norm
+        for kw in ("python", "java", "javascript", "typescript", "react", "node", "sql", "aws", "azure", "docker", "git")
+    ):
+        score -= 0.95
+        reasons.append("technical_phrase")
+    if email_local:
+        for word in norm.split():
+            if len(word) > 2 and word.lower() in email_local:
+                score += 0.25
+                reasons.append("email_overlap")
+                break
+
+    confidence = max(0.0, min(1.0, 0.16 + (score / 3.75)))
+    return (score, confidence, reasons, candidate)
+
+
+def _pick_best_name_from_records(records: list[dict], resume_text: str, email: str, *, stage: str) -> dict:
+    scored: list[dict] = []
+    for rec in records:
+        score, confidence, reasons, candidate = _score_name_record(rec, resume_text, email)
+        scored.append(
+            {
+                "value": candidate,
+                "score": round(score, 4),
+                "confidence": round(confidence, 4),
+                "reasons": reasons,
+                "sources": sorted(str(s) for s in (rec.get("sources") or set())),
+                "line_indices": sorted(int(i) for i in (rec.get("line_indices") or set())),
+            }
+        )
+    scored.sort(key=lambda x: (x["confidence"], x["score"], -len(x["value"])), reverse=True)
+    best = scored[0] if scored else {"value": "", "score": -1.0, "confidence": 0.0, "reasons": [], "sources": [], "line_indices": []}
+    best["stage"] = stage
+    best["all_candidates"] = [
+        {
+            "value": item["value"],
+            "score": item["score"],
+            "confidence": item["confidence"],
+            "reasons": item["reasons"],
+            "sources": item["sources"],
+            "line_indices": item["line_indices"],
+            "stage": stage,
+        }
+        for item in scored[:10]
+    ]
+    return best
+
+
+def rank_name_candidates(resume_text: str, email: str, candidates: list[str] | None = None) -> tuple[str, bool, dict]:
+    records = _collect_name_candidate_records(resume_text, email)
+    if candidates:
+        wanted = {_norm_header(c) for c in candidates if _norm_header(c)}
+        if wanted:
+            records = [r for r in records if _norm_header(str(r.get("value") or "")) in wanted]
+
+    if not records and email:
+        local = email.split("@", 1)[0]
+        local = re.sub(r"[._\-]+", " ", local).strip()
+        if local and any(ch.isalpha() for ch in local):
+            parts = [p for p in local.split() if p]
+            if 1 <= len(parts) <= 4:
+                records = [{"value": " ".join(w.capitalize() for w in parts), "sources": {"email"}, "line_indices": set()}]
+
+    attempts: list[dict] = []
+    attempts.append(_pick_best_name_from_records(records, resume_text, email, stage="all"))
+    if attempts[0].get("confidence", 0.0) < 0.65:
+        for stage, subset in (
+            ("email", [r for r in records if "email" in (r.get("sources") or set())]),
+            ("ner", [r for r in records if "ner" in (r.get("sources") or set())]),
+            ("contact", [r for r in records if "contact" in (r.get("sources") or set())]),
+        ):
+            if subset:
+                attempts.append(_pick_best_name_from_records(subset, resume_text, email, stage=stage))
+
+    attempts.sort(key=lambda x: (x.get("confidence", 0.0), x.get("score", 0.0), -len(x.get("value") or "")), reverse=True)
+    best = attempts[0] if attempts else {"value": "", "score": -1.0, "confidence": 0.0, "reasons": [], "sources": [], "line_indices": [], "stage": "none"}
+    meta = {
+        "selected": best.get("value", ""),
+        "confidence": float(best.get("confidence") or 0.0),
+        "score": float(best.get("score") or 0.0),
+        "stage": best.get("stage", "all"),
+        "sources": best.get("sources", []),
+        "reasons": best.get("reasons", []),
+        "candidate_scores": best.get("all_candidates", []),
+    }
+    logger.info(
+        "Name extraction selected=%s confidence=%.2f stage=%s",
+        meta["selected"] or "",
+        meta["confidence"],
+        meta["stage"],
+    )
+    logger.debug("Name candidate scores: %s", meta["candidate_scores"])
+    low_confidence = meta["confidence"] < 0.65 or not meta["selected"]
+    return (meta["selected"] or "", low_confidence, meta)
+
+
 # Generic institution/role/degree tokens used to penalise non-person candidates
 _INSTITUTION_WORDS = {
     "department", "university", "college", "institute", "school", "faculty",
@@ -1319,6 +2038,55 @@ _ROLE_WORDS = {
     "lead", "head", "officer", "coordinator", "business development", "team",
     "management",  # e.g. "Team Management", "Incident Management"
     "designer", "web designer", "ui designer", "ux designer", "ui/ux designer",
+    "intern",
+}
+_GENERIC_NAME_REJECT_WORDS = {
+    "academic",
+    "qualification",
+    "project",
+    "projects",
+    "tools",
+    "tool",
+    "report",
+    "reporting",
+    "dashboard",
+    "dashboards",
+    "data",
+    "analysis",
+    "cleaning",
+    "summary",
+    "profile",
+    "objective",
+    "skills",
+    "experience",
+    "education",
+    "professional",
+    "technical",
+    "tableau",
+    "power bi",
+    "bi",
+    "excel",
+    "sql",
+    "python",
+    "github",
+    "english",
+    "hindi",
+    "language",
+    "languages",
+    "driven",
+    "retail",
+    "decision",
+    "conditional",
+    "formula",
+    "formulas",
+    "pivot",
+    "analysis",
+    "matriculation",
+    "intermediate",
+    "sample",
+    "superstore",
+    "mobile",
+    "report",
 }
 # Education/degree phrases — never a person name
 _EDUCATION_DEGREE_WORDS = {
@@ -1424,6 +2192,9 @@ def select_best_name(candidates: list[str], resume_text: str, email: str) -> tup
     Score each candidate with generic rules; return (best_name, low_confidence).
     No hardcoded "bad names" list — uses institution/role tokens and shape/location.
     """
+    best_name, low_confidence, _meta = rank_name_candidates(resume_text, email, candidates)
+    return best_name, low_confidence
+
     if not candidates:
         # Fallback to email-derived only
         if email:
@@ -1784,7 +2555,7 @@ def _passes_technical_skill_output(raw: str, vocab: set[str]) -> bool:
         return True
     if _is_core_tech_label(s):
         return True
-    if any(ch in s for ch in ".+#/\\"):
+    if any(ch in s for ch in ".+#/\\") and _is_tech_like_skill_token(s):
         return True
     if re.search(r"(?<![a-z0-9])[a-z]{1,6}-\d{2,4}(?![a-z0-9])", norm_low):
         return True
@@ -1806,7 +2577,7 @@ def _passes_technical_skill_output(raw: str, vocab: set[str]) -> bool:
             return True
     if len(parts) > 4:
         return False
-    return False
+    return _is_tech_like_skill_token(s)
 
 
 def extract_skills_from_text(resume_text: str) -> list[str]:
@@ -2059,26 +2830,50 @@ def _skill_token_is_valid(tok: str) -> bool:
     s = _strip_footnote_numbers(str(tok)).strip()
     if len(s) < 2 or len(s) > 48:
         return False
-    # Reject sentence-like fragments (too many words)
-    if len(s.split()) > 8:
+    if _norm_header(s) in {"core", "web", "api", "rest", "optimization"}:
         return False
-    # Reject obvious narrative verbs / durations
+    # Reject sentence-like fragments (too many words)
+    if len(s.split()) > 6:
+        return False
     low = _norm_header(s)
     if re.search(r"\b(months?|yrs?|years?)\b", low):
         return False
-    if re.search(
-        r"\b(created|developed|performed|integrated|optimized|designed|implemented|managed|led|built|delivered|debugg|responsible)\w*\b",
-        low,
+    if any(
+        phrase in low
+        for phrase in (
+            "experience",
+            "summary",
+            "education",
+            "projects",
+            "profile",
+            "objective",
+            "functionality",
+            "platform",
+            "platforms",
+            "workflow",
+            "workflows",
+            "operational",
+            "efficiency",
+            "improving",
+            "improved",
+            "manual",
+            "smoother",
+            "better",
+            "scalability",
+            "project name",
+            "version control",
+            "enterprise resource",
+            "user interface",
+            "user interfaces",
+            "styled",
+            "supporting",
+            "supported",
+            "used",
+            "using",
+        )
     ):
         return False
-    # Digits are usually noise; allow only cert-like codes (AZ-900) or common tech tokens (C++/.NET)
-    if re.search(r"\d", s):
-        if not re.search(r"\b[a-z]{1,4}-?\d{2,4}\b", s, flags=re.I):
-            return False
-    # Special chars: allow for C++, C#, .NET, Node.js, etc.
-    if re.search(r"[^A-Za-z0-9 .+#\-]", s):
-        return False
-    return True
+    return _is_tech_like_skill_token(s)
 
 
 def _count_skill_occurrences(skill: str, text: str) -> int:
@@ -2117,7 +2912,11 @@ def _compute_skill_weights(
     out: list[str] = []
     seen: set[str] = set()
 
-    section_keys = {canonicalise_skill(s).lower() for s in (section_skills or []) if canonicalise_skill(s)}
+    section_keys = {
+        canonicalise_skill(s).lower()
+        for s in (section_skills or [])
+        if canonicalise_skill(s) and _is_tech_like_skill_token(canonicalise_skill(s))
+    }
 
     for raw in skills or []:
         s0 = canonicalise_skill(str(raw))
@@ -2165,8 +2964,9 @@ def _compute_skill_weights(
             or _looks_like_certification(low)
             or any(ch in s0 for ch in (".", "#", "+", "/"))
         )
-        # Trust tokens that came from explicit skills-section parsing (section_keys), even if
-        # they are not in the small "looks_techy" shortcut list (e.g. Figma, Prisma, Kafka).
+        # Trust tokens that came from explicit skills-section parsing only if they
+        # still pass the tech-like gate. This blocks prose fragments that were
+        # extracted from the same visual block as the real skill list.
         accept = (
             in_exp_or_proj
             or (k in section_keys)
@@ -2445,13 +3245,34 @@ def extract_resume(resume_text: str) -> dict:
             phone = re.sub(r"\s+", " ", phone_match.group(0)).strip()
 
     # Production name extraction: candidate-based scoring (no hardcoded bad-name list)
+    def _name_has_header_support(candidate: str, text: str, email_value: str) -> bool:
+        if not candidate or not text:
+            return False
+        cand_norm = _norm_header(candidate)
+        if not cand_norm:
+            return False
+
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        top_lines = lines[:12]
+        if any(cand_norm == _norm_header(ln) or cand_norm in _norm_header(ln) for ln in top_lines):
+            return True
+
+        if email_value:
+            email_local = email_value.split("@", 1)[0].lower()
+            for word in cand_norm.split():
+                if len(word) > 2 and word in email_local:
+                    return True
+        return False
+
     try:
-        name_candidates = extract_name_candidates(base_text, email)
-        best_name, low_confidence = select_best_name(name_candidates, base_text, email)
-        if best_name:
+        best_name, low_confidence, name_meta = rank_name_candidates(base_text, email)
+        if best_name and (_name_has_header_support(best_name, base_text, email) or not low_confidence or len(best_name.split()) == 1):
             name = best_name[:60]
         if low_confidence and best_name:
             extraction_warnings.append("name_low_confidence")
+            extraction_warnings.append(
+                "name_confidence_" + str(round(float(name_meta.get("confidence") or 0.0), 2)).replace(".", "_")
+            )
     except Exception as e:
         logger.warning("Candidate-based name extraction failed: %s", e)
         header_name = extract_name_from_header(base_text)
@@ -3810,12 +4631,18 @@ def estimate_experience_years_from_text(resume_text: str) -> float:
 def format_experience_duration(years: float) -> str:
     """Return '3 years 4 months' or 'Not specified'."""
     try:
-        y = float(years or 0.0)
+        if isinstance(years, str):
+            m = re.search(r"([0-9]+(?:\.[0-9]+)?)", years)
+            y = float(m.group(1)) if m else 0.0
+        else:
+            y = float(years or 0.0)
     except Exception:
         y = 0.0
     if y <= 0:
         return "Not specified"
-    total_months = int(round(y * 12))
+    # Keep fractional experience readable for the UI. A half-year becomes
+    # "6 months" instead of leaking the raw decimal form.
+    total_months = max(1, int(round(y * 12)))
     yrs, mos = divmod(total_months, 12)
     parts: list[str] = []
     if yrs:

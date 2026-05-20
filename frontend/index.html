@@ -1,0 +1,3141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Analyzer & AI Recruiter</title>
+    <!-- Google Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;800&display=swap"
+        rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        outfit: ['Outfit', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f4ff',
+                            100: '#e0e9ff',
+                            200: '#c2d4ff',
+                            300: '#94b3ff',
+                            400: '#5e87ff',
+                            500: '#3b5cff',
+                            600: '#253dff',
+                            700: '#1527e6',
+                            800: '#1220bd',
+                            900: '#153273', // Navy Blue HR theme
+                            950: '#0b0f19', // Deep dark space background
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0b0f19;
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(21, 50, 115, 0.25) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(21, 50, 115, 0.15) 0%, transparent 40%);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.01);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        html {
+            color-scheme: dark;
+        }
+
+        /* Native select fallback */
+        select {
+            color-scheme: dark;
+            background-color: rgba(0, 0, 0, 0.25);
+            color: #f1f5f9;
+        }
+
+        select option,
+        select optgroup {
+            background-color: #0b0f19;
+            color: #e2e8f0;
+        }
+
+        /* Custom dark dropdown (replaces native option list UI) */
+        .dark-select-native {
+            position: absolute !important;
+            width: 1px !important;
+            height: 1px !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            overflow: hidden !important;
+        }
+
+        .dark-select-wrap {
+            position: relative;
+            display: inline-block;
+            min-width: 8rem;
+        }
+
+        .dark-select-wrap.w-full {
+            display: block;
+            width: 100%;
+        }
+
+        .dark-select-trigger {
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .dark-select-trigger svg {
+            flex-shrink: 0;
+            opacity: 0.7;
+        }
+
+        .dark-select-menu {
+            background: #0b0f19;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 0.75rem;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+            max-height: 16rem;
+            overflow-y: auto;
+            padding: 0.35rem;
+        }
+
+        .dark-select-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 0.5rem 0.65rem;
+            border-radius: 0.5rem;
+            font-size: 0.75rem;
+            color: #e2e8f0;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }
+
+        .dark-select-item:hover,
+        .dark-select-item.is-active {
+            background: #153273;
+            color: #ffffff;
+        }
+    </style>
+</head>
+
+<body class="text-slate-100 font-sans h-screen flex flex-row overflow-hidden">
+
+    <aside
+        class="w-72 bg-gradient-to-b from-[rgb(14 29 63)] to-[#080f24] border-r border-white/10 flex flex-col h-screen shrink-0 z-30">
+
+        <!-- Branding Logo Header -->
+        <div class="p-3 border-b border-white/10 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+                <div
+                    class="h-10 w-10 rounded-xl bg-brand-900 border border-brand-300/20 flex items-center justify-center overflow-hidden shadow-lg p-0.5 shrink-0">
+                    <img src="assets/softwiz-logo.png" alt="Softwiz" class="h-full w-full object-contain">
+                </div>
+                <div>
+                    <h1 class="text-base font-outfit font-black tracking-tight text-white leading-none">SOFTWIZ</h1>
+                    <p class="text-[10px] font-bold text-brand-300 tracking-widest uppercase mt-1">AI Recruiter</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Menu Items (Upload Center is FIRST!) -->
+        <div class="flex-1 overflow-y-auto px-4 py-6 space-y-1.5">
+            <button onclick="switchTab('upload')" id="menu-upload"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 bg-brand-900 text-white border border-brand-300/10 shadow-lg transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                Upload Center
+            </button>
+            <button onclick="switchTab('resumes')" id="menu-resumes"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="7" height="9" x="3" y="3" rx="1" />
+                    <rect width="7" height="5" x="14" y="3" rx="1" />
+                    <rect width="7" height="9" x="14" y="12" rx="1" />
+                    <rect width="7" height="5" x="3" y="16" rx="1" />
+                </svg>
+                Resumes Database
+            </button>
+            <button onclick="switchTab('compare')" id="menu-compare"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 3h5v5" />
+                    <path d="M8 3H3v5" />
+                    <path d="m21 3-7.5 7.5" />
+                    <path d="m3 3 7.5 7.5" />
+                    <path d="M16 21h5v-5" />
+                    <path d="M8 21H3v-5" />
+                    <path d="m21 21-7.5-7.5" />
+                    <path d="m3 21 7.5-7.5" />
+                </svg>
+                AI Match / Compare
+            </button>
+            <button onclick="switchTab('search')" id="menu-search"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                Global AI Search
+            </button>
+            <button onclick="switchTab('chat')" id="menu-chat"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                Resume AI Chat
+            </button>
+
+            <button onclick="switchTab('export')" id="menu-export"
+                class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M9 3v18" />
+                    <path d="M15 3v18" />
+                    <path d="M3 9h18" />
+                    <path d="M3 15h18" />
+                </svg>
+                Export Center
+            </button>
+        </div>
+
+        <!-- Health Status Widget & Portal backlink at bottom -->
+        <div class="p-4 border-t border-white/10 bg-black/20 space-y-3">
+            <div class="flex items-center justify-between text-xs">
+                <span class="text-slate-400 font-semibold">Backend Server:</span>
+                <span id="backendStatusBadge"
+                    class="px-2 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Online</span>
+            </div>
+
+            <button onclick="fetchResumes()"
+                class="w-full py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 border border-white/5 text-xs font-semibold text-center hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-1.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                </svg>
+                Sync Database
+            </button>
+
+            <a href="http://127.0.0.1:8000/portal.html"
+                class="w-full py-2 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/20 text-xs font-semibold text-center hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-1.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6" />
+                </svg>
+                Back to Attendance & HRMS
+            </a>
+        </div>
+    </aside>
+
+    <!-- Scrollable Workspace Panel -->
+    <div class="flex-grow h-screen overflow-y-auto bg-[#080d19] flex flex-col">
+
+        <!-- Top Workspace Bar -->
+        <header
+            class="h-16 border-b border-white/10 px-8 flex items-center justify-between shrink-0 bg-[#080d19]/40 backdrop-blur-md sticky top-0 z-20">
+            <div>
+                <span class="text-[10px] font-bold text-brand-300 uppercase tracking-widest block">Recruiter Hub
+                    Console</span>
+                <span class="text-sm font-semibold text-slate-300 mt-0.5 block" id="consoleHeaderTitle">Resume Upload &
+                    Extraction Center</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-slate-500 font-medium">Softwiz HR Portal</span>
+            </div>
+        </header>
+
+        <!-- Main Inner Workspace -->
+        <div class="flex-grow p-8 w-full space-y-3">
+
+            <!-- Loader Screen -->
+            <div id="loader" class="hidden py-32 flex flex-col items-center justify-center">
+                <div class="animate-spin rounded-full h-12 w-12 border-2 border-brand-400 border-t-transparent mb-4">
+                </div>
+                <div class="text-xs font-semibold text-brand-300">Synchronizing database candidates...</div>
+            </div>
+
+            <!-- TAB 1: RESUMES DATABASE -->
+            <section id="tab-resumes" class="hidden space-y-6">
+                <!-- Search & Advanced Filters -->
+                <div class="p-5 rounded-2xl bg-white/[0.02] border border-white/10 space-y-4 shadow-xl">
+                    <h3 class="font-outfit font-extrabold text-base text-white">Database Filtering & Sorting</h3>
+
+                    <form onsubmit="applyAdvancedFilters(event)"
+                        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Name
+                                Contains</label>
+                            <input type="text" id="filter-name" placeholder="Candidate name..."
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                        </div>
+                        <div>
+                            <label
+                                class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Email
+                                Contains</label>
+                            <input type="text" id="filter-email" placeholder="Email contains..."
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Core
+                                Skills (AND)</label>
+                            <input type="text" id="filter-skills" placeholder="React, Docker, SQL..."
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Min
+                                    Exp (Yr)</label>
+                                <input type="number" id="filter-min-exp" min="0" value="0"
+                                    class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                            </div>
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Max
+                                    Exp (Yr)</label>
+                                <input type="number" id="filter-max-exp" min="0" value="0"
+                                    class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Sort
+                                Key</label>
+                            <select id="filter-sort-by"
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                                <option value="created_at">Created Date</option>
+                                <option value="name">Candidate Name</option>
+                                <option value="experience">Years Experience</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Sort
+                                Order</label>
+                            <select id="filter-sort-order"
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                                <option value="desc">Descending</option>
+                                <option value="asc">Ascending</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label
+                                class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Shortlisted
+                                State</label>
+                            <select id="filter-shortlisted"
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                                <option value="All">All Profiles</option>
+                                <option value="Shortlisted">Shortlisted Only</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">From
+                                    Date</label>
+                                <input type="date" id="filter-from-date"
+                                    class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                            </div>
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">To
+                                    Date</label>
+                                <input type="date" id="filter-to-date"
+                                    class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400">
+                            </div>
+                        </div>
+                        <div class="flex gap-2 items-end">
+                            <button type="submit"
+                                class="flex-1 py-2.5 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-lg active:scale-95 transition-all"
+                                style="background-color: rgb(21 50 115);">Apply</button>
+                            <button type="button" onclick="clearFilters()"
+                                class="flex-1 py-2.5 bg-white/5 hover:bg-white/10 text-slate-200 border border-white/5 font-bold text-xs rounded-lg active:scale-95 transition-all">Clear</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Table Database -->
+                <div class="bg-white/[0.02] border border-white/10 rounded-2xl overflow-hidden shadow-xl">
+                    <div id="db-emptyState" class="hidden py-24 text-center text-slate-400 text-sm">
+                        No parsed candidates found in Database. Go to **Upload Center** to process some resumes!
+                    </div>
+
+                    <div id="db-tableWrapper" class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr
+                                    class="bg-white/[0.02] border-b border-white/10 text-xs text-slate-400 uppercase tracking-wider">
+                                    <th class="p-4 pl-6 font-semibold">Candidate Name</th>
+                                    <th class="p-4 font-semibold">Contact Email / Phone</th>
+                                    <th class="p-4 font-semibold text-left">Exp</th>
+                                    <th class="p-4 font-semibold">Core Technical Skills</th>
+                                    <th class="p-4 font-semibold text-center">Date Added</th>
+                                    <th class="p-4 pr-6 font-semibold text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="db-resumeList" class="divide-y divide-white/5">
+                                <!-- Loaded dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Pagination footer -->
+                <div class="flex items-center justify-between text-xs text-slate-400 px-2">
+                    <div id="pagination-stats">Showing 0 of 0 candidates</div>
+                    <div class="flex gap-1">
+                        <button onclick="changePage(-1)" id="pag-prev"
+                            class="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg font-bold text-slate-200 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition-all">Prev</button>
+                        <button onclick="changePage(1)" id="pag-next"
+                            class="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg font-bold text-slate-200 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition-all">Next</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: UPLOAD CENTER -->
+            <section id="tab-upload" class="space-y-6">
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+                    <!-- Left: Upload Forms -->
+                    <div class="lg:col-span-8 space-y-6">
+                        <div class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-5">
+                            <h3 class="font-outfit font-extrabold text-lg text-white">Upload Files Workspace</h3>
+
+                            <div class="flex gap-4 border-b border-white/10 pb-4">
+                                <label
+                                    class="flex items-center gap-2 cursor-pointer text-xs font-semibold text-brand-300">
+                                    <input type="radio" name="uploadType" value="single" checked
+                                        onchange="toggleUploadZone(this.value)" class="text-brand-500 focus:ring-0">
+                                    Single/Multiple Resumes
+                                </label>
+                                <label
+                                    class="flex items-center gap-2 cursor-pointer text-xs font-semibold text-brand-300">
+                                    <input type="radio" name="uploadType" value="zip"
+                                        onchange="toggleUploadZone(this.value)" class="text-brand-500 focus:ring-0">
+                                    ZIP Bulk Package
+                                </label>
+                            </div>
+
+                            <!-- Single/Multiple Upload -->
+                            <div id="zone-single">
+                                <label
+                                    class="flex flex-col items-center justify-center border-2 border-dashed border-white/15 hover:border-brand-400 hover:bg-white/[0.01] rounded-2xl p-12 cursor-pointer transition-all">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                        stroke-linejoin="round" class="text-brand-300 mb-4">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="17 8 12 3 7 8" />
+                                        <line x1="12" y1="3" x2="12" y2="15" />
+                                    </svg>
+                                    <span class="text-sm font-bold text-slate-200">Select Multiple PDF / DOCX
+                                        Resumes</span>
+                                    <span class="text-[10px] text-slate-500 mt-1">Select one or more candidate
+                                        profiles</span>
+                                    <input type="file" id="multipleUploader" multiple accept=".pdf,.docx" class="hidden"
+                                        onchange="handleMultipleUpload(this)">
+                                </label>
+                            </div>
+
+                            <!-- ZIP Upload -->
+                            <div id="zone-zip" class="hidden">
+                                <label
+                                    class="flex flex-col items-center justify-center border-2 border-dashed border-white/15 hover:border-brand-400 hover:bg-white/[0.01] rounded-2xl p-12 cursor-pointer transition-all">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                        stroke-linejoin="round" class="text-brand-300 mb-4">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="21 10-6 6-6 10-6" />
+                                        <path d="M12 3v7" />
+                                    </svg>
+                                    <span class="text-sm font-bold text-slate-200">Select Bulk ZIP File Package</span>
+                                    <span class="text-[10px] text-slate-500 mt-1">Extracts and builds index
+                                        automatically</span>
+                                    <input type="file" id="zipUploader" accept=".zip" class="hidden"
+                                        onchange="handleZipUpload(this)">
+                                </label>
+                            </div>
+
+                            <!-- Toggle extract-skills-only -->
+                            <div class="flex items-start gap-2.5 p-3.5 bg-black/20 rounded-xl border border-white/5">
+                                <input type="checkbox" id="skillsOnlyToggle"
+                                    class="rounded bg-black/20 border-white/20 text-brand-500 focus:ring-0 mt-0.5 cursor-pointer">
+                                <div class="text-xs">
+                                    <label for="skillsOnlyToggle"
+                                        class="font-bold text-slate-200 cursor-pointer block">Extract skills only (do
+                                        not save to database)</label>
+                                    <span class="text-slate-500 text-[10px] block mt-0.5">Runs parsing algorithm in
+                                        transient mode. Returns extracted skill lists without modifying candidates
+                                        catalog.</span>
+                                </div>
+                            </div>
+
+                            <!-- Progress status -->
+                            <div id="uploadProgress"
+                                class="hidden p-4 bg-brand-900/30 border border-brand-300/10 rounded-xl flex items-center gap-3 text-left">
+                                <div
+                                    class="animate-spin rounded-full h-5 w-5 border border-brand-400 border-t-transparent">
+                                </div>
+                                <div class="text-xs font-semibold text-brand-300" id="uploadProgressText">Parsing
+                                    uploaded profiles...</div>
+                            </div>
+
+                            <!-- Extraction single result container -->
+                            <div id="transientSkillsResult"
+                                class="hidden p-5 bg-black/35 rounded-xl border border-white/10 space-y-3">
+                                <h4 class="font-outfit font-extrabold text-sm text-brand-300 flex items-center gap-1.5">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round">
+                                        <path
+                                            d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+                                        <path d="m9 12 2 2 4-4" />
+                                    </svg>
+                                    Transient Skills Extracted
+                                </h4>
+                                <div class="space-y-2 text-xs">
+                                    <div>
+                                        <span
+                                            class="text-slate-400 uppercase tracking-wider text-[9px] font-bold block">Primary
+                                            Key Skills</span>
+                                        <div id="transient-primary" class="flex flex-wrap gap-1.5 mt-1"></div>
+                                    </div>
+                                    <div class="border-t border-white/5 pt-2">
+                                        <span
+                                            class="text-slate-400 uppercase tracking-wider text-[9px] font-bold block">Secondary
+                                            Skills</span>
+                                        <div id="transient-other" class="flex flex-wrap gap-1.5 mt-1"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: IMAP Email Lead Center -->
+                    <div class="lg:col-span-4 space-y-6">
+                        <div
+                            class="p-6 rounded-2xl bg-gradient-to-br from-brand-900/30 to-black/20 border border-brand-900/40 shadow-xl space-y-4">
+                            <div class="flex items-center gap-2 text-brand-400 font-bold text-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round">
+                                    <rect width="20" height="16" x="2" y="4" rx="2" />
+                                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                                </svg>
+                                IMAP Lead Center
+                            </div>
+                            <p class="text-xs text-slate-300 leading-relaxed">Fetch, download and parse candidate
+                                resumes received directly via configured IMAP mailbox filters.</p>
+
+                            <div class="space-y-3 bg-black/20 p-4 rounded-xl border border-white/5">
+                                <label class="flex items-start gap-2.5 cursor-pointer text-xs">
+                                    <input type="checkbox" id="emailAutoExtract" checked
+                                        class="rounded bg-black/20 border-white/20 text-brand-500 focus:ring-0 mt-0.5">
+                                    <div>
+                                        <span class="font-bold text-slate-300">Auto-extract files</span>
+                                        <span class="text-[9px] text-slate-500 block mt-0.5">Directly parse files and
+                                            save to candidates database.</span>
+                                    </div>
+                                </label>
+                                <label
+                                    class="flex items-start gap-2.5 cursor-pointer text-xs border-t border-white/5 pt-2">
+                                    <input type="checkbox" id="emailForceRefetch"
+                                        class="rounded bg-black/20 border-white/20 text-brand-500 focus:ring-0 mt-0.5">
+                                    <div>
+                                        <span class="font-bold text-slate-300">Force refetch cache</span>
+                                        <span class="text-[9px] text-slate-500 block mt-0.5">Disregards processing
+                                            registry index tags.</span>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <button onclick="fetchResumesFromEmail()" id="imapFetchBtn"
+                                class="w-full py-3 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                                style="background-color: rgb(21 50 115);">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="#22c05d;" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="17 8 12 3 7 8" />
+                                    <line x1="12" y1="3" x2="12" y2="15" />
+                                </svg>
+                                Fetch From Email
+                            </button>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            <!-- TAB 3: MATCH / COMPARE -->
+            <section id="tab-compare" class="hidden space-y-6">
+                <div class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-5">
+                    <div>
+                        <h3 class="font-outfit font-extrabold text-lg text-white">AI Candidate Matching Workspace</h3>
+                        <p class="text-xs text-slate-400 mt-1">Select 2 to 5 candidates below, paste your target Job
+                            Description, and compute side-by-side fit metrics!</p>
+                    </div>
+
+                    <!-- Inline Candidate Selector -->
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Select
+                                Profiles to Compare (2–5)</label>
+
+                            <!-- Premium Segmented Toggle between Candidates and Employees -->
+                            <div class="inline-flex p-0.5 rounded-lg bg-black/40 border border-white/5 shadow-inner">
+                                <button type="button" id="compareToggle-candidates"
+                                    onclick="switchCompareSource('candidates')"
+                                    class="px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider bg-brand-900 text-white">
+                                    Candidates
+                                </button>
+                                <button type="button" id="compareToggle-employees"
+                                    onclick="switchCompareSource('employees')"
+                                    class="px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider bg-brand-900 text-white hover:bg-brand-800">
+                                    Employees
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Search input for filter in grid -->
+                        <div class="relative">
+                            <input type="text" id="compare-searchField" oninput="filterCompareGrid()"
+                                placeholder="Search profiles by name or skills..."
+                                class="w-full bg-black/25 border border-white/10 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-brand-500 placeholder-slate-500 transition-all">
+                            <span class="absolute left-3 top-2.5 text-slate-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <circle cx="11" cy="11" r="8" />
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                </svg>
+                            </span>
+                        </div>
+
+                        <div id="compare-candidateGrid"
+                            class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 max-h-[220px] overflow-y-auto pr-1">
+                            <!-- Populated by JS -->
+                            <div class="text-xs text-slate-500 col-span-full py-4 text-center">Loading...</div>
+                        </div>
+                        <!-- Selected chips strip -->
+                        <div id="compare-selectedStrip"
+                            class="hidden flex flex-wrap gap-2 pt-1 border-t border-white/5 pt-2">
+                            <!-- Selected candidate chips appear here -->
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row gap-4">
+                        <textarea id="tab-jobDescription" rows="4"
+                            placeholder="Paste targeted role descriptions, required technical credentials or mandatory skills profiles here..."
+                            class="bg-black/35 text-xs text-white border border-white/15 p-3.5 rounded-xl flex-1 focus:outline-none focus:border-brand-400"></textarea>
+                        <button onclick="executeTabComparison()" id="tab-compareActionBtn"
+                            class="px-6 py-4 bg-brand-500 hover:bg-brand-600 text-white font-extrabold text-sm rounded-xl active:scale-95 transition-all self-center shadow-lg h-fit flex items-center justify-center gap-1.5"
+                            style="background-color: rgb(21 50 115);">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <path d="m22 2-7 20-4-9-9-4Z" />
+                                <path d="M22 2 11 13" />
+                            </svg>
+                            Match Profiles
+                        </button>
+                    </div>
+
+                    <!-- Selected candidate lists warning -->
+                    <div id="compareWarning"
+                        class="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl text-xs flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <span>Please select 2 to 5 candidates above to begin the AI comparison.</span>
+                    </div>
+
+                    <div id="tab-compareResults" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
+                        <!-- Output columns dynamically -->
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- TAB 4: GLOBAL AI SEARCH -->
+            <section id="tab-search" class="hidden space-y-6">
+                <div class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-6">
+                    <div>
+                        <h3 class="font-outfit font-extrabold text-lg text-white">Semantic AI Recruitment Search</h3>
+                        <p class="text-xs text-slate-400 mt-1">Submit complete conversational queries to perform
+                            vector-embedding semantic queries directly against parsed candidates data.</p>
+                    </div>
+
+                    <form onsubmit="executeGlobalChatSearch(event)" class="flex gap-2">
+                        <input type="text" id="globalChatQuery"
+                            placeholder="Ask e.g. 'Show developers having 4+ years of AWS experience with Docker'..."
+                            class="bg-black/35 text-xs text-white border border-white/15 px-4 py-3 rounded-xl flex-grow focus:outline-none focus:border-brand-400">
+                        <button type="submit"
+                            class="px-6 py-3 bg-brand-400 hover:bg-brand-500 text-white font-bold text-xs rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                            style="background-color: rgb(21 50 115);">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                fill="none" stroke="white" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            Search
+                        </button>
+                    </form>
+
+                    <div id="globalChatLoader" class="hidden py-16 flex items-center justify-center w-full">
+                        <div class="animate-spin rounded-full h-8 w-8 border border-brand-400 border-t-transparent">
+                        </div>
+                    </div>
+
+                    <div id="globalChatAnswerBox"
+                        class="hidden p-4 bg-brand-900/20 border border-brand-300/10 rounded-xl space-y-1">
+                        <span class="text-[9px] uppercase font-bold tracking-wider text-brand-300">AI Analyst
+                            Response</span>
+                        <p id="globalChatAnswer" class="text-xs leading-relaxed text-slate-200"></p>
+                    </div>
+
+                    <div id="globalChatResults" class="space-y-4">
+                        <!-- Loaded query rows -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: RESUME AI CHAT (PER CANDIDATE) -->
+            <section id="tab-chat" class="hidden space-y-6">
+                <div
+                    class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-6 flex flex-col h-[560px]">
+                    <div>
+                        <h3 class="font-outfit font-extrabold text-lg text-white">Interactive Candidate Q&A Chatbot</h3>
+                        <p class="text-xs text-slate-400 mt-1">Select an active candidate parsed inside the database to
+                            engage in a context-scoped Q&A chat regarding their career history.</p>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-3 items-center">
+                        <select id="chatSelector" onchange="initializeSelectedChatbot(this.value)"
+                            class="col-span-2 bg-black/35 text-xs text-white border border-white/15 px-3 py-3 rounded-lg focus:outline-none focus:border-brand-400">
+                            <option value="">Select a Candidate Profile...</option>
+                            <!-- Options populated dynamically -->
+                        </select>
+                        <div id="chatActiveCandidateBadge"
+                            class="hidden text-right text-[10px] text-brand-300 font-bold uppercase tracking-wider">
+                            Session Active</div>
+                    </div>
+
+                    <!-- Chat Screen -->
+                    <div id="tabChatMessages"
+                        class="flex-1 overflow-y-auto bg-black/20 border border-white/5 rounded-2xl p-4 space-y-4">
+                        <div
+                            class="self-start bg-white/[0.05] text-slate-400 p-4 rounded-2xl rounded-bl-sm max-w-[85%] text-xs leading-relaxed">
+                            Hello! Select a candidate profile from the dropdown menu above to start asking specific
+                            questions regarding their credentials, tech stack experience or job match metrics!
+                        </div>
+                    </div>
+
+                    <!-- Chat Form -->
+                    <form onsubmit="sendTabChatMessage(event)" class="flex gap-2">
+                        <input type="text" id="tabChatInput"
+                            placeholder="Ask e.g. 'What is their experience with React?' or 'What are their core strengths?'..."
+                            class="bg-black/35 text-xs text-white border border-white/15 px-4 py-3 rounded-xl flex-grow focus:outline-none focus:border-brand-400"
+                            disabled>
+                        <button type="submit" id="tabChatSendBtn"
+                            class="p-3 bg-brand-900 hover:bg-brand-800 text-white rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center"
+                            disabled>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13" />
+                                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- TAB 6: EXPORT CENTER -->
+            <section id="tab-export" class="hidden space-y-6">
+                <div class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-6">
+                    <div>
+                        <h3 class="font-outfit font-extrabold text-lg text-white">Google Sheets Database Export</h3>
+                        <p class="text-xs text-slate-400 mt-1">Export your complete PostgreSQL candidate resumes
+                            directory to a Google Sheets workbook. Authentication requires Google Service Account API
+                            credentials.</p>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label
+                                class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target
+                                Google Workbook Name</label>
+                            <input type="text" id="export-sheetName" value="Resume_Export"
+                                placeholder="e.g. Candidates_Directory"
+                                class="w-full bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg focus:outline-none focus:border-brand-400 max-w-sm">
+                        </div>
+                        <div>
+                            <label
+                                class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pasted
+                                Google Service Account credentials JSON</label>
+                            <textarea id="export-credsJson" rows="6"
+                                placeholder='Paste your complete Google Cloud Service Account account client JSON here (starts with { "type": "service_account" ... })'
+                                class="w-full bg-black/25 text-xs text-white font-mono border border-white/15 p-3 rounded-lg focus:outline-none focus:border-brand-400"></textarea>
+                        </div>
+
+                        <button onclick="executeDatabaseExport()" id="exportActionBtn"
+                            class="px-5 py-3 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                            style="background-color: rgb(21 50 115);">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <rect width="18" height="18" x="3" y="3" rx="2" />
+                                <path d="M9 3v18" />
+                                <path d="M15 3v18" />
+                                <path d="M3 9h18" />
+                                <path d="M3 15h18" />
+                            </svg>
+                            Export to Google Sheets
+                        </button>
+                    </div>
+
+                    <div id="exportProgress"
+                        class="hidden p-4 bg-brand-900/30 border border-brand-300/10 rounded-xl flex items-center gap-3 text-left">
+                        <div class="animate-spin rounded-full h-5 w-5 border border-brand-400 border-t-transparent">
+                        </div>
+                        <div class="text-xs font-semibold text-brand-300">Synchronizing database blocks with Google
+                            Sheets API...</div>
+                    </div>
+
+                    <div id="exportSuccess"
+                        class="hidden p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs space-y-2">
+                        <div class="font-bold flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
+                            </svg>
+                            Export completed successfully!
+                        </div>
+                        <p class="text-slate-300">Synchronized records are now live inside your workbook. Review the
+                            sheet here:</p>
+                        <a id="exportSheetUrl" href="#" target="_blank"
+                            class="inline-flex items-center gap-1.5 font-bold text-emerald-400 hover:underline">
+                            Open Workbook in Google Sheets
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                <polyline points="15 3 21 3 21 9" />
+                                <line x1="10" y1="14" x2="21" y2="3" />
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 7: EMPLOYEE SKILLS REGISTRY -->
+            <section id="tab-skills" class="hidden space-y-6">
+                <div class="p-6 rounded-2xl bg-white/[0.02] border border-white/10 shadow-xl space-y-6">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div>
+                            <h3 class="font-outfit font-extrabold text-lg text-white">Employee Skills Registry</h3>
+                            <p class="text-xs text-slate-400 mt-1">View and filter skills extracted from employee
+                                resumes in the database.</p>
+                        </div>
+                        <div class="relative w-72">
+                            <span
+                                class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round">
+                                    <circle cx="11" cy="11" r="8" />
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                </svg>
+                            </span>
+                            <input type="text" id="skillsSearchInput" oninput="debounceSkillsSearch()"
+                                placeholder="Search employee or skill..."
+                                class="w-full bg-black/35 text-xs text-white pl-9 pr-4 py-2.5 rounded-xl border border-white/15 focus:outline-none focus:border-brand-400 transition-all">
+                        </div>
+                    </div>
+
+                    <div id="skillsTableWrapper" class="overflow-x-auto rounded-xl border border-white/10 no-scrollbar">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr
+                                    class="bg-white/[0.04] text-[10px] font-bold text-slate-300 uppercase tracking-wider border-b border-white/10">
+                                    <th class="p-4 w-1/4">Employee Name</th>
+                                    <th class="p-4 w-1/4">Official Email</th>
+                                    <th class="p-4 w-2/4">Extracted Skills</th>
+                                </tr>
+                            </thead>
+                            <tbody id="skillsTableBody" class="divide-y divide-white/5 text-slate-200">
+                                <!-- Dynamically filled -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div id="skillsEmptyState"
+                        class="hidden p-12 text-center rounded-xl bg-white/[0.01] border border-white/5 border-dashed">
+                        <div class="text-slate-400 text-sm font-semibold mb-1">No employee skills found</div>
+                        <div class="text-slate-500 text-xs">Try adjusting your search criteria.</div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+    </div>
+
+    <!-- Candidate Drawer overlay -->
+    <div id="drawerOverlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 transition-opacity"></div>
+    <div id="detailDrawer"
+        class="fixed top-0 right-0 h-full w-[500px] max-w-full bg-brand-900/95 border-l border-white/10 shadow-2xl z-50 translate-x-full transition-transform duration-300 flex flex-col">
+        <!-- Header -->
+        <div class="p-6 border-b border-white/10 flex items-center justify-between">
+            <div>
+                <h3 class="font-outfit font-extrabold text-xl text-white" id="dw-name">Candidate Name</h3>
+                <p class="text-xs text-brand-300 font-medium" id="dw-role">Role Designatory</p>
+            </div>
+            <button onclick="closeDrawer()"
+                class="p-1 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+            </button>
+        </div>
+        <!-- Scrollable Body -->
+        <div class="flex-1 overflow-y-auto p-6 space-y-6">
+
+            <!-- Metrics -->
+            <div class="grid grid-cols-3 gap-3">
+                <div class="p-3 bg-white/5 rounded-xl text-center">
+                    <span class="text-[10px] text-slate-400 block tracking-wider uppercase font-semibold">Core
+                        Exp</span>
+                    <span class="text-sm font-bold text-white block mt-1" id="dw-exp">0 Yrs</span>
+                </div>
+                <div class="p-3 bg-white/5 rounded-xl text-center">
+                    <span class="text-[10px] text-slate-400 block tracking-wider uppercase font-semibold">Total
+                        Exp</span>
+                    <span class="text-sm font-bold text-white block mt-1" id="dw-totalExp">0 Yrs</span>
+                </div>
+                <div class="p-3 bg-white/5 rounded-xl text-center">
+                    <span class="text-[10px] text-slate-400 block tracking-wider uppercase font-semibold">Level</span>
+                    <span class="text-sm font-bold text-white block mt-1 capitalize" id="dw-level">Mid</span>
+                </div>
+            </div>
+
+            <!-- Contacts Info -->
+            <div class="p-4 bg-black/20 rounded-xl space-y-2 border border-white/5 text-xs">
+                <div class="flex items-center gap-2" id="dw-email-box">
+                    <svg class="text-slate-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                        <polyline points="22,6 12,13 2,6" />
+                    </svg>
+                    <span id="dw-email" class="text-slate-200"></span>
+                </div>
+                <div class="flex items-center gap-2" id="dw-phone-box">
+                    <svg class="text-slate-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                    </svg>
+                    <span id="dw-phone" class="text-slate-200"></span>
+                </div>
+                <div class="flex items-center gap-2" id="dw-loc-box">
+                    <svg class="text-slate-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                        <circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <span id="dw-location" class="text-slate-200"></span>
+                </div>
+            </div>
+
+            <!-- Profile Summary -->
+            <div id="dw-summary-box">
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Profile Summary</h4>
+                <p id="dw-summary"
+                    class="text-xs text-slate-300 leading-relaxed bg-black/20 p-3.5 rounded-xl border border-white/5">
+                </p>
+            </div>
+
+            <!-- Primary Technical Skills -->
+            <div>
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Core Technical Skills
+                </h4>
+                <div id="dw-skills" class="flex flex-wrap gap-1.5">
+                    <!-- Loaded dynamically -->
+                </div>
+            </div>
+
+            <!-- Education -->
+            <div id="dw-education-box">
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Education Background</h4>
+                <ul id="dw-education" class="space-y-1 text-xs text-slate-300 list-disc list-inside">
+                    <!-- Loaded dynamically -->
+                </ul>
+            </div>
+
+            <!-- Actions options -->
+            <div class="flex gap-2 border-t border-white/10 pt-6">
+                <a id="dw-download-link" href="#" target="_blank"
+                    class="flex-1 py-3 text-center rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 active:scale-95 transition-all flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    View Original Resume
+                </a>
+                <button id="dw-chat-btn"
+                    class="flex-1 py-3 text-center rounded-xl text-xs font-bold bg-brand-500 hover:bg-brand-600 shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                    Q&A Chatbot
+                </button>
+            </div>
+
+            <!-- Notes logs -->
+            <div class="border-t border-white/10 pt-6">
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Interview logs /
+                    Recruiter Notes</h4>
+
+                <form onsubmit="addCandidateNote(event)" class="flex gap-2 mb-4">
+                    <input type="text" id="newNoteInput" placeholder="Add interview notes or logs..."
+                        class="bg-black/25 text-xs text-white border border-white/15 px-3 py-2.5 rounded-lg flex-1 focus:outline-none focus:border-brand-400">
+                    <button type="submit"
+                        class="px-4 py-2 bg-brand-400 text-brand-950 font-bold text-xs rounded-lg active:scale-95 transition-all">Add</button>
+                </form>
+
+                <div id="notesLoader" class="hidden py-4 flex justify-center">
+                    <div class="animate-spin rounded-full h-5 w-5 border border-brand-400 border-t-transparent"></div>
+                </div>
+
+                <div id="notesList" class="space-y-2">
+                    <!-- Note objects loaded dynamically -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Confirm Dialog Modal -->
+    <div id="confirmModal"
+        class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+        <div class="w-[420px] bg-brand-900 border border-white/15 rounded-xl shadow-2xl p-6">
+            <h4 class="font-outfit font-bold text-base text-white" id="conf-title">Confirm Action</h4>
+            <p class="text-xs text-slate-300 mt-2 leading-relaxed" id="conf-message">Are you sure you want to perform
+                this action?</p>
+            <div class="flex gap-2 justify-end mt-6">
+                <button onclick="closeConfirmModal()"
+                    class="px-4 py-2 border border-white/10 hover:bg-white/5 rounded-lg text-xs font-semibold">Cancel</button>
+                <button id="conf-yes"
+                    class="px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg text-xs text-white font-semibold shadow-lg">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recruiter Candidate Notes Modal -->
+    <div id="notesModal"
+        class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+        <div
+            class="bg-brand-900 border border-white/15 p-6 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col gap-4 max-h-[90vh]">
+            <!-- Header -->
+            <div class="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                    <h3 class="font-outfit font-extrabold text-base text-white">Interview Log & Evaluation Notes</h3>
+                    <p class="text-[10px] font-semibold text-brand-300 uppercase tracking-widest mt-0.5"
+                        id="notesModalCandidate">Candidate Notes</p>
+                </div>
+                <button onclick="closeNotesModal()"
+                    class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Notes List Box -->
+            <div class="flex-1 overflow-y-auto space-y-3 pr-1" style="max-height: 45vh; min-height: 120px;">
+                <!-- Loading state -->
+                <div id="modalNotesLoader" class="hidden py-6 flex items-center justify-center gap-2">
+                    <div class="animate-spin rounded-full h-4 w-4 border border-brand-400 border-t-transparent"></div>
+                    <span class="text-xs text-brand-300">Loading notes catalog...</span>
+                </div>
+                <!-- Actual list -->
+                <div id="modalNotesList" class="space-y-2">
+                    <!-- Loaded dynamically -->
+                </div>
+            </div>
+
+            <!-- Note Input Form -->
+            <form onsubmit="addModalCandidateNote(event)" class="border-t border-white/10 pt-4 flex flex-col gap-3">
+                <div class="flex items-center gap-3">
+                    <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Log Status:</span>
+                    <select id="modalNoteStatus"
+                        class="bg-black/35 text-[11px] text-slate-200 border border-white/15 px-2.5 py-1.5 rounded-xl focus:outline-none focus:border-brand-400 cursor-pointer">
+                        <option value="General Note">General Note</option>
+                        <option value="Shortlisted">Shortlisted</option>
+                        <option value="Contacted">Contacted</option>
+                        <option value="Telephonic">Telephonic Screening</option>
+                        <option value="Technical Round">Technical Round</option>
+                        <option value="HR Round">HR Round</option>
+                        <option value="Selected">Selected / Offered</option>
+                        <option value="On Hold">On Hold</option>
+                        <option value="No Show">No Show</option>
+                        <option value="Round Rejected">Round Rejected</option>
+                    </select>
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" id="modalNewNoteInput"
+                        placeholder="Add custom interview note, evaluation, or reason..."
+                        class="flex-1 bg-black/35 text-xs text-white border border-white/15 px-3 py-2.5 rounded-xl focus:outline-none focus:border-brand-400"
+                        autocomplete="off">
+                    <button type="submit"
+                        class="px-4 py-2.5 bg-brand-500 hover:bg-brand-600 rounded-xl text-xs text-white font-bold transition-all shadow-lg active:scale-95" style="background-color: rgb(21 50 115); border-color: rgb(223, 226, 231);">Add
+                        Log</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Candidate Details Form Modal -->
+    <div id="detailsModal"
+        class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+        <div
+            class="bg-brand-900 border border-white/15 p-6 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col gap-4 max-h-[95vh]">
+            <!-- Header -->
+            <div class="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                    <h3 class="font-outfit font-extrabold text-base text-white">Candidate Professional Details Form</h3>
+                    <p class="text-[10px] font-semibold text-indigo-400 uppercase tracking-widest mt-0.5"
+                        id="detailsModalCandidate">Edit Details</p>
+                </div>
+                <button onclick="closeDetailsModal()"
+                    class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Form Body inside scroll container -->
+            <form id="candidateDetailsForm" onsubmit="saveCandidateDetails(event)"
+                class="flex-1 overflow-y-auto pr-1 space-y-4" style="max-height: 70vh;">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <!-- Name -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Name</label>
+                        <input type="text" id="detailsForm-name" required
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Profile -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Profile /
+                            Role</label>
+                        <input type="text" id="detailsForm-role" placeholder="e.g. Senior Frontend Developer"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Experience -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Experience
+                            (Years)</label>
+                        <input type="number" step="0.1" min="0" id="detailsForm-experience"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Current Salary -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Current
+                            Salary</label>
+                        <input type="text" id="detailsForm-currentSalary" placeholder="e.g. 8.5 LPA"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Expected Salary -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Expected
+                            Salary</label>
+                        <input type="text" id="detailsForm-expectedSalary" placeholder="e.g. 12 LPA"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Notice period -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Notice
+                            period</label>
+                        <input type="text" id="detailsForm-noticePeriod" placeholder="e.g. 30 days (Immediate)"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Availability for FTF interview -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Availability
+                            for FTF interview</label>
+                        <input type="text" id="detailsForm-availabilityFTF" placeholder="e.g. Saturday or next week"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Current Company's name -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Current
+                            Company's name</label>
+                        <input type="text" id="detailsForm-currentCompany" placeholder="e.g. TechCorp India"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Current Location -->
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Current
+                            Location</label>
+                        <input type="text" id="detailsForm-location" placeholder="e.g. Chandigarh"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                    <!-- Are you ready to relocate -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Are
+                            you ready to relocate?</label>
+                        <input type="text" id="detailsForm-readyToRelocate"
+                            placeholder="e.g. Yes / No / Hybrid preferred"
+                            class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all">
+                    </div>
+                </div>
+
+                <!-- Reason of job change -->
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Reason of
+                        job change</label>
+                    <textarea id="detailsForm-reasonJobChange" rows="3"
+                        placeholder="e.g. Career growth opportunities and working on new modern stacks"
+                        class="w-full bg-black/25 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-all"></textarea>
+                </div>
+
+                <!-- Form Actions -->
+                <div class="flex gap-2 justify-end pt-3 border-t border-white/10">
+                    <button type="button" onclick="closeDetailsModal()"
+                        class="px-4 py-2 border border-white/10 hover:bg-white/5 rounded-lg text-xs font-semibold text-slate-300 transition-colors">Cancel</button>
+                    <button type="submit"
+                        class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-xs text-white font-semibold rounded-lg shadow-lg hover:shadow-indigo-500/20 transition-all flex items-center gap-1.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2.5">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                            <polyline points="17 21 17 13 7 13 7 21" />
+                            <polyline points="7 3 7 8 15 8" />
+                        </svg>
+                        Save Details
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dedicated Candidate Skills Modal -->
+    <div id="candidateSkillsModal"
+        class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+        <div
+            class="bg-brand-900 border border-white/15 p-6 rounded-2xl w-full max-w-xl shadow-2xl flex flex-col gap-4 max-h-[90vh]">
+            <!-- Header -->
+            <div class="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                    <h3 class="font-outfit font-extrabold text-base text-white" id="cv-name">Candidate Name</h3>
+                    <p class="text-[10px] font-semibold text-brand-300 uppercase tracking-widest mt-0.5" id="cv-role">
+                        Role Designation</p>
+                </div>
+                <button onclick="closeCandidateSkillsModal()"
+                    class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Content Area (Scrollable) -->
+            <div class="flex-1 overflow-y-auto space-y-4 pr-1" style="max-height: 65vh;">
+                <!-- Basic Contact Info -->
+                <div
+                    class="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-black/25 rounded-xl border border-white/5 text-xs text-slate-300">
+                    <div id="cv-email-box" class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                            <polyline points="22,6 12,13 2,6" />
+                        </svg>
+                        <span id="cv-email"></span>
+                    </div>
+                    <div id="cv-phone-box" class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path
+                                d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                        </svg>
+                        <span id="cv-phone"></span>
+                    </div>
+                    <div id="cv-exp-box" class="flex items-center gap-2">
+                        <span class="font-bold text-brand-300">Experience:</span>
+                        <span id="cv-experience"></span>
+                    </div>
+                    <div id="cv-location-box" class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                            <circle cx="12" cy="10" r="3" />
+                        </svg>
+                        <span id="cv-location"></span>
+                    </div>
+                </div>
+
+                <!-- Skills Section -->
+                <div>
+                    <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Technical Skills &
+                        Expertise</h4>
+                    <div id="cv-skills" class="flex flex-wrap gap-1.5 p-3 bg-black/15 rounded-xl border border-white/5">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Interactive script controllers -->
+    <script>
+        const resumeApiUrl = `http://${window.location.hostname}:8001`;
+
+        // Extract JWT token from URL, localStorage, or sessionStorage
+        const urlParams = new URLSearchParams(window.location.search);
+        let jwtToken = urlParams.get("token") || localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+        if (jwtToken) {
+            localStorage.setItem("token", jwtToken);
+        }
+
+        // Intercept all native fetch calls to automatically inject Authorization headers
+        const originalFetch = window.fetch;
+        window.fetch = async function (url, options = {}) {
+            if (typeof url === "string" && url.includes(resumeApiUrl)) {
+                if (!options.headers) {
+                    options.headers = {};
+                }
+                if (options.headers instanceof Headers) {
+                    if (jwtToken && !options.headers.has("Authorization")) {
+                        options.headers.append("Authorization", `Bearer ${jwtToken}`);
+                    }
+                } else if (Array.isArray(options.headers)) {
+                    if (jwtToken) {
+                        options.headers.push(["Authorization", `Bearer ${jwtToken}`]);
+                    }
+                } else {
+                    if (jwtToken && !options.headers["Authorization"]) {
+                        options.headers["Authorization"] = `Bearer ${jwtToken}`;
+                    }
+                }
+            }
+            const response = await originalFetch(url, options);
+            if (response.status === 401 || response.status === 403) {
+                if (typeof url === "string" && url.endsWith("/health")) {
+                    return response;
+                }
+                document.getElementById("standalone-login-modal").classList.remove("hidden");
+                throw new Error("Unauthorized");
+            }
+            return response;
+        };
+
+        function getSkillsArray(skillsField) {
+            if (!skillsField) return [];
+            if (Array.isArray(skillsField)) return skillsField;
+            if (typeof skillsField === 'string') {
+                if (skillsField.trim().startsWith('[') && skillsField.trim().endsWith(']')) {
+                    try {
+                        return JSON.parse(skillsField);
+                    } catch (e) { }
+                }
+                return skillsField.split(',').map(s => s.trim()).filter(Boolean);
+            }
+            return [];
+        }
+
+        /** Merge skills, primary_skills, other_skills, key_skills — de-duplicated, stable order. */
+        function getAllSkills(candidate) {
+            if (!candidate) return [];
+            const fields = [
+                candidate.skills,
+                candidate.primary_skills,
+                candidate.other_skills,
+                candidate.key_skills,
+            ];
+            const seen = new Set();
+            const out = [];
+            const noise = new Set([
+                "deployment", "support", "maintenance", "troubleshooting", "documentation",
+                "communication", "collaboration", "leadership", "teamwork", "applications",
+                "application", "professional", "experience", "summary", "objective", "profile",
+                "candidate", "resume", "name", "contact", "email", "phone", "location", "vs", "code",
+            ]);
+            for (const field of fields) {
+                for (const s of getSkillsArray(field)) {
+                    const t = String(s || "").trim();
+                    if (!t) continue;
+                    const key = t.toLowerCase();
+                    if (seen.has(key) || noise.has(key)) continue;
+                    seen.add(key);
+                    out.push(t);
+                }
+            }
+            return out;
+        }
+
+        let resumes = [];
+        let filteredResumes = [];
+        let selectedForCompare = [];
+        let activeResume = null;
+
+        // Pagination state
+        let currentPage = 1;
+        const pageSize = 10;
+
+        // Active Chat state
+        let activeChatId = "";
+
+        // Swapping Active tabs
+        function switchTab(tabId) {
+            const tabs = ['resumes', 'upload', 'compare', 'search', 'chat', 'export', 'skills'];
+            tabs.forEach(t => {
+                const sec = document.getElementById(`tab-${t}`);
+                const btn = document.getElementById(`menu-${t}`);
+                if (t === tabId) {
+                    sec.classList.remove('hidden');
+                    btn.className = "w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 bg-brand-900 text-white border border-brand-300/10 shadow-lg transition-all";
+                } else {
+                    sec.classList.add('hidden');
+                    btn.className = "w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all";
+                }
+            });
+
+            // Dynamically update console header title
+            const consoleTitles = {
+                'resumes': 'Candidates Database Index',
+                'upload': 'Resume Upload & Extraction Center',
+                'compare': 'AI Match & Compatibility Workspace',
+                'search': 'Semantic AI Candidate Retrieval',
+                'chat': 'Interactive Applicant Q&A Chatbot',
+                'export': 'Google Sheets Synchronizer',
+                'skills': 'Employee Skills Registry'
+            };
+            const titleElem = document.getElementById("consoleHeaderTitle");
+            if (titleElem && consoleTitles[tabId]) {
+                titleElem.innerText = consoleTitles[tabId];
+            }
+
+            if (tabId === 'compare') {
+                updateCompareWarning();
+                populateCompareGrid();
+                updateSelectedChips();
+            } else if (tabId === 'chat') {
+                populateChatSelector();
+            } else if (tabId === 'skills') {
+                fetchEmployeeSkills();
+            }
+        }
+
+        // Check backend server health on load
+        async function checkServerHealth() {
+            try {
+                const response = await fetch(`${resumeApiUrl}/health`);
+                if (response.ok) {
+                    document.getElementById("backendStatusBadge").innerText = "Online";
+                    document.getElementById("backendStatusBadge").className = "px-2 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                }
+            } catch (err) {
+                document.getElementById("backendStatusBadge").innerText = "Offline";
+                document.getElementById("backendStatusBadge").className = "px-2 py-0.5 rounded-full font-bold text-[10px] bg-red-500/10 text-red-400 border border-red-500/20";
+            }
+        }
+
+        // Fetch parsed candidates from database
+        async function fetchResumes() {
+            showLoader(true);
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes`, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                resumes = await response.json();
+
+                // Automatically filter by default dates on load
+                applyAdvancedFilters();
+
+                populateChatSelector();
+            } catch (err) {
+                console.error("Failed loading resumes", err);
+            } finally {
+                showLoader(false);
+            }
+        }
+
+        // Render paginated Candidate Database Table
+        function renderDatabaseTable() {
+            const list = document.getElementById("db-resumeList");
+            list.innerHTML = "";
+
+            if (filteredResumes.length === 0) {
+                document.getElementById("db-tableWrapper").classList.add("hidden");
+                document.getElementById("db-emptyState").classList.remove("hidden");
+                document.getElementById("pagination-stats").innerText = "Showing 0 candidates";
+                document.getElementById("pag-prev").disabled = true;
+                document.getElementById("pag-next").disabled = true;
+                return;
+            }
+
+            document.getElementById("db-tableWrapper").classList.remove("hidden");
+            document.getElementById("db-emptyState").classList.add("hidden");
+
+            // Paginated slice
+            const totalPages = Math.ceil(filteredResumes.length / pageSize);
+            currentPage = Math.max(1, Math.min(currentPage, totalPages));
+
+            const start = (currentPage - 1) * pageSize;
+            const end = Math.min(start + pageSize, filteredResumes.length);
+            const pageData = filteredResumes.slice(start, end);
+
+            pageData.forEach(r => {
+                const tr = document.createElement("tr");
+                tr.className = "border-b border-white/5 cursor-pointer hover:bg-white/[0.01] transition-all";
+                tr.onclick = () => openDrawer(r);
+
+                // Skills badges
+                const primary = getSkillsArray(r.primary_skills || r.skills || r.key_skills);
+                const pills = primary.slice(0, 3).map(s =>
+                    `<span class="px-2 py-0.5 rounded bg-brand-900/50 border border-brand-300/10 text-brand-300 text-[10px]">${s}</span>`
+                ).join(" ");
+                const countBadge = primary.length > 3 ? `<span class="text-[10px] text-slate-500 font-medium">+${primary.length - 3}</span>` : "";
+
+                // Contact block
+                const contactBlob = `
+                    <div class="text-[11px] text-slate-400 space-y-0.5">
+                        ${r.email ? `<div class="flex items-center gap-1.5"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>${r.email}</div>` : ""}
+                        ${r.phone ? `<div class="flex items-center gap-1.5"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>${r.phone}</div>` : ""}
+                    </div>
+                `;
+
+                const dateAdded = r.created_at ? new Date(r.created_at).toLocaleDateString() : 'N/A';
+
+                tr.innerHTML = `
+                    <td class="p-4 pl-6 font-bold text-slate-100">
+                        <div>${r.name}</div>
+                    </td>
+                    <td class="p-4">${contactBlob}</td>
+                    <td class="p-4 font-bold text-left text-slate-200">${parseFloat(r.experience_years || 0).toFixed(1)} yr</td>
+                    <td class="p-4">
+                        <div class="flex flex-wrap items-center gap-1 max-w-[280px]">
+                            ${pills} ${countBadge}
+                        </div>
+                    </td>
+                    <td class="p-4 text-center text-slate-400 font-medium">${dateAdded}</td>
+                    <td class="p-4 pr-6 text-right" onclick="event.stopPropagation()">
+                        <div class="inline-flex gap-1">
+                            <a href="${resumeApiUrl}/files/${r.source_file}?token=${jwtToken}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                            </a>
+                            <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details Form" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                            </button>
+                            <button onclick="openCandidateSkillsModal('${r.id}', event)" title="View Technical Skills" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                            <button onclick="openCandidateNotesModal('${r.id}', event)" title="View & Add Interview Notes" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+                            </button>
+                            <button onclick="toggleShortlist('${r.id}', event)" title="Shortlist" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-amber-400 transition-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${r.is_shortlisted ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" class="${r.is_shortlisted ? 'text-amber-400' : ''}"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                            </button>
+                            <button onclick="confirmDeleteCandidate('${r.id}', event)" title="Delete" class="p-2 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                            </button>
+                        </div>
+                    </td>
+                `;
+                list.appendChild(tr);
+            });
+
+            // Pagination text
+            document.getElementById("pagination-stats").innerText = `Showing ${start + 1}-${end} of ${filteredResumes.length} candidates`;
+            document.getElementById("pag-prev").disabled = currentPage <= 1;
+            document.getElementById("pag-next").disabled = currentPage >= totalPages;
+        }
+
+        // Change DB table page
+        function changePage(direction) {
+            currentPage += direction;
+            renderDatabaseTable();
+        }
+
+        // Advanced local DB filtering
+        function applyAdvancedFilters(e) {
+            if (e) e.preventDefault();
+
+            const nameVal = document.getElementById("filter-name").value.trim().toLowerCase();
+            const emailVal = document.getElementById("filter-email").value.trim().toLowerCase();
+            const skillsVal = document.getElementById("filter-skills").value.trim().toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+            const minExp = parseFloat(document.getElementById("filter-min-exp").value) || 0;
+            const maxExp = parseFloat(document.getElementById("filter-max-exp").value) || 0;
+            const sortKey = document.getElementById("filter-sort-by").value;
+            const sortOrder = document.getElementById("filter-sort-order").value;
+            const shortlistedState = document.getElementById("filter-shortlisted").value;
+            const fromDateVal = document.getElementById("filter-from-date").value;
+            const toDateVal = document.getElementById("filter-to-date").value;
+
+            let result = [...resumes];
+
+            // 1. Text Filters
+            if (nameVal) {
+                result = result.filter(r => r.name.toLowerCase().includes(nameVal));
+            }
+            if (emailVal) {
+                result = result.filter(r => r.email && r.email.toLowerCase().includes(emailVal));
+            }
+            if (skillsVal.length > 0) {
+                result = result.filter(r => {
+                    const blob = `${r.skills} ${r.primary_skills} ${r.other_skills}`.toLowerCase();
+                    return skillsVal.every(s => blob.includes(s));
+                });
+            }
+
+            // 2. Experience range
+            if (minExp > 0) {
+                result = result.filter(r => r.experience_years >= minExp);
+            }
+            if (maxExp > 0) {
+                result = result.filter(r => r.experience_years <= maxExp);
+            }
+
+            // 3. Shortlisted filter
+            if (shortlistedState === 'Shortlisted') {
+                result = result.filter(r => r.is_shortlisted);
+            }
+
+            // 4. Date range filter
+            const toLocalYYYYMMDD = (dateStr) => {
+                if (!dateStr) return "";
+                const d = new Date(dateStr);
+                if (isNaN(d.getTime())) return "";
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${day}`;
+            };
+
+            if (fromDateVal) {
+                result = result.filter(r => {
+                    const localDate = toLocalYYYYMMDD(r.created_at);
+                    return localDate && localDate >= fromDateVal;
+                });
+            }
+            if (toDateVal) {
+                result = result.filter(r => {
+                    const localDate = toLocalYYYYMMDD(r.created_at);
+                    return localDate && localDate <= toDateVal;
+                });
+            }
+
+            // 4. Sort Order
+            result.sort((a, b) => {
+                let keyA, keyB;
+                if (sortKey === 'experience') {
+                    keyA = parseFloat(a.experience_years) || 0;
+                    keyB = parseFloat(b.experience_years) || 0;
+                } else if (sortKey === 'name') {
+                    keyA = a.name.toLowerCase();
+                    keyB = b.name.toLowerCase();
+                } else {
+                    // created_at
+                    keyA = new Date(a.created_at || 0);
+                    keyB = new Date(b.created_at || 0);
+                }
+
+                if (keyA < keyB) return sortOrder === 'desc' ? 1 : -1;
+                if (keyA > keyB) return sortOrder === 'desc' ? -1 : 1;
+                return 0;
+            });
+
+            filteredResumes = result;
+            currentPage = 1;
+            renderDatabaseTable();
+        }
+
+        // Clear filtering states
+        function clearFilters() {
+            document.getElementById("filter-name").value = "";
+            document.getElementById("filter-email").value = "";
+            document.getElementById("filter-skills").value = "";
+            document.getElementById("filter-min-exp").value = 0;
+            document.getElementById("filter-max-exp").value = 0;
+            document.getElementById("filter-sort-by").value = "created_at";
+            document.getElementById("filter-sort-order").value = "desc";
+            document.getElementById("filter-shortlisted").value = "All";
+
+            document.getElementById("filter-from-date").value = "";
+            document.getElementById("filter-to-date").value = "";
+
+            filteredResumes = [...resumes];
+            currentPage = 1;
+            renderDatabaseTable();
+        }
+
+        // Select candidate checkbox toggler
+        function toggleSelectResume(id, input) {
+            if (input.checked) {
+                if (selectedForCompare.length >= 5) {
+                    input.checked = false;
+                    alert("Match Statistics can evaluate up to 5 profiles only!");
+                    return;
+                }
+                if (!selectedForCompare.includes(id)) {
+                    selectedForCompare.push(id);
+                    const cand = resumes.find(r => r.id === id);
+                    selectedNamesMap[id] = cand ? cand.name : id;
+                }
+            } else {
+                selectedForCompare = selectedForCompare.filter(x => x !== id);
+                delete selectedNamesMap[id];
+            }
+            updateCompareWarning();
+            updateSelectedChips();
+        }
+
+        function toggleSelectAll(input) {
+            const checks = document.querySelectorAll("#db-resumeList input[type='checkbox']");
+            selectedForCompare = [];
+            selectedNamesMap = {};
+            checks.forEach(c => {
+                c.checked = input.checked;
+                const id = c.getAttribute("onchange").match(/'([^']+)'/)[1];
+                if (input.checked) {
+                    selectedForCompare.push(id);
+                    const cand = resumes.find(r => r.id === id);
+                    selectedNamesMap[id] = cand ? cand.name : id;
+                }
+            });
+            updateCompareWarning();
+            updateSelectedChips();
+        }
+
+        // Shortlist toggler
+        async function toggleShortlist(id, e) {
+            if (e) e.stopPropagation();
+            const r = resumes.find(x => x.id === id);
+            if (!r) return;
+
+            const updatedState = !r.is_shortlisted;
+            const url = `${resumeApiUrl}/resumes/${id}/shortlist`;
+
+            try {
+                if (updatedState) {
+                    await fetch(url, { method: "POST", headers: { "Authorization": `Bearer ${jwtToken}` } });
+                } else {
+                    await fetch(url, { method: "DELETE", headers: { "Authorization": `Bearer ${jwtToken}` } });
+                }
+
+                r.is_shortlisted = updatedState;
+                if (activeResume && activeResume.id === id) {
+                    activeResume.is_shortlisted = updatedState;
+                }
+
+                // Keep local lists updated
+                const item = filteredResumes.find(x => x.id === id);
+                if (item) item.is_shortlisted = updatedState;
+
+                renderDatabaseTable();
+            } catch (err) {
+                console.error("Shortlist update failed", err);
+            }
+        }
+
+        // Delete candidate action
+        function confirmDeleteCandidate(id, e) {
+            if (e) e.stopPropagation();
+            openConfirmModal("Delete Candidate Record", "Are you sure you want to completely delete this candidate? This will wipe out their parsed resume details, HR notes history, and Chroma DB vector embeddings. This cannot be undone.", async () => {
+                try {
+                    await fetch(`${resumeApiUrl}/resumes/bulk`, {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ resume_ids: [id] })
+                    });
+
+                    resumes = resumes.filter(x => x.id !== id);
+                    filteredResumes = filteredResumes.filter(x => x.id !== id);
+                    selectedForCompare = selectedForCompare.filter(x => x !== id);
+
+                    if (activeResume && activeResume.id === id) {
+                        closeDrawer();
+                    }
+                    renderDatabaseTable();
+                    populateChatSelector();
+                } catch (err) {
+                    console.error("Delete candidate failed", err);
+                } finally {
+                    closeConfirmModal();
+                }
+            });
+        }
+
+        // TAB 2: UPLOAD CENTER CONTROLLER
+        function toggleUploadZone(type) {
+            if (type === 'zip') {
+                document.getElementById("zone-zip").classList.remove("hidden");
+                document.getElementById("zone-single").classList.add("hidden");
+            } else {
+                document.getElementById("zone-zip").classList.add("hidden");
+                document.getElementById("zone-single").classList.remove("hidden");
+            }
+        }
+
+        // Multiple files uploader
+        async function handleMultipleUpload(input) {
+            const files = input.files;
+            if (!files || files.length === 0) return;
+
+            const skillsOnly = document.getElementById("skillsOnlyToggle").checked;
+            const progress = document.getElementById("uploadProgress");
+            const text = document.getElementById("uploadProgressText");
+            const transientBox = document.getElementById("transientSkillsResult");
+
+            progress.classList.remove("hidden");
+            transientBox.classList.add("hidden");
+
+            const formData = new FormData();
+
+            if (skillsOnly) {
+                // Skills-only transient parse
+                if (files.length !== 1) {
+                    alert("Skills-only extraction mode parses exactly 1 file at a time.");
+                    progress.classList.add("hidden");
+                    input.value = "";
+                    return;
+                }
+                text.innerText = "Extracting transient candidate skills...";
+                formData.append("file", files[0]);
+                try {
+                    const response = await fetch(`${resumeApiUrl}/extract/skills`, {
+                        method: "POST",
+                        body: formData
+                    });
+                    const data = await response.json();
+
+                    // Render skills pills
+                    const pri = document.getElementById("transient-primary");
+                    const oth = document.getElementById("transient-other");
+                    pri.innerHTML = ""; oth.innerHTML = "";
+
+                    (data.primary_skills || []).forEach(s => pri.innerHTML += `<span class="px-2.5 py-1 rounded bg-brand-900 border border-brand-300/10 text-brand-300 text-[10px] font-medium">${s}</span>`);
+                    (data.other_skills || []).forEach(s => oth.innerHTML += `<span class="px-2.5 py-1 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px] font-medium">${s}</span>`);
+
+                    transientBox.classList.remove("hidden");
+                } catch (err) {
+                    alert("Transient parse failed.");
+                }
+            } else {
+                // Standard db upload
+                text.innerText = `Uploading and parsing ${files.length} candidate resumes...`;
+                for (let i = 0; i < files.length; i++) {
+                    formData.append("files", files[i]);
+                }
+                try {
+                    await fetch(`${resumeApiUrl}/upload`, {
+                        method: "POST",
+                        body: formData
+                    });
+                    text.innerText = "Re-indexing files catalogue...";
+                    await fetchResumes();
+                    alert(`Successfully imported ${files.length} resumes!`);
+                } catch (err) {
+                    alert("Resumes import failed.");
+                }
+            }
+            progress.classList.add("hidden");
+            input.value = "";
+        }
+
+        // ZIP Bulk Uploader
+        async function handleZipUpload(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const progress = document.getElementById("uploadProgress");
+            const text = document.getElementById("uploadProgressText");
+
+            progress.classList.remove("hidden");
+            text.innerText = "Uploading ZIP bundle package...";
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            try {
+                await fetch(`${resumeApiUrl}/upload/bulk`, {
+                    method: "POST",
+                    body: formData
+                });
+                text.innerText = "Running LLM extraction algorithms...";
+                await fetchResumes();
+                alert("Bulk ZIP upload + extraction completed successfully!");
+            } catch (err) {
+                alert("ZIP bundle import failed.");
+            } finally {
+                progress.classList.add("hidden");
+                input.value = "";
+            }
+        }
+
+        // IMAP mail downloader
+        async function fetchResumesFromEmail() {
+            const extract = document.getElementById("emailAutoExtract").checked ? "1" : "0";
+            const force = document.getElementById("emailForceRefetch").checked ? "1" : "0";
+            const btn = document.getElementById("imapFetchBtn");
+
+            btn.disabled = true;
+            btn.innerText = "Fetching Inbox...";
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/fetch-resumes?auto_extract=${extract}&force=${force}&indeed=0`, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                const data = await response.json();
+
+                const downloaded = data.downloaded || [];
+                const total = downloaded.reduce((acc, x) => acc + (x.downloaded_files || []).length, 0);
+
+                alert(`IMAP fetch complete: Parsed and added ${total} new candidate profiles to database!`);
+                await fetchResumes();
+            } catch (err) {
+                alert("Failed fetching emails. Check backend server configurations.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Fetch From Email";
+            }
+        }
+
+        // TAB 3: MATCH / COMPARE CONTROLLER
+        let compareSource = 'candidates'; // 'candidates' or 'employees'
+        let cachedEmployeesList = []; // Cache list of employees to keep toggle responsive
+        let selectedNamesMap = {}; // Maps profile ID -> Display Name
+
+        async function switchCompareSource(source) {
+            compareSource = source;
+
+            const btnCandidates = document.getElementById("compareToggle-candidates");
+            const btnEmployees = document.getElementById("compareToggle-employees");
+
+            if (source === 'candidates') {
+                btnCandidates.className = "px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider bg-brand-500 text-white";
+                btnEmployees.className = "px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider text-slate-400 hover:text-white";
+            } else {
+                btnCandidates.className = "px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider text-slate-400 hover:text-white";
+                btnEmployees.className = "px-3 py-1 text-[10px] font-extrabold rounded-md transition-all uppercase tracking-wider bg-brand-500 text-white";
+            }
+
+            document.getElementById("compare-searchField").value = "";
+            await populateCompareGrid();
+        }
+
+        // Populate the inline candidate selector grid on the Compare tab
+        async function populateCompareGrid() {
+            const grid = document.getElementById("compare-candidateGrid");
+            if (!grid) return;
+
+            grid.innerHTML = `<div class="text-xs text-slate-500 col-span-full py-4 text-center">Loading profiles...</div>`;
+
+            if (compareSource === 'candidates') {
+                // Use already-loaded resumes global array; fetch fresh if empty
+                let candidates = resumes || [];
+                if (!candidates.length) {
+                    try {
+                        const res = await fetch(`${resumeApiUrl}/resumes`, {
+                            headers: { "Authorization": `Bearer ${jwtToken}` }
+                        });
+                        candidates = await res.json();
+                        if (!Array.isArray(candidates)) candidates = candidates.resumes || [];
+                    } catch (e) {
+                        grid.innerHTML = `<div class="text-xs text-red-400 col-span-full py-4 text-center">Failed to load candidates. Is the backend running?</div>`;
+                        return;
+                    }
+                }
+
+                if (!candidates || candidates.length === 0) {
+                    grid.innerHTML = `<div class="text-xs text-slate-500 col-span-full py-4 text-center">No candidates found. Upload some resumes first.</div>`;
+                    return;
+                }
+
+                renderCompareItems(candidates, false);
+            } else {
+                // Fetch Employees from employee/skills endpoint
+                if (!cachedEmployeesList.length) {
+                    try {
+                        const res = await fetch(`${resumeApiUrl}/employees/skills`, {
+                            headers: { "Authorization": `Bearer ${jwtToken}` }
+                        });
+                        cachedEmployeesList = await res.json();
+                    } catch (e) {
+                        grid.innerHTML = `<div class="text-xs text-red-400 col-span-full py-4 text-center">Failed to load employees.</div>`;
+                        return;
+                    }
+                }
+
+                if (!cachedEmployeesList || cachedEmployeesList.length === 0) {
+                    grid.innerHTML = `<div class="text-xs text-slate-500 col-span-full py-4 text-center">No active employees found.</div>`;
+                    return;
+                }
+
+                renderCompareItems(cachedEmployeesList, true);
+            }
+        }
+
+        function renderCompareItems(items, isEmployee) {
+            const grid = document.getElementById("compare-candidateGrid");
+            if (!grid) return;
+
+            grid.innerHTML = items.map(c => {
+                const id = String(c.id);
+                const isSelected = selectedForCompare.includes(id);
+                const name = isEmployee ? `${c.first_name} ${c.last_name}` : (c.name || 'Unknown');
+
+                // Fetch primary skills or skills
+                let displaySkills = [];
+                if (isEmployee) {
+                    displaySkills = c.skills ? c.skills.split(",").map(s => s.trim()).filter(Boolean) : [];
+                } else {
+                    displaySkills = getSkillsArray(c.primary_skills || c.skills || c.key_skills);
+                }
+                const skillsText = displaySkills.slice(0, 2).join(", ");
+                const subtitle = skillsText ? skillsText : (isEmployee ? "Employee" : "Candidate");
+
+                return `
+                <label class="compare-card flex flex-col justify-between p-2.5 rounded-lg border cursor-pointer transition-all text-xs min-h-[64px] ${isSelected ? 'bg-brand-500/20 border-brand-400/60 text-white' : 'bg-white/[0.02] border-white/10 text-slate-300 hover:border-white/30 hover:bg-white/5'}">
+                    <div class="flex items-start gap-2">
+                        <input type="checkbox" data-id="${id}" data-name="${name}"
+                            onchange="toggleCompareCard('${id}', this)"
+                            ${isSelected ? 'checked' : ''}
+                            class="rounded border-white/20 text-brand-500 focus:ring-0 w-3.5 h-3.5 mt-0.5 shrink-0">
+                        <div class="min-w-0 flex-1">
+                            <span class="font-semibold block truncate" title="${name}">${name}</span>
+                            <span class="text-[9px] text-slate-500 block truncate mt-0.5">${subtitle}</span>
+                        </div>
+                    </div>
+                </label>`;
+            }).join("");
+        }
+
+        function filterCompareGrid() {
+            const query = document.getElementById("compare-searchField").value.trim().toLowerCase();
+            if (compareSource === 'candidates') {
+                let filtered = resumes || [];
+                if (query) {
+                    filtered = filtered.filter(c =>
+                        (c.name || "").toLowerCase().includes(query) ||
+                        (c.skills || []).some(s => s.toLowerCase().includes(query)) ||
+                        (c.primary_skills || []).some(s => s.toLowerCase().includes(query))
+                    );
+                }
+                renderCompareItems(filtered, false);
+            } else {
+                let filtered = cachedEmployeesList || [];
+                if (query) {
+                    filtered = filtered.filter(e =>
+                        `${e.first_name} ${e.last_name}`.toLowerCase().includes(query) ||
+                        (e.skills || "").toLowerCase().includes(query)
+                    );
+                }
+                renderCompareItems(filtered, true);
+            }
+        }
+
+        function toggleCompareCard(id, input) {
+            if (input.checked) {
+                if (selectedForCompare.length >= 5) {
+                    input.checked = false;
+                    alert("You can compare up to 5 profiles at a time!");
+                    return;
+                }
+                if (!selectedForCompare.includes(id)) {
+                    selectedForCompare.push(id);
+                    selectedNamesMap[id] = input.dataset.name || id;
+                }
+            } else {
+                selectedForCompare = selectedForCompare.filter(x => x !== id);
+                delete selectedNamesMap[id];
+            }
+            // Sync the Resumes Database tab checkboxes too
+            const dbCheck = document.querySelector(`#db-resumeList input[data-id="${id}"]`);
+            if (dbCheck) dbCheck.checked = input.checked;
+            updateCompareWarning();
+            updateSelectedChips();
+        }
+
+        function updateSelectedChips() {
+            const strip = document.getElementById("compare-selectedStrip");
+            if (!strip) return;
+            if (selectedForCompare.length === 0) {
+                strip.classList.add("hidden");
+                strip.innerHTML = "";
+                return;
+            }
+            strip.classList.remove("hidden");
+            strip.innerHTML = selectedForCompare.map(id => `
+                <span class="flex items-center gap-1 px-2 py-1 rounded-full bg-brand-500/20 border border-brand-400/40 text-brand-300 text-[10px] font-semibold">
+                    ${selectedNamesMap[id] || id}
+                    <button onclick="removeFromCompare('${id}')" class="hover:text-red-400 transition-colors ml-0.5">&times;</button>
+                </span>`).join("");
+        }
+
+        function removeFromCompare(id) {
+            selectedForCompare = selectedForCompare.filter(x => x !== id);
+            delete selectedNamesMap[id];
+            // Uncheck in both grids
+            document.querySelectorAll(`input[data-id="${id}"]`).forEach(cb => { cb.checked = false; });
+            updateCompareWarning();
+            updateSelectedChips();
+        }
+
+        function updateCompareWarning() {
+            const warn = document.getElementById("compareWarning");
+            const btn = document.getElementById("tab-compareActionBtn");
+            const results = document.getElementById("tab-compareResults");
+
+            if (selectedForCompare.length < 2) {
+                warn.classList.remove("hidden");
+                btn.disabled = true;
+                results.innerHTML = "";
+            } else {
+                warn.classList.add("hidden");
+                btn.disabled = false;
+                btn.innerText = `Compare (${selectedForCompare.length}) Selected`;
+            }
+        }
+
+        async function executeTabComparison() {
+            if (selectedForCompare.length < 2) return;
+            const jd = document.getElementById("tab-jobDescription").value.trim();
+            if (!jd) {
+                alert("Please paste targeted Job Description details!");
+                return;
+            }
+
+            const btn = document.getElementById("tab-compareActionBtn");
+            btn.disabled = true;
+            btn.innerText = "Analyzing Candidates...";
+
+            const resultsBox = document.getElementById("tab-compareResults");
+            resultsBox.innerHTML = `<div class="py-24 flex items-center justify-center col-span-full w-full"><div class="animate-spin rounded-full h-10 w-10 border border-brand-400 border-t-transparent"></div></div>`;
+
+            try {
+                const ids = selectedForCompare.join(",");
+                const response = await fetch(`${resumeApiUrl}/resumes/compare?ids=${ids}&job_description=${encodeURIComponent(jd)}`, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                const results = await response.json();
+
+                resultsBox.innerHTML = "";
+                results.forEach(r => {
+                    const primary = getSkillsArray(r.primary_skills || r.skills || r.key_skills);
+                    const pills = primary.slice(0, 3).map(s =>
+                        `<span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px]">${s}</span>`
+                    ).join(" ");
+
+                    resultsBox.innerHTML += `
+                        <div class="flex-1 bg-white/[0.02] border border-white/5 hover:border-white/15 p-5 rounded-2xl flex flex-col gap-4 min-w-0 transition-all shadow-lg">
+                            <div class="font-outfit font-extrabold text-sm border-b border-white/5 pb-2 text-white truncate">${r.name}</div>
+                            
+                            <!-- Fit Score -->
+                            <div class="p-4 bg-brand-900/40 rounded-xl text-center border border-brand-300/10">
+                                <span class="text-[9px] text-slate-400 block tracking-wider uppercase font-semibold">Job Fit Match</span>
+                                <span class="text-2xl font-black text-brand-300 mt-1 block">${r.fit_score ?? 'N/A'}/10</span>
+                            </div>
+
+                            <div class="text-[10px] text-slate-400 space-y-1">
+                                <div>CORE EXP: <strong class="text-white">${parseFloat(r.experience_years || 0).toFixed(1)} Yr</strong></div>
+                                <div>TECHNICAL KEYS:</div>
+                                <div class="flex flex-wrap gap-1 mt-1">${pills}</div>
+                            </div>
+
+                            ${r.fit_summary ? `
+                                <div class="flex-1 flex flex-col min-h-0 mt-2">
+                                    <span class="text-[9px] text-slate-400 block uppercase font-bold tracking-wider mb-1">AI Recruiter Feedback</span>
+                                    <p class="text-[10px] text-slate-300 leading-relaxed bg-black/25 p-3 rounded-lg border border-white/5 overflow-y-auto max-h-[140px] flex-1">${r.fit_summary}</p>
+                                </div>
+                            ` : ""}
+                        </div>
+                    `;
+                });
+            } catch (err) {
+                resultsBox.innerHTML = `<div class="text-center text-red-400 text-xs py-24 col-span-full w-full">Failed to compute candidate fit scores. Let's try again!</div>`;
+                console.error("Comparison failed", err);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = `Compare (${selectedForCompare.length}) Selected`;
+            }
+        }
+
+        // TAB 4: GLOBAL AI SEARCH CONTROLLER
+        async function executeGlobalChatSearch(e) {
+            e.preventDefault();
+            const query = document.getElementById("globalChatQuery").value.trim();
+            if (!query) return;
+
+            const loader = document.getElementById("globalChatLoader");
+            const answerBox = document.getElementById("globalChatAnswerBox");
+            const resultsBox = document.getElementById("globalChatResults");
+
+            loader.classList.remove("hidden");
+            answerBox.classList.add("hidden");
+            resultsBox.innerHTML = "";
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/chat`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: query })
+                });
+                const data = await response.json();
+
+                // Show conversational answer
+                if (data.answer) {
+                    document.getElementById("globalChatAnswer").innerText = data.answer;
+                    answerBox.classList.remove("hidden");
+                }
+
+                // Render best matches candidates
+                if (data.best_matches && data.best_matches.length > 0) {
+                    data.best_matches.forEach(m => {
+                        const scoreColor = m.match_score >= 80 ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/10' : (m.match_score >= 50 ? 'text-amber-400 border-amber-500/20 bg-amber-500/10' : 'text-slate-400 border-white/10 bg-white/5');
+
+                        resultsBox.innerHTML += `
+                            <div class="p-4 rounded-xl bg-white/[0.02] border border-white/10 flex items-center justify-between gap-4 cursor-pointer hover:bg-white/[0.04] transition-all shadow-md" onclick="openDrawerById('${m.id}')">
+                                <div>
+                                    <h4 class="font-bold text-slate-100 text-sm">${m.name}</h4>
+                                    <div class="text-[10px] text-slate-400 mt-1 flex gap-2">
+                                        <span>EXP: ${parseFloat(m.experience || 0).toFixed(1)} yr</span>
+                                        <span>EMAIL: ${m.email || '—'}</span>
+                                    </div>
+                                </div>
+                                <div class="px-3 py-1.5 rounded-lg border text-xs font-black ${scoreColor}">
+                                    ${m.match_score}% Match
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    resultsBox.innerHTML = `<div class="text-center text-slate-400 text-xs py-8">No matching candidate resumes detected for this semantic request.</div>`;
+                }
+
+            } catch (err) {
+                console.error("Global AI query search failed", err);
+                alert("Search failed.");
+            } finally {
+                loader.classList.add("hidden");
+            }
+        }
+
+        // Helper: open drawer from vector matching list
+        function openDrawerById(id) {
+            const r = resumes.find(x => x.id === id);
+            if (r) openDrawer(r);
+        }
+
+        // TAB 5: RESUME AI CHAT (PER-CANDIDATE)
+        function populateChatSelector() {
+            const sel = document.getElementById("chatSelector");
+            sel.innerHTML = `<option value="">Select a Candidate Profile...</option>`;
+
+            resumes.forEach(r => {
+                const opt = document.createElement("option");
+                opt.value = r.id;
+                opt.innerText = `${r.name} (${r.role || r.email || r.id})`;
+                sel.appendChild(opt);
+            });
+            refreshDarkSelect(sel);
+        }
+
+        function triggerSpecificResumeQna(id) {
+            switchTab('chat');
+            const sel = document.getElementById("chatSelector");
+            sel.value = id;
+            refreshDarkSelect(sel);
+            initializeSelectedChatbot(id);
+        }
+
+        function initializeSelectedChatbot(id) {
+            const input = document.getElementById("tabChatInput");
+            const btn = document.getElementById("tabChatSendBtn");
+            const badge = document.getElementById("chatActiveCandidateBadge");
+            const box = document.getElementById("tabChatMessages");
+
+            if (!id) {
+                activeChatId = "";
+                input.disabled = true;
+                btn.disabled = true;
+                badge.classList.add("hidden");
+                box.innerHTML = `
+                    <div class="self-start bg-white/[0.05] text-slate-400 p-4 rounded-2xl rounded-bl-sm max-w-[85%] text-xs leading-relaxed">
+                        Hello! Select a candidate profile from the dropdown menu above to start asking specific questions regarding their credentials, tech stack experience or job match metrics!
+                    </div>
+                `;
+                return;
+            }
+
+            activeChatId = id;
+            input.disabled = false;
+            btn.disabled = false;
+            badge.classList.remove("hidden");
+
+            const r = resumes.find(x => x.id === id);
+            box.innerHTML = `
+                <div class="self-start bg-white/[0.05] text-slate-200 p-4 rounded-2xl rounded-bl-sm max-w-[85%] text-xs leading-relaxed shadow">
+                    Hello! I have fully loaded ${r.name}'s parsed resume directory. You can query me on their specific career achievements, educational history, or suitability for roles!
+                </div>
+            `;
+        }
+
+        async function sendTabChatMessage(e) {
+            e.preventDefault();
+            if (!activeChatId) return;
+
+            const input = document.getElementById("tabChatInput");
+            const text = input.value.trim();
+            if (!text) return;
+
+            const box = document.getElementById("tabChatMessages");
+            box.innerHTML += `
+                <div class="self-end bg-brand-500 text-white p-3.5 rounded-2xl rounded-br-sm max-w-[85%] text-xs ml-auto text-right shadow-md">
+                    ${text}
+                </div>
+            `;
+            input.value = "";
+            box.scrollTop = box.scrollHeight;
+
+            // Loading status
+            const bubble = document.createElement("div");
+            bubble.className = "self-start bg-white/[0.05] text-slate-400 p-3.5 rounded-2xl rounded-bl-sm text-xs w-16 flex items-center justify-center";
+            bubble.innerHTML = `<div class="animate-pulse flex space-x-1"><div class="h-1.5 w-1.5 bg-slate-400 rounded-full"></div><div class="h-1.5 w-1.5 bg-slate-400 rounded-full"></div><div class="h-1.5 w-1.5 bg-slate-400 rounded-full"></div></div>`;
+            box.appendChild(bubble);
+            box.scrollTop = box.scrollHeight;
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/resume/${activeChatId}/chat`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: text })
+                });
+                const data = await response.json();
+
+                box.removeChild(bubble);
+                box.innerHTML += `
+                    <div class="self-start bg-white/[0.05] text-slate-200 p-3.5 rounded-2xl rounded-bl-sm max-w-[85%] text-xs leading-relaxed shadow">
+                        ${data.answer}
+                    </div>
+                `;
+            } catch (err) {
+                box.removeChild(bubble);
+                box.innerHTML += `
+                    <div class="self-start bg-red-950/20 border border-red-500/15 text-red-300 p-3.5 rounded-2xl rounded-bl-sm max-w-[85%] text-xs">
+                        Failed getting AI answer. Let's try again!
+                    </div>
+                `;
+            }
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // TAB 6: GOOGLE SHEETS EXPORT CONTROLLER
+        async function executeDatabaseExport() {
+            const sheetName = document.getElementById("export-sheetName").value.trim();
+            const credsJson = document.getElementById("export-credsJson").value.trim();
+
+            if (!sheetName) {
+                alert("Please enter target Google Workbook name!");
+                return;
+            }
+            if (!credsJson) {
+                alert("Please paste your Google Service Account client JSON credentials!");
+                return;
+            }
+
+            const btn = document.getElementById("exportActionBtn");
+            const progress = document.getElementById("exportProgress");
+            const success = document.getElementById("exportSuccess");
+
+            btn.disabled = true;
+            progress.classList.remove("hidden");
+            success.classList.add("hidden");
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes/export-sheets`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sheet_name: sheetName, creds_json: credsJson })
+                });
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    document.getElementById("exportSheetUrl").href = data.spreadsheet_url;
+                    success.classList.remove("hidden");
+                } else {
+                    alert(`Export failed: ${data.detail || 'check JSON credentials format'}`);
+                }
+
+            } catch (err) {
+                alert("Request failed. Ensure gspread & oauth2client python dependencies are installed on backend.");
+            } finally {
+                btn.disabled = false;
+                progress.classList.add("hidden");
+            }
+        }
+
+        // DRAWER SIDEBAR PROFILE OPENER
+        function openDrawer(resume) {
+            activeResume = resume;
+
+            document.getElementById("dw-name").innerText = resume.name;
+            document.getElementById("dw-role").innerText = resume.role || "Designation designation";
+            document.getElementById("dw-exp").innerText = `${parseFloat(resume.experience_years || 0).toFixed(1)} Yr`;
+            document.getElementById("dw-totalExp").innerText = `${parseFloat(resume.total_experience_years || 0).toFixed(1)} Yr`;
+            document.getElementById("dw-level").innerText = resume.experience_level || "Mid";
+
+            // Emails, location, phone
+            document.getElementById("dw-email").innerText = resume.email || "";
+            document.getElementById("dw-email-box").className = resume.email ? "flex items-center gap-2" : "hidden";
+            document.getElementById("dw-phone").innerText = resume.phone || "";
+            document.getElementById("dw-phone-box").className = resume.phone ? "flex items-center gap-2" : "hidden";
+            document.getElementById("dw-location").innerText = resume.location || "";
+            document.getElementById("dw-loc-box").className = resume.location ? "flex items-center gap-2" : "hidden";
+
+            // Profile Summary
+            document.getElementById("dw-summary").innerText = resume.summary || "";
+            document.getElementById("dw-summary-box").className = resume.summary ? "" : "hidden";
+
+            // Skills badges
+            const skillBox = document.getElementById("dw-skills");
+            skillBox.innerHTML = "";
+            const skills = getAllSkills(resume);
+            if (skills.length === 0) {
+                skillBox.innerHTML = `<span class="text-xs text-slate-400">None parsed.</span>`;
+            } else {
+                skills.forEach(s => {
+                    skillBox.innerHTML += `<span class="px-2.5 py-1 rounded bg-brand-900 border border-brand-300/15 text-brand-300 text-[11px] font-medium">${s}</span>`;
+                });
+            }
+
+            // Education background
+            const eduBox = document.getElementById("dw-education");
+            eduBox.innerHTML = "";
+            const edus = resume.education ? resume.education.split(", ") : [];
+            if (edus.length === 0) {
+                document.getElementById("dw-education-box").classList.add("hidden");
+            } else {
+                document.getElementById("dw-education-box").classList.remove("hidden");
+                edus.forEach(e => {
+                    eduBox.innerHTML += `<li>${e}</li>`;
+                });
+            }
+
+            // Viewing resume file PDF
+            document.getElementById("dw-download-link").href = `${resumeApiUrl}/files/${resume.source_file}?token=${jwtToken}`;
+            document.getElementById("dw-chat-btn").onclick = (e) => {
+                e.stopPropagation();
+                triggerSpecificResumeQna(resume.id);
+            };
+
+            // Recruiter notes
+            loadNotes(resume.id);
+
+            // Open animations
+            document.getElementById("drawerOverlay").classList.remove("hidden");
+            document.getElementById("detailDrawer").classList.remove("translate-x-full");
+        }
+
+        function closeDrawer() {
+            document.getElementById("drawerOverlay").classList.add("hidden");
+            document.getElementById("detailDrawer").classList.add("translate-x-full");
+            activeResume = null;
+        }
+
+        // RECRUITER NOTES CRUD
+        async function loadNotes(id) {
+            const loader = document.getElementById("notesLoader");
+            const box = document.getElementById("notesList");
+            box.innerHTML = "";
+            loader.classList.remove("hidden");
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes/${id}/notes`, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                const notes = await response.json();
+
+                if (notes.length === 0) {
+                    box.innerHTML = `<div class="text-[11px] text-slate-500">No interview logs found.</div>`;
+                } else {
+                    notes.forEach(n => {
+                        const date = new Date(n.created_at).toLocaleDateString() + ' ' + new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        box.innerHTML += `
+                            <div class="p-3 bg-black/25 rounded-lg border border-white/5 flex items-center justify-between gap-3 shadow">
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
+                                        ${getStatusBadge(n.status)}
+                                    </div>
+                                    <div class="text-xs text-slate-200">${n.note}</div>
+                                    <div class="text-[9px] text-slate-500 mt-1">${date}</div>
+                                </div>
+                                <button onclick="deleteCandidateNote('${n.id}')" class="p-1 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+            } catch (err) {
+                console.error("Notes load failed", err);
+            } finally {
+                loader.classList.add("hidden");
+            }
+        }
+
+        async function addCandidateNote(e) {
+            e.preventDefault();
+            if (!activeResume) return;
+            const input = document.getElementById("newNoteInput");
+            const text = input.value.trim();
+            if (!text) return;
+
+            try {
+                await fetch(`${resumeApiUrl}/resumes/${activeResume.id}/notes`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ note: text, status: "Note" })
+                });
+                input.value = "";
+                loadNotes(activeResume.id);
+            } catch (err) {
+                console.error("Add note failed", err);
+            }
+        }
+
+        async function deleteCandidateNote(noteId) {
+            if (!activeResume) return;
+            try {
+                await fetch(`${resumeApiUrl}/resumes/${activeResume.id}/notes/${noteId}`, {
+                    method: "DELETE"
+                });
+                loadNotes(activeResume.id);
+            } catch (err) {
+                console.error("Delete note failed", err);
+            }
+        }
+
+        // loaders
+        function showLoader(visible) {
+            const ldr = document.getElementById("loader");
+            if (ldr) {
+                ldr.className = visible ? "py-12 flex flex-col items-center justify-center" : "hidden";
+            }
+            const dbTable = document.getElementById("db-tableWrapper");
+            if (dbTable) {
+                if (visible) {
+                    dbTable.classList.add("opacity-50");
+                } else {
+                    dbTable.classList.remove("opacity-50");
+                }
+            }
+        }
+
+        // Custom Confirm dialog box
+        let confirmAction = null;
+        function openConfirmModal(title, msg, onYes) {
+            document.getElementById("conf-title").innerText = title;
+            document.getElementById("conf-message").innerText = msg;
+            document.getElementById("confirmModal").classList.remove("hidden");
+            confirmAction = onYes;
+        }
+
+        function closeConfirmModal() {
+            document.getElementById("confirmModal").classList.add("hidden");
+            confirmAction = null;
+        }
+
+        document.getElementById("conf-yes").onclick = () => {
+            if (confirmAction) confirmAction();
+        };
+
+        async function openCandidateSkillsModal(id, event) {
+            if (event) event.stopPropagation();
+
+            const candidate = resumes.find(r => r.id === id);
+            if (!candidate) return;
+
+            document.getElementById("cv-name").innerText = candidate.name || "Candidate Profile";
+            document.getElementById("cv-role").classList.add("hidden"); // Don't show designation
+
+            document.getElementById("cv-email").innerText = candidate.email || "No email provided";
+            document.getElementById("cv-phone").innerText = candidate.phone || "No phone provided";
+            document.getElementById("cv-experience").innerText = `${parseFloat(candidate.experience_years || 0).toFixed(1)} yr (${candidate.experience_level || 'Mid'} level)`;
+            document.getElementById("cv-location").innerText = candidate.location || "No location provided";
+
+            // Skills tags
+            const skillBox = document.getElementById("cv-skills");
+            skillBox.innerHTML = "";
+            const skills = getAllSkills(candidate);
+            if (skills.length === 0) {
+                skillBox.innerHTML = `<span class="text-xs text-slate-500 italic">No skills extracted</span>`;
+            } else {
+                skills.forEach(s => {
+                    skillBox.innerHTML += `<span class="px-2 py-1 rounded bg-brand-900 border border-brand-300/10 text-brand-300 text-[10px] font-semibold">${escapeHtml(s)}</span>`;
+                });
+                skillBox.innerHTML += `<span class="text-[10px] text-slate-500 self-center ml-1">(${skills.length} skills)</span>`;
+            }
+
+            // Open modal
+            document.getElementById("candidateSkillsModal").classList.remove("hidden");
+        }
+
+        function closeCandidateSkillsModal() {
+            document.getElementById("candidateSkillsModal").classList.add("hidden");
+        }
+
+        function getStatusBadge(status) {
+            if (!status) return "";
+            const s = status.toLowerCase().trim();
+            if (s === "interview" || s === "interviewing") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/10 uppercase tracking-wider">Interview</span>`;
+            } else if (s === "telephonic") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-cyan-500/20 text-cyan-300 border border-cyan-500/10 uppercase tracking-wider">Telephonic screening</span>`;
+            } else if (s === "contacted") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-teal-500/20 text-teal-300 border border-teal-500/10 uppercase tracking-wider">Contacted</span>`;
+            } else if (s === "shortlisted") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/10 uppercase tracking-wider">Shortlisted</span>`;
+            } else if (s === "technical round" || s === "technical") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-violet-500/20 text-violet-300 border border-violet-500/10 uppercase tracking-wider">Technical Round</span>`;
+            } else if (s === "hr round" || s === "hr") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/10 uppercase tracking-wider">HR Round</span>`;
+            } else if (s === "selected" || s === "offered") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/10 uppercase tracking-wider">Selected / Offered</span>`;
+            } else if (s === "on hold" || s === "hold") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-orange-500/20 text-orange-300 border border-orange-500/10 uppercase tracking-wider">On Hold</span>`;
+            } else if (s === "no show" || s === "absent") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-red-500/20 text-red-300 border border-red-500/10 uppercase tracking-wider">No Show</span>`;
+            } else if (s === "round rejected" || s === "rejected") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/10 uppercase tracking-wider">Round Rejected</span>`;
+            } else if (s === "general note" || s === "note") {
+                return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-slate-500/20 text-slate-300 border border-slate-500/10 uppercase tracking-wider">General Note</span>`;
+            }
+            return `<span class="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-slate-500/20 text-slate-300 border border-slate-500/10 uppercase tracking-wider">${escapeHtml(status)}</span>`;
+        }
+
+        // CANDIDATE ACTIONS DETAILS FORM LOGIC
+        let activeDetailsResumeId = null;
+
+        function openCandidateDetailsModal(id, event) {
+            if (event) event.stopPropagation();
+            activeDetailsResumeId = id;
+
+            const candidate = resumes.find(r => r.id === id);
+            if (!candidate) return;
+
+            document.getElementById("detailsModalCandidate").innerText = `Details for ${candidate.name}`;
+
+            // Populate form fields
+            document.getElementById("detailsForm-name").value = candidate.name || "";
+            document.getElementById("detailsForm-role").value = candidate.role || "";
+            document.getElementById("detailsForm-experience").value = candidate.experience_years || 0;
+            document.getElementById("detailsForm-currentSalary").value = candidate.current_salary || "";
+            document.getElementById("detailsForm-expectedSalary").value = candidate.expected_salary || "";
+            document.getElementById("detailsForm-noticePeriod").value = candidate.notice_period || "";
+            document.getElementById("detailsForm-availabilityFTF").value = candidate.availability_ftf || "";
+            document.getElementById("detailsForm-currentCompany").value = candidate.current_company || "";
+            document.getElementById("detailsForm-location").value = candidate.location || "";
+            document.getElementById("detailsForm-readyToRelocate").value = candidate.ready_to_relocate || "";
+            document.getElementById("detailsForm-reasonJobChange").value = candidate.reason_job_change || "";
+
+            document.getElementById("detailsModal").classList.remove("hidden");
+        }
+
+        function closeDetailsModal() {
+            document.getElementById("detailsModal").classList.add("hidden");
+            activeDetailsResumeId = null;
+        }
+
+        async function saveCandidateDetails(event) {
+            if (event) event.preventDefault();
+            if (!activeDetailsResumeId) return;
+
+            const name = document.getElementById("detailsForm-name").value.trim();
+            const role = document.getElementById("detailsForm-role").value.trim();
+            const experience = parseFloat(document.getElementById("detailsForm-experience").value) || 0;
+            const currentSalary = document.getElementById("detailsForm-currentSalary").value.trim();
+            const expectedSalary = document.getElementById("detailsForm-expectedSalary").value.trim();
+            const noticePeriod = document.getElementById("detailsForm-noticePeriod").value.trim();
+            const availabilityFTF = document.getElementById("detailsForm-availabilityFTF").value.trim();
+            const currentCompany = document.getElementById("detailsForm-currentCompany").value.trim();
+            const location = document.getElementById("detailsForm-location").value.trim();
+            const readyToRelocate = document.getElementById("detailsForm-readyToRelocate").value.trim();
+            const reasonJobChange = document.getElementById("detailsForm-reasonJobChange").value.trim();
+
+            const payload = {
+                name,
+                role,
+                experience_years: experience,
+                current_salary: currentSalary,
+                expected_salary: expectedSalary,
+                notice_period: noticePeriod,
+                availability_ftf: availabilityFTF,
+                current_company: currentCompany,
+                location,
+                ready_to_relocate: readyToRelocate,
+                reason_job_change: reasonJobChange
+            };
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes/${activeDetailsResumeId}/details`, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${jwtToken}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to save candidate details");
+                }
+
+                const updated = await response.json();
+
+                // Update in local resumes list
+                resumes = resumes.map(r => r.id === activeDetailsResumeId ? { ...r, ...updated } : r);
+                filteredResumes = filteredResumes.map(r => r.id === activeDetailsResumeId ? { ...r, ...updated } : r);
+
+                renderDatabaseTable();
+                closeDetailsModal();
+            } catch (err) {
+                console.error("Save details error:", err);
+                alert("Error saving details: " + err.message);
+            }
+        }
+
+        // CANDIDATE ACTIONS NOTES MODAL LOGIC
+        let activeNotesResumeId = null;
+
+        async function openCandidateNotesModal(id, event) {
+            if (event) event.stopPropagation();
+            activeNotesResumeId = id;
+
+            const candidate = resumes.find(r => r.id === id);
+            document.getElementById("notesModalCandidate").innerText = candidate ? `Notes for ${candidate.name}` : "Recruiter Notes";
+
+            document.getElementById("notesModal").classList.remove("hidden");
+            document.getElementById("modalNewNoteInput").value = "";
+            await loadModalNotes(id);
+        }
+
+        function closeNotesModal() {
+            document.getElementById("notesModal").classList.add("hidden");
+            activeNotesResumeId = null;
+        }
+
+        async function loadModalNotes(id) {
+            const loader = document.getElementById("modalNotesLoader");
+            const box = document.getElementById("modalNotesList");
+            box.innerHTML = "";
+            loader.classList.remove("hidden");
+
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes/${id}/notes`, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                const notes = await response.json();
+
+                if (notes.length === 0) {
+                    box.innerHTML = `<div class="text-xs text-slate-500 text-center py-6">No recruiter logs found. Start by writing one below!</div>`;
+                } else {
+                    notes.forEach(n => {
+                        const date = new Date(n.created_at).toLocaleDateString() + ' ' + new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        box.innerHTML += `
+                            <div class="p-3 bg-black/25 rounded-xl border border-white/5 flex items-center justify-between gap-3 shadow">
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
+                                        ${getStatusBadge(n.status)}
+                                    </div>
+                                    <div class="text-xs text-slate-200 break-words">${n.note}</div>
+                                    <div class="text-[9px] text-slate-500 mt-1">${date}</div>
+                                </div>
+                                <button onclick="deleteModalCandidateNote('${n.id}')" class="p-1.5 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-colors shrink-0">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+            } catch (err) {
+                console.error("Notes load failed", err);
+            } finally {
+                loader.classList.add("hidden");
+            }
+        }
+
+        async function addModalCandidateNote(e) {
+            e.preventDefault();
+            if (!activeNotesResumeId) return;
+            const input = document.getElementById("modalNewNoteInput");
+            const statusSelect = document.getElementById("modalNoteStatus");
+            const text = input.value.trim();
+            if (!text) return;
+
+            const selectedStatus = statusSelect ? statusSelect.value : "General Note";
+
+            try {
+                await fetch(`${resumeApiUrl}/resumes/${activeNotesResumeId}/notes`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ note: text, status: selectedStatus })
+                });
+                input.value = "";
+                if (statusSelect) statusSelect.value = "General Note";
+                await loadModalNotes(activeNotesResumeId);
+            } catch (err) {
+                console.error("Add note failed", err);
+            }
+        }
+
+        async function deleteModalCandidateNote(noteId) {
+            if (!activeNotesResumeId) return;
+            try {
+                await fetch(`${resumeApiUrl}/resumes/${activeNotesResumeId}/notes/${noteId}`, {
+                    method: "DELETE"
+                });
+                await loadModalNotes(activeNotesResumeId);
+            } catch (err) {
+                console.error("Delete note failed", err);
+            }
+        }
+
+        // click overlays
+        document.getElementById("drawerOverlay").onclick = closeDrawer;
+
+        // Init loads
+        const tzOffset = (new Date()).getTimezoneOffset() * 60000;
+        const localISOTime = (new Date(Date.now() - tzOffset)).toISOString().slice(0, 10);
+        document.getElementById("filter-from-date").value = localISOTime;
+        document.getElementById("filter-to-date").value = localISOTime;
+
+        let skillsTimeout = null;
+        function debounceSkillsSearch() {
+            clearTimeout(skillsTimeout);
+            skillsTimeout = setTimeout(() => {
+                fetchEmployeeSkills();
+            }, 300);
+        }
+
+        async function fetchEmployeeSkills() {
+            const query = document.getElementById("skillsSearchInput").value.trim();
+            const bodyElem = document.getElementById("skillsTableBody");
+            const wrapperElem = document.getElementById("skillsTableWrapper");
+            const emptyElem = document.getElementById("skillsEmptyState");
+
+            bodyElem.innerHTML = `<tr><td colspan="3" class="p-8 text-center text-slate-400">Loading skills registry...</td></tr>`;
+            wrapperElem.classList.remove("hidden");
+            emptyElem.classList.add("hidden");
+
+            try {
+                let url = `${resumeApiUrl}/employees/skills`;
+                if (query) {
+                    url = `${resumeApiUrl}/employees/skills/search?query=${encodeURIComponent(query)}`;
+                }
+                const response = await fetch(url, {
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+                const data = await response.json();
+
+                bodyElem.innerHTML = "";
+                if (data.length === 0) {
+                    wrapperElem.classList.add("hidden");
+                    emptyElem.classList.remove("hidden");
+                    return;
+                }
+
+                data.forEach(emp => {
+                    const tr = document.createElement("tr");
+                    tr.className = "hover:bg-white/[0.02] border-b border-white/5 transition-colors";
+
+                    const skillsArray = emp.skills ? emp.skills.split(",").map(s => s.trim()).filter(Boolean) : [];
+                    let skillsHtml = "";
+                    if (skillsArray.length > 0) {
+                        skillsHtml = skillsArray.map(skill =>
+                            `<span class="inline-flex items-center px-2 py-1 rounded bg-brand-900/40 text-brand-300 border border-brand-300/10 text-[10px] font-semibold">${escapeHtml(skill)}</span>`
+                        ).join(" ");
+                    } else {
+                        skillsHtml = `<span class="text-slate-500 italic">No skills extracted</span>`;
+                    }
+
+                    tr.innerHTML = `
+                        <td class="p-4 font-semibold text-white">${escapeHtml(emp.full_name)}</td>
+                        <td class="p-4 text-slate-400">${escapeHtml(emp.email)}</td>
+                        <td class="p-4 flex flex-wrap gap-1.5">${skillsHtml}</td>
+                    `;
+                    bodyElem.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("Failed loading employee skills", err);
+                bodyElem.innerHTML = `<tr><td colspan="3" class="p-8 text-center text-rose-400">Failed to load skills registry.</td></tr>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return "";
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        async function handleStandaloneLogin(username, password) {
+            const errorDiv = document.getElementById("login-error");
+            errorDiv.classList.add("hidden");
+            errorDiv.innerText = "";
+
+            try {
+                const formData = new URLSearchParams();
+                formData.append("username", username);
+                formData.append("password", password);
+
+                const response = await fetch(`http://${window.location.hostname}:5001/api/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.detail || "Invalid username or password");
+                }
+
+                const data = await response.json();
+
+                jwtToken = data.access_token;
+                localStorage.setItem("token", jwtToken);
+
+                document.getElementById("standalone-login-modal").classList.add("hidden");
+
+                fetchResumes();
+            } catch (err) {
+                errorDiv.innerText = err.message || "Failed to log in. Please check your credentials.";
+                errorDiv.classList.remove("hidden");
+            }
+        }
+
+        const DARK_SELECT_CHEVRON = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>`;
+
+        function buildDarkSelectWrap(sel) {
+            if (!sel || sel.closest('.dark-select-wrap')) return;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'dark-select-wrap';
+            if (sel.classList.contains('w-full') || sel.classList.contains('col-span-2')) {
+                wrap.classList.add('w-full');
+            }
+
+            const parent = sel.parentNode;
+            parent.insertBefore(wrap, sel);
+            wrap.appendChild(sel);
+            sel.classList.add('dark-select-native');
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            const keepClasses = Array.from(sel.classList).filter(
+                c => c !== 'dark-select-native' && !c.startsWith('col-span')
+            );
+            btn.className = 'dark-select-trigger ' + keepClasses.join(' ') + ' flex items-center justify-between gap-2';
+
+            const label = document.createElement('span');
+            label.className = 'dark-select-label truncate';
+            btn.appendChild(label);
+            btn.insertAdjacentHTML('beforeend', DARK_SELECT_CHEVRON);
+
+            const menu = document.createElement('div');
+            menu.className = 'dark-select-menu hidden absolute left-0 right-0 top-full mt-1 z-[250]';
+
+            function rebuildMenu() {
+                menu.innerHTML = '';
+                Array.from(sel.options).forEach((opt) => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'dark-select-item' + (opt.value === sel.value ? ' is-active' : '');
+                    item.dataset.value = opt.value;
+                    item.textContent = opt.textContent;
+                    item.onclick = (e) => {
+                        e.stopPropagation();
+                        sel.value = opt.value;
+                        label.textContent = opt.textContent || '';
+                        menu.querySelectorAll('.dark-select-item').forEach(el => el.classList.remove('is-active'));
+                        item.classList.add('is-active');
+                        menu.classList.add('hidden');
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    };
+                    menu.appendChild(item);
+                });
+                const selected = sel.options[sel.selectedIndex];
+                label.textContent = selected ? selected.textContent : '';
+            }
+
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.dark-select-menu').forEach((m) => {
+                    if (m !== menu) m.classList.add('hidden');
+                });
+                menu.classList.toggle('hidden');
+            };
+
+            sel._rebuildDarkMenu = rebuildMenu;
+            rebuildMenu();
+
+            wrap.appendChild(btn);
+            wrap.appendChild(menu);
+        }
+
+        function initDarkSelects(root = document) {
+            (root.querySelectorAll ? root : document).querySelectorAll('select').forEach((sel) => {
+                if (!sel.classList.contains('dark-select-native')) {
+                    buildDarkSelectWrap(sel);
+                }
+            });
+        }
+
+        function refreshDarkSelect(selOrId) {
+            const sel = typeof selOrId === 'string' ? document.getElementById(selOrId) : selOrId;
+            if (!sel) return;
+            if (sel._rebuildDarkMenu) {
+                sel._rebuildDarkMenu();
+            } else {
+                buildDarkSelectWrap(sel);
+            }
+        }
+
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.dark-select-menu').forEach((m) => m.classList.add('hidden'));
+        });
+
+        // Set default date inputs to current date on load
+        const initDefaultDates = () => {
+            const today = new Date();
+            const y = today.getFullYear();
+            const m = String(today.getMonth() + 1).padStart(2, '0');
+            const d = String(today.getDate()).padStart(2, '0');
+            const todayStr = `${y}-${m}-${d}`;
+            document.getElementById("filter-from-date").value = todayStr;
+            document.getElementById("filter-to-date").value = todayStr;
+        };
+        initDefaultDates();
+        initDarkSelects(document);
+
+        checkServerHealth();
+        if (!jwtToken) {
+            document.getElementById("standalone-login-modal").classList.remove("hidden");
+        } else {
+            fetchResumes();
+        }
+    </script>
+
+    <!-- Beautiful Standalone Login Modal -->
+    <div id="standalone-login-modal"
+        class="fixed inset-0 bg-[#0b0f19]/90 backdrop-blur-md flex items-center justify-center z-50 hidden">
+        <div class="bg-[#112450]/90 border border-white/10 rounded-2xl p-8 max-w-md w-full shadow-2xl relative">
+            <div class="text-center mb-6">
+                <div
+                    class="inline-flex h-12 w-12 rounded-xl bg-brand-900 border border-brand-300/20 items-center justify-center overflow-hidden shadow-lg mb-3 p-0.5">
+                    <img src="assets/softwiz-logo.png" alt="Softwiz" class="h-full w-full object-contain">
+                </div>
+                <h2 class="text-xl font-outfit font-black tracking-tight text-white leading-none">SOFTWIZ AI RECRUITER
+                </h2>
+                <p class="text-[11px] font-semibold text-brand-300 tracking-wider uppercase mt-2">Resume Analyzer Portal
+                </p>
+            </div>
+
+            <div id="login-error"
+                class="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-3 rounded-lg mb-4 hidden"></div>
+
+            <form id="standalone-login-form" class="space-y-4"
+                onsubmit="event.preventDefault(); handleStandaloneLogin(this.username.value, this.password.value)">
+                <div>
+                    <label
+                        class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Username</label>
+                    <input type="text" name="username" required placeholder="Enter your username"
+                        class="w-full bg-black/25 border border-white/15 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-500 transition-all">
+                </div>
+                <div>
+                    <label
+                        class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
+                    <input type="password" name="password" required placeholder="Enter your password"
+                        class="w-full bg-black/25 border border-white/15 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-500 transition-all">
+                </div>
+                <button type="submit"
+                    class="w-full bg-brand-500 hover:bg-brand-600 active:scale-[0.98] text-white font-semibold py-3 rounded-xl shadow-lg hover:shadow-brand-500/20 transition-all text-sm mt-2 flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
+                    Sign In to Console
+                </button>
+            </form>
+            <div class="text-center mt-6">
+                <a href="http://192.168.29.235:8000/portal.html"
+                    class="text-xs text-slate-400 hover:text-white transition-colors flex items-center justify-center gap-1.5">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m15 18-6-6 6-6" />
+                    </svg>
+                    Back to Attendance & HRMS Portal
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

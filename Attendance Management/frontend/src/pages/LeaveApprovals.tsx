@@ -6,6 +6,7 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { formatDate } from "../utils/dateFormatter";
 import { SectionLoader } from "../components/LoadingState";
 import CustomSelect from "../components/CustomSelect";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 interface ApprovalRow {
   id: number;
@@ -100,6 +101,27 @@ export default function LeaveApprovals() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
+  const {
+    displayed: displayedRows,
+    search: approvalSearch,
+    setSearch: setApprovalSearch,
+    sort: approvalSort,
+    toggleSort: toggleApprovalSort,
+    clearAll: clearApprovalControls,
+    hasActiveControls: approvalHasActive,
+  } = useTableControls<ApprovalRow>({
+    rows,
+    columns: {
+      employee: (r) => r.employee_name,
+      type: (r) => r.leave_type_name,
+      start_date: (r) => r.start_date,
+      status: (r) => r.status,
+      applied_at: (r) => r.applied_at,
+    },
+    searchableText: (r) =>
+      `${r.employee_code} ${r.employee_name} ${r.leave_type_name} ${r.status} ${r.reason ?? ""}`,
+  });
+
   const openDecision = (id: number, approved: boolean) => {
     setError("");
     setSuccess("");
@@ -176,21 +198,28 @@ export default function LeaveApprovals() {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="card">
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between", gap: "1rem", marginBottom: "1rem" }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Status</label>
-            <CustomSelect
-              value={statusFilter}
-              onChange={(val) => setStatusFilter(val)}
-              style={{ width: "140px", minWidth: "140px" }}
-              options={[
-                { value: "PENDING", label: "Pending" },
-                { value: "APPROVED", label: "Approved" },
-                { value: "REJECTED", label: "Rejected" }
-              ]}
-            />
-          </div>
-          <div style={{ alignSelf: "flex-end" }}>
+        <TableToolbar
+          search={approvalSearch}
+          onSearchChange={setApprovalSearch}
+          placeholder="Search by employee, type, status, reason..."
+          showClear={approvalHasActive}
+          onClear={clearApprovalControls}
+          count={{ shown: displayedRows.length, total: rows.length }}
+          leftControls={
+            <div className="form-group" style={{ marginBottom: 0, minWidth: 160 }}>
+              <CustomSelect
+                value={statusFilter}
+                onChange={(val) => setStatusFilter(val)}
+                style={{ minWidth: "140px" }}
+                options={[
+                  { value: "PENDING", label: "Pending" },
+                  { value: "APPROVED", label: "Approved" },
+                  { value: "REJECTED", label: "Rejected" }
+                ]}
+              />
+            </div>
+          }
+          rightControls={
             <button
               type="button"
               className="btn btn-secondary"
@@ -199,8 +228,8 @@ export default function LeaveApprovals() {
             >
               Refresh
             </button>
-          </div>
-        </div>
+          }
+        />
 
         {loading ? (
           <SectionLoader rows={5} />
@@ -211,16 +240,23 @@ export default function LeaveApprovals() {
             <table className="table-modern table-modern--dark leave-approvals-table">
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left', width: '15%', whiteSpace: 'nowrap' }}>Employee</th>
-                  <th style={{ textAlign: 'left', width: '20%', whiteSpace: 'nowrap' }}>Type & Kind</th>
-                  <th style={{ textAlign: 'left', width: '22%', whiteSpace: 'nowrap' }}>Dates</th>
-                  <th style={{ textAlign: 'left', width: '10%', whiteSpace: 'nowrap' }}>Status</th>
-                  <th className="hide-xl" style={{ textAlign: 'left', width: '18%', whiteSpace: 'nowrap' }}>Applied</th>
-                  <th className="actions-center" style={{ width: '15%', whiteSpace: 'nowrap', textAlign: 'left' }}>Actions</th>
+                  <SortableHeader label="Employee" columnKey="employee" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '15%', whiteSpace: 'nowrap' }} />
+                  <SortableHeader label="Type & Kind" columnKey="type" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '20%', whiteSpace: 'nowrap' }} />
+                  <SortableHeader label="Dates" columnKey="start_date" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '22%', whiteSpace: 'nowrap' }} />
+                  <SortableHeader label="Status" columnKey="status" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '10%', whiteSpace: 'nowrap' }} />
+                  <SortableHeader className="hide-xl" label="Applied" columnKey="applied_at" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '18%', whiteSpace: 'nowrap' }} />
+                  <SortableHeader label="Actions" columnKey="__actions" sort={approvalSort} onToggle={toggleApprovalSort} notSortable className="actions-center" style={{ width: '15%', whiteSpace: 'nowrap' }} />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {displayedRows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                      No requests match your search.
+                    </td>
+                  </tr>
+                )}
+                {displayedRows.map((r) => {
                   const isHrLeave = r.requester_is_hr;
                   const canApproveThis = statusFilter === "PENDING" && (
                     (isAdmin && isHrLeave) ||

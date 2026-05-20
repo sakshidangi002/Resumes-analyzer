@@ -5,6 +5,7 @@ import CustomSelect from "../components/CustomSelect";
 import MonthlyAttendanceGrid from "../components/MonthlyAttendanceGrid";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { SectionLoader } from "../components/LoadingState";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 interface AttendanceRow {
   id: number;
@@ -133,7 +134,9 @@ export default function Attendance() {
     }
 
     const listPromise = api.list(from, to, eid);
-    const empsPromise = isHrOrAdmin ? employeesApi.list() : Promise.resolve({ data: [] });
+    const empsPromise = isHrOrAdmin
+      ? employeesApi.list({ status: "Active" })
+      : Promise.resolve({ data: [] });
 
     Promise.allSettled([listPromise, empsPromise])
       .then(([attResult, empsResult]) => {
@@ -285,6 +288,31 @@ export default function Attendance() {
     return acc;
   }, { present: 0, absent: 0 });
 
+  type AttendanceCombined = (typeof employeeRows)[number];
+  const effectiveStatus = (row: AttendanceCombined) => row.rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
+
+  const {
+    displayed: displayedEmployeeRows,
+    search: attendanceSearch,
+    setSearch: setAttendanceSearch,
+    sort: attendanceSort,
+    toggleSort: toggleAttendanceSort,
+    clearAll: clearAttendanceControls,
+    hasActiveControls: attendanceHasActive,
+  } = useTableControls<AttendanceCombined>({
+    rows: employeeRows,
+    columns: {
+      member: (r) => `${r.info.first_name} ${r.info.last_name}`,
+      sign_in_time: (r) => r.rec?.sign_in_time || "",
+      sign_out_time: (r) => r.rec?.sign_out_time || "",
+      required: (r) => r.info.expected_working_hours || 9,
+      working_hours: (r) => Number(r.rec?.total_work_hours ?? 0),
+      status: (r) => effectiveStatus(r),
+    },
+    searchableText: (r) =>
+      `${r.info.employee_code} ${r.info.first_name} ${r.info.last_name} ${effectiveStatus(r)}`,
+  });
+
   return (
     <>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -364,27 +392,25 @@ export default function Attendance() {
           </div>
         </div>
 
+        <TableToolbar
+          search={attendanceSearch}
+          onSearchChange={setAttendanceSearch}
+          placeholder="Search by name, code, status..."
+          showClear={attendanceHasActive}
+          onClear={clearAttendanceControls}
+          count={{ shown: displayedEmployeeRows.length, total: employeeRows.length }}
+        />
         <div className="table-wrap table-wrap--dark">
           <table className="table-modern table-modern--dark">
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>Member</th>
-                <th style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>Time In</div>
-                </th>
-                <th style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>Time Out</div>
-                </th>
-                <th style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>Required Time</div>
-                </th>
-                <th style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>Working Hours</div>
-                </th>
-                <th style={{ textAlign: 'center' }}>Status</th>
-                <th style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>Actions</div>
-                </th>
+                <SortableHeader label="Member" columnKey="member" sort={attendanceSort} onToggle={toggleAttendanceSort} style={{ paddingLeft: '1.5rem' }} />
+                <SortableHeader label="Time In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Time Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Required Time" columnKey="required" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Working Hours" columnKey="working_hours" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Status" columnKey="status" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Actions" columnKey="__actions" sort={attendanceSort} onToggle={toggleAttendanceSort} notSortable align="center" />
               </tr>
             </thead>
             <tbody>
@@ -394,8 +420,14 @@ export default function Attendance() {
                     <SectionLoader size="md" />
                   </td>
                 </tr>
+              ) : displayedEmployeeRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                    No attendance rows match your search.
+                  </td>
+                </tr>
               ) : (
-                employeeRows.map(({ info, rec }) => {
+                displayedEmployeeRows.map(({ info, rec }) => {
                   const rawStatus = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
 
                   // If DB says ABSENT but employee has actual working hours recorded,

@@ -6,6 +6,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import CustomSelect from "../components/CustomSelect";
+import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
 
 interface Emp {
   id: number;
@@ -22,12 +23,15 @@ interface Emp {
   reporting_manager_id?: number;
   employment_status: string;
   date_of_birth?: string;
+  date_of_marriage?: string | null;
+  marital_status?: string | null;
   date_of_leaving?: string | null;
   expected_working_hours: number;
 }
 
 const EMPLOYMENT_TYPES = ["Full-time", "Intern", "Contract"];
 const EMPLOYMENT_STATUSES = ["Active", "Resigned", "Terminated"];
+const MARITAL_STATUSES = ["Single", "Married", "Divorced", "Widowed"];
 
 const emptyForm = (): Record<string, string | number | undefined> => ({
   employee_code: "",
@@ -42,6 +46,8 @@ const emptyForm = (): Record<string, string | number | undefined> => ({
   employment_type: "Full-time",
   employment_status: "Active",
   date_of_birth: "",
+  date_of_marriage: "",
+  marital_status: "",
   date_of_leaving: "",
   expected_working_hours: 9.0,
   login_username: "",
@@ -131,6 +137,31 @@ export default function Employees() {
     void load();
   }, [filterDept, filterStatus]);
 
+  const deptName = (id?: number) => departments.find((d) => d.id === id)?.name || "";
+
+  const {
+    displayed: displayedList,
+    search,
+    setSearch,
+    sort,
+    toggleSort,
+    clearAll,
+    hasActiveControls,
+  } = useTableControls<Emp>({
+    rows: list,
+    columns: {
+      employee_code: (e) => e.employee_code,
+      name: (e) => `${e.first_name} ${e.last_name}`,
+      official_email: (e) => e.official_email,
+      department: (e) => deptName(e.department_id),
+      date_of_joining: (e) => e.date_of_joining,
+      date_of_leaving: (e) => e.date_of_leaving || "",
+      employment_status: (e) => e.employment_status,
+    },
+    searchableText: (e) =>
+      `${e.employee_code} ${e.first_name} ${e.last_name} ${e.official_email} ${deptName(e.department_id)} ${e.employment_status}`,
+  });
+
   const openAdd = async () => {
     setError("");
     setSuccess("");
@@ -175,6 +206,8 @@ export default function Employees() {
       employment_type: form.employment_type,
       employment_status: form.employment_status,
       date_of_birth: form.date_of_birth || null,
+      date_of_marriage: form.date_of_marriage || null,
+      marital_status: form.marital_status || null,
       date_of_leaving: form.date_of_leaving || null,
       expected_working_hours: Number(form.expected_working_hours) || 9.0,
     };
@@ -254,39 +287,51 @@ export default function Employees() {
       {success && <div className="alert alert-success">{success}</div>}
       {error && <div className="alert alert-error">{error}</div>}
       <div className="card">
-        <div style={{ display: "flex", gap: "1rem", marginBottom: "1.5rem", flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div className="form-group" style={{ marginBottom: 0, minWidth: "180px" }}>
-            <label>Department</label>
-            <CustomSelect
-              value={filterDept}
-              onChange={setFilterDept}
-              placeholder="All Departments"
-              options={[
-                { value: "", label: "All Departments" },
-                ...departments.map((d) => ({ value: String(d.id), label: d.name }))
-              ]}
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0, minWidth: "180px" }}>
-            <label>Status</label>
-            <CustomSelect
-              value={filterStatus}
-              onChange={setFilterStatus}
-              placeholder="All Status"
-              options={[
-                { value: "", label: "All Status" },
-                ...EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: s }))
-              ]}
-            />
-          </div>
-          {canEdit && (
-            <div style={{ marginLeft: "auto" }}>
+        <TableToolbar
+          search={search}
+          onSearchChange={setSearch}
+          placeholder="Search employees (name, code, email, department)..."
+          showClear={hasActiveControls || !!filterDept || !!filterStatus}
+          onClear={() => {
+            clearAll();
+            setFilterDept("");
+            setFilterStatus("");
+          }}
+          count={{ shown: displayedList.length, total: list.length }}
+          leftControls={
+            <>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: "180px" }}>
+                <CustomSelect
+                  value={filterDept}
+                  onChange={setFilterDept}
+                  placeholder="All Departments"
+                  options={[
+                    { value: "", label: "All Departments" },
+                    ...departments.map((d) => ({ value: String(d.id), label: d.name }))
+                  ]}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: "160px" }}>
+                <CustomSelect
+                  value={filterStatus}
+                  onChange={setFilterStatus}
+                  placeholder="All Status"
+                  options={[
+                    { value: "", label: "All Status" },
+                    ...EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: s }))
+                  ]}
+                />
+              </div>
+            </>
+          }
+          rightControls={
+            canEdit ? (
               <button type="button" className="btn btn-primary" onClick={openAdd} title="Add New Employee" style={{ height: "42px", minWidth: "140px" }}>
                 Add Employee
               </button>
-            </div>
-          )}
-        </div>
+            ) : null
+          }
+        />
         {loading ? (
           <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
         ) : list.length === 0 ? (
@@ -297,36 +342,55 @@ export default function Employees() {
               <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                 <colgroup>
                   <col style={{ width: '80px' }} />
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '20%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '130px' }} />
+                  <col style={{ width: '130px' }} />
                   <col style={{ width: '110px' }} />
                   {canEdit && <col style={{ width: '120px' }} />}
                 </colgroup>
                 <thead>
                   <tr>
-                    <th className="hide-md" style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>ID</th>
-                    <th style={{ textAlign: 'left' }}>Name</th>
-                    <th style={{ textAlign: 'left' }}>Email</th>
-                    <th className="hide-sm" style={{ textAlign: 'left' }}>Department</th>
-                    <th className="hide-md" style={{ textAlign: 'left' }}>DOJ</th>
-                    <th className="hide-sm" style={{ textAlign: 'left' }}>Status</th>
+                    <SortableHeader className="hide-md" label="ID" columnKey="employee_code" sort={sort} onToggle={toggleSort} style={{ paddingLeft: '1.5rem' }} />
+                    <SortableHeader label="Name" columnKey="name" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader label="Email" columnKey="official_email" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader className="hide-sm" label="Department" columnKey="department" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader className="hide-md" label="DOJ" columnKey="date_of_joining" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader className="hide-md" label="DOL" columnKey="date_of_leaving" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader className="hide-sm" label="Status" columnKey="employment_status" sort={sort} onToggle={toggleSort} />
                     {canEdit && (
-                      <th style={{ textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>Actions</div>
-                      </th>
+                      <SortableHeader label="Actions" columnKey="__actions" sort={sort} onToggle={toggleSort} align="center" notSortable />
                     )}
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((e) => (
-                    <tr key={e.id}>
+                  {displayedList.length === 0 ? (
+                    <tr>
+                      <td colSpan={canEdit ? 8 : 7} style={{ textAlign: 'center', padding: '1.5rem', opacity: 0.65 }}>
+                        No employees match your search / filters.
+                      </td>
+                    </tr>
+                  ) : null}
+                  {displayedList.map((e) => {
+                    const hasLeft = !!e.date_of_leaving;
+                    const rowStyle: React.CSSProperties = hasLeft
+                      ? {
+                          background: 'rgba(239, 68, 68, 0.08)',
+                          color: 'rgba(248, 113, 113, 0.95)',
+                        }
+                      : {};
+                    const dolText = e.date_of_leaving
+                      ? new Date(e.date_of_leaving).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                      : '-';
+                    return (
+                    <tr key={e.id} style={rowStyle} title={hasLeft ? `Employee left on ${dolText}` : undefined}>
                       <td className="hide-md" style={{ textAlign: 'left', paddingLeft: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.employee_code}</td>
                       <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.first_name} {e.last_name}</td>
                       <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.official_email}</td>
                       <td className="hide-sm" style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
                       <td className="hide-md" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{e.date_of_joining ? new Date(e.date_of_joining).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' }) : "-"}</td>
+                      <td className="hide-md" style={{ textAlign: 'left', whiteSpace: 'nowrap', fontWeight: hasLeft ? 600 : 400 }}>{dolText}</td>
                       <td className="hide-sm" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{e.employment_status}</td>
                       {canEdit && (
                         <td style={{ textAlign: 'center' }}>
@@ -353,7 +417,8 @@ export default function Employees() {
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -427,15 +492,59 @@ export default function Employees() {
                   <input type="date" value={form.date_of_birth} max={maxDobDate} onChange={(e) => setField("date_of_birth", e.target.value)} required />
                 </div>
                 <div className="form-group">
-                  <label>Date of leaving</label>
-                  <input type="date" value={form.date_of_leaving} onChange={(e) => setField("date_of_leaving", e.target.value)} />
+                  <label>Marital Status</label>
+                  <CustomSelect
+                    value={String(form.marital_status || "")}
+                    onChange={(val) => {
+                      setField("marital_status", val);
+                      if (val !== "Married") {
+                        setField("date_of_marriage", "");
+                      }
+                    }}
+                    placeholder="Select Marital Status"
+                    options={[
+                      { value: "", label: "Select Marital Status" },
+                      ...MARITAL_STATUSES.map((s) => ({ value: s, label: s })),
+                    ]}
+                  />
                 </div>
                 <div className="form-group">
-                  <label>Employment Status *</label>
+                  <label>Date of Marriage</label>
+                  <input
+                    type="date"
+                    value={form.date_of_marriage}
+                    onChange={(e) => setField("date_of_marriage", e.target.value)}
+                    disabled={form.marital_status !== "Married"}
+                    title={form.marital_status !== "Married" ? "Available only when Marital Status is Married" : undefined}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Date of leaving</label>
+                  <input
+                    type="date"
+                    value={form.date_of_leaving}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setField("date_of_leaving", val);
+                      if (val) {
+                        if (String(form.employment_status || "") === "Active") {
+                          setField("employment_status", "Resigned");
+                        }
+                      } else {
+                        setField("employment_status", "Active");
+                      }
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{form.date_of_leaving ? "Reason for leaving *" : "Employment Status *"}</label>
                   <CustomSelect
                     value={String(form.employment_status || "")}
                     onChange={(val) => setField("employment_status", val)}
-                    options={EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: s }))}
+                    options={(form.date_of_leaving
+                      ? ["Resigned", "Terminated"]
+                      : EMPLOYMENT_STATUSES
+                    ).map((s) => ({ value: s, label: s }))}
                   />
                 </div>
                 <div className="form-group">

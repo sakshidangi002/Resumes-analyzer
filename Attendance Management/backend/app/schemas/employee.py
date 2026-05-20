@@ -82,6 +82,8 @@ class EmployeeCreate(BaseModel):
     reporting_manager_id: Optional[int] = None
     employment_status: str = "Active"
     date_of_birth: Optional[date] = None
+    date_of_marriage: Optional[date] = None
+    marital_status: Optional[str] = None
     date_of_leaving: Optional[date] = None
     expected_working_hours: float = 9.0
     pan_number: Optional[str] = None
@@ -107,6 +109,8 @@ class EmployeeUpdate(BaseModel):
     reporting_manager_id: Optional[int] = None
     employment_status: Optional[str] = None
     date_of_birth: Optional[date] = None
+    date_of_marriage: Optional[date] = None
+    marital_status: Optional[str] = None
     date_of_leaving: Optional[date] = None
     expected_working_hours: Optional[float] = None
     pan_number: Optional[str] = None
@@ -132,6 +136,8 @@ class EmployeeResponse(BaseModel):
     reporting_manager_id: Optional[int] = None
     employment_status: str
     date_of_birth: Optional[date] = None
+    date_of_marriage: Optional[date] = None
+    marital_status: Optional[str] = None
     date_of_leaving: Optional[date] = None
     expected_working_hours: float
     pan_number: Optional[str] = None

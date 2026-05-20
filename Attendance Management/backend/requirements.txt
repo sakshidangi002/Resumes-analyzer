@@ -24,7 +24,10 @@ tomli; python_version < "3.11"
 
 # Reports
 openpyxl>=3.1.0
-# Optional: weasyprint or pdfkit for PDF export
+
+# PDF generation (used for letter email attachments). Pure-Python, no native deps.
+fpdf2>=2.8.0
+beautifulsoup4>=4.12.0
 
 # Utils
 python-dotenv>=1.0.0

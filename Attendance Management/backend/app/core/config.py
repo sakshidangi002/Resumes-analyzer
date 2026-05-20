@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@company.com"
     smtp_from_name: str = "HRMS"
 
+    # Comma-separated address(es) that receive HR-bound notifications
+    # (e.g. "new leave request"). If empty, falls back to all users with the
+    # HR role in the database.
+    hr_notification_email: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

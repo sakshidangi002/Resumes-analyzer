@@ -1,6 +1,9 @@
 """Send notifications via SMTP; log to EmailLog."""
+from typing import Optional, Sequence
+
 from sqlalchemy.orm import Session
-from app.core.email_smtp import send_email
+
+from app.core.email_smtp import send_email, Attachment
 from app.models import EmailLog
 
 
@@ -14,8 +17,21 @@ def send_notification(
     related_entity_id: str | None = None,
     from_email: str | None = None,
     from_name: str | None = None,
+    attachments: Optional[Sequence[Attachment]] = None,
+    reply_to: str | None = None,
+    reply_to_name: str | None = None,
 ) -> tuple[bool, str | None]:
-    success, err = send_email(to_email, subject, body_html, body_plain=None, from_email=from_email, from_name=from_name)
+    success, err = send_email(
+        to_email,
+        subject,
+        body_html,
+        body_plain=None,
+        from_email=from_email,
+        from_name=from_name,
+        attachments=attachments,
+        reply_to=reply_to,
+        reply_to_name=reply_to_name,
+    )
     log = EmailLog(
         to_email=to_email,
         subject=subject,

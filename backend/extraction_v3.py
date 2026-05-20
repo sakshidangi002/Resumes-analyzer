@@ -33,13 +33,49 @@ def normalize_multi_column(text: str) -> str:
     for ln in normalized_lines:
         if not ln:
             blank_count += 1
-            if blank_count <= 2:  # allow up to 2 consecutive blank lines to preserve structure
+            if blank_count <= 2:
                 result.append("")
         else:
             blank_count = 0
-            result.append(ln)
+            # Fix mid-word spurious spaces (PDF ligature artifact): "Progra mming" -> "Programming"
+            # Only join when: lowercase letters [a-z] on both sides of a single space,
+            # AND neither fragment is a standalone real word longer than 1 char
+            # We target short fragments (< 7 chars) followed by more lowercase chars
+            fixed = re.sub(r'([a-z]{2,6}) ([a-z]{2,6})\b', lambda m: _try_join_broken_word(m), ln)
+            result.append(fixed)
             
     return "\n".join(result).strip()
+
+
+def _try_join_broken_word(m: re.Match) -> str:
+    """
+    Heuristically join two lowercase fragments if they look like a broken word.
+    E.g. 'Progra mming' -> we detect 'progra' + 'mming' don't form real words alone
+    but together 'programming' is valid. Simple check: reject if either piece ends 
+    in a common English word suffix that makes it standalone.
+    """
+    left = m.group(1)
+    right = m.group(2)
+    # Common standalone short words to NOT merge
+    standalone = {
+        "in", "an", "of", "to", "at", "by", "or", "as", "is", "it",
+        "be", "on", "up", "no", "so", "do", "go", "my", "we", "us",
+        "for", "the", "and", "are", "but", "not", "was", "has", "had",
+        "its", "can", "may", "one", "two", "our", "via", "per", "age",
+        "data", "open", "free", "code", "core", "base", "word", "work",
+        "from", "with", "this", "that", "well", "also", "into", "java",
+        "html", "node", "next", "nest", "pipe", "time", "mail", "user",
+    }
+    if left.lower() in standalone or right.lower() in standalone:
+        return m.group(0)  # don't merge standalone words
+    # If right fragment starts with a non-word-start pattern (like 'mming', 'tion', 'ing', 'ment')
+    broken_suffixes = ('ing', 'ion', 'ment', 'tion', 'ness', 'ance', 'ence', 'ity',
+                       'ive', 'ful', 'less', 'ble', 'age', 'ure', 'ous')
+    if right.lower().startswith(('mm', 'nd', 'tt', 'ss', 'pp', 'll', 'rr', 'cc')) or \
+       right.lower() in [s.lstrip('aeiou') for s in broken_suffixes] or \
+       any(right.lower().startswith(suf) for suf in ('mming', 'tion', 'ning', 'ring', 'ling', 'king')):
+        return left + right  # merge the fragments
+    return m.group(0)  # keep as-is
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +95,30 @@ def split_resume_sections(text: str) -> dict:
     
     # Heuristic section headers mapping
     header_patterns = {
-        "skills": r"^(skills|technical skills|technologies|tools\s*&?\s*technologies|core competencies|expertise|tech stack)\b",
         "experience": r"^(experience|work experience|professional experience|employment history|work history)\b",
         "education": r"^(education|academic background|academics|qualifications)\b",
         "projects": r"^(projects|project experience|personal projects|academic projects)\b"
     }
+
+    def is_skills_header(line_clean):
+        norm = re.sub(r"[^a-z0-9 ]+", " ", line_clean.lower()).strip()
+        if not norm:
+            return False
+        known = {
+            "skills", "technical skills", "tech skills", "key skills", "core competencies",
+            "skill set", "skillset", "tech stack", "technology stack", "technologies",
+            "tools", "tools technologies", "tools and technologies", "expertise",
+            "technical expertise", "areas of expertise", "professional skills", "key hr skills", "hr skills",
+            "core strengths", "it skills", "technical skill set", "skills summary",
+            "key competencies", "technical competencies", "relevant skills",
+            "technical proficiencies", "proficiencies", "technical capabilities",
+        }
+        if norm in known:
+            return True
+        if "skills" in norm or "competencies" in norm or "proficiencies" in norm or "technologies" in norm:
+            if not any(bad in norm for bad in ("experience", "education", "history", "objective", "summary", "profile", "projects")):
+                return True
+        return False
 
     current_section = None
     section_content = {k: [] for k in sections.keys()}
@@ -76,10 +131,13 @@ def split_resume_sections(text: str) -> dict:
         # Check if line matches any section header
         matched_section = None
         if len(clean_line) < 40: # headers are usually short
-            for section, pattern in header_patterns.items():
-                if re.match(pattern, clean_line):
-                    matched_section = section
-                    break
+            if is_skills_header(clean_line):
+                matched_section = "skills"
+            else:
+                for section, pattern in header_patterns.items():
+                    if re.match(pattern, clean_line):
+                        matched_section = section
+                        break
         
         if matched_section:
             current_section = matched_section
@@ -194,13 +252,14 @@ def extract_deterministic_name(text: str) -> str:
 # ---------------------------------------------------------------------------
 def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab: set) -> list[str]:
     """
-    Section-first skill extraction matching against pre-defined vocab.
-    Filters out weak phrases (e.g. "familiar with").
+    Section-first skill extraction. 
+    If a dedicated skills section is found, explicitly extracts everything listed in it.
+    Otherwise, falls back to vocabulary-matching tech keywords in the full text.
     """
     extracted_skills = []
     weak_phrases = {"familiar with", "basic knowledge", "exposure to", "worked on", "understanding of"}
     
-    def process_text(text):
+    def process_text_vocab(text):
         words = re.split(r"[,\n|•\u2022;]+", text.lower())
         skills = []
         for word in words:
@@ -208,29 +267,87 @@ def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab
             if any(phrase in word for phrase in weak_phrases):
                 continue
             
-            # Use whole word matching for each tech_vocab skill
             for skill in tech_vocab:
-                if len(skill) <= 2:
-                    # Strict for C, R, TS -> wait actually use regex word boundaries
-                    if re.search(rf"(?<![a-z0-9.]){re.escape(skill)}(?![a-z0-9.])", word):
-                        skills.append(skill)
-                elif skill in word:
-                    # Avoid substring overlap for very short ones, but usually acceptable
+                pattern = rf"(?<![a-z0-9.]){re.escape(skill)}(?![a-z0-9.])"
+                if re.search(pattern, word):
                     skills.append(skill)
         return skills
+
+    def process_section_explicitly(section_text: str) -> list[str]:
+        # First, join PDF-broken words (e.g., "Progra\nmming" or "Progra mming" -> "Programming")
+        # These appear when PDF parsers split a single word across lines or insert spurious spaces.
+        # Strategy: join lines that end with a lowercase fragment (no punctuation)
+        # Step 1: Rejoin broken hyphenated words (e.g. "Pro-\ngramming")
+        section_text = re.sub(r"-\n(\S)", r"\1", section_text)
+
+        raw_lines = section_text.splitlines()
+        skills = []
+
+        for raw_line in raw_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            # Strip leading bullet/dash/star decorators
+            line = re.sub(r"^[-•\u2022\uFFFD\s*+►▪]+", "", line).strip()
+            if not line:
+                continue
+
+            line_low = line.lower()
+
+            # Skip lines that are purely the section header itself
+            if any(h == line_low for h in ("skills", "technologies", "proficiencies", "competencies", "tools")):
+                continue
+            if any(phrase in line_low for phrase in weak_phrases):
+                continue
+
+            # Detect "Category Label: skill1, skill2, ..." pattern
+            # e.g. "Computer Vision: OpenCV, MediaPipe" or "Programming Languages: Python, HTML"
+            colon_match = re.match(r"^([^:]{2,40}):\s*(.+)$", line)
+            if colon_match:
+                # The part after the colon contains the actual skills
+                skills_part = colon_match.group(2).strip()
+                # Split the skills part by comma
+                for s in re.split(r",\s*", skills_part):
+                    s = s.strip()
+                    if s and 2 <= len(s) <= 65 and s.lower() not in weak_phrases:
+                        skills.append(s)
+                continue
+
+            # Plain line - could be "Python, MySQL, Excel" or just "Teamwork"
+            # Split on commas only if the line looks like a list
+            if "," in line:
+                parts = [p.strip() for p in line.split(",")]
+                for p in parts:
+                    if p and 2 <= len(p) <= 65 and p.lower() not in weak_phrases:
+                        skills.append(p)
+            else:
+                # Single skill or multi-word skill on its own line
+                if 2 <= len(line) <= 65:
+                    skills.append(line)
+
+        return skills
     
-    if skills_section:
-        extracted_skills.extend(process_text(skills_section))
-    
-    # Only fallback to full text if section yielded nothing
-    if not extracted_skills:
-        extracted_skills.extend(process_text(full_text))
+    if skills_section and skills_section != full_text:
+        # First, try to explicitly extract everything in the skills section
+        explicit = process_section_explicitly(skills_section)
+        if explicit:
+            extracted_skills.extend(explicit)
+        else:
+            # Fallback to vocab matching inside section only (never full document)
+            extracted_skills.extend(process_text_vocab(skills_section))
         
-    # Format identically
+    # Format & Deduplicate
     final_skills = []
     seen = set()
     for s in extracted_skills:
-        norm = s.title() if len(s)>3 else s.upper() # basic
+        # If it's a short technical acronym, uppercase it; otherwise, title-case or preserve case
+        if len(s) <= 3:
+            norm = s.upper()
+        else:
+            # Title case if it doesn't already contain camelCase or mixed case
+            norm = s.title() if s.islower() or s.isupper() else s
+            
         if norm.lower() not in seen:
             seen.add(norm.lower())
             final_skills.append(norm)
@@ -288,6 +405,45 @@ def _name_confidence_from_header(text: str, name: str) -> float:
     return 0.75
 
 
+def extract_explicit_experience(text: str) -> float:
+    if not text:
+        return 0.0
+
+    text_low = text.lower()
+    month_values: list[int] = []
+    seen_months: set[int] = set()
+
+    # 1. Look for month mentions: (\d+)\s*months?
+    # Repeated resumes often mention the same duration in both the summary and
+    # the role heading. Count each distinct duration only once to avoid
+    # inflating "11 months" into "22 months".
+    for m in re.finditer(r"(\d+)\s*(?:months?|mos?)\b", text_low):
+        val = int(m.group(1))
+        if 0 < val < 120 and val not in seen_months:
+            seen_months.add(val)
+            month_values.append(val)
+
+    if month_values:
+        return round(sum(month_values) / 12.0, 2)
+
+    # 2. Look for year mentions: (\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b
+    year_values: list[float] = []
+    seen_years: set[float] = set()
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b", text_low):
+        val = float(m.group(1))
+        if 0 < val < 40 and val not in seen_years:
+            seen_years.add(val)
+            year_values.append(val)
+
+    if year_values:
+        # Convert distinct year mentions once each. This keeps repeated summary
+        # text from inflating the estimate while still allowing multiple
+        # different year durations to contribute.
+        return round(sum(year_values), 2)
+
+    return 0.0
+
+
 def deterministic_extract_pipeline(text: str, tech_vocab: set | None = None) -> dict:
     """
     Deterministic resume extraction used as a fallback/override for noisy PDFs.
@@ -303,14 +459,18 @@ def deterministic_extract_pipeline(text: str, tech_vocab: set | None = None) -> 
     vocab.update(_build_creative_skill_vocab())
 
     skills_section = sections.get("skills", "") or ""
+    # Skills are extracted only from the dedicated skills section (no full-text scan).
     skills = extract_skills_deterministic(skills_section, text, vocab)
-    if not skills:
-        # Use the full text as a fallback so resumes without a dedicated SKILLS
-        # header still produce a usable tool list.
-        skills = extract_skills_deterministic(text, text, vocab)
 
     experience_text = sections.get("experience", "") or sections.get("projects", "")
     experience_years = extract_experience_years(experience_text)
+    if experience_years == 0.0:
+        # Prefer the dedicated experience block so a summary mention and the
+        # role heading don't get counted twice. Fall back to the full document
+        # only if the section itself doesn't contain an explicit duration.
+        experience_years = extract_explicit_experience(experience_text)
+    if experience_years == 0.0:
+        experience_years = extract_explicit_experience(text)
 
     return {
         "name": name,

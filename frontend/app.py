@@ -11,8 +11,61 @@ import requests
 import streamlit as st
 from sqlalchemy import create_engine, text
 
-# Backend base URL. Override via environment for LAN access (e.g. http://192.168.29.235:8501)
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8501").rstrip("/")
+# Backend base URL. Override via environment for LAN access (e.g. http://192.168.29.235:8001)
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8001").rstrip("/")
+
+# Handle query params across Streamlit versions
+def _get_token_from_query_params():
+    try:
+        return st.query_params.get("token") or ""
+    except AttributeError:
+        try:
+            params = st.experimental_get_query_params()
+            if "token" in params and params["token"]:
+                return params["token"][0]
+        except Exception:
+            pass
+    return ""
+
+if "token" not in st.session_state:
+    st.session_state["token"] = _get_token_from_query_params()
+
+q_token = _get_token_from_query_params()
+if q_token and q_token != st.session_state["token"]:
+    st.session_state["token"] = q_token
+
+token = st.session_state["token"]
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:root@localhost:5432/Resume_analyzer",
+)
+engine_auth = create_engine(DATABASE_URL)
+
+is_authorized = False
+if token:
+    try:
+        from jose import jwt
+        SECRET_KEY = "abc2025"
+        ALGORITHM = "HS256"
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id:
+            with engine_auth.connect() as conn:
+                res_roles = conn.execute(text(
+                    "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = :uid"
+                ), {"uid": int(user_id)}).fetchall()
+                roles = [row[0] for row in res_roles]
+                if any(role in roles for role in ["Admin", "HR"]):
+                    is_authorized = True
+    except Exception:
+        pass
+
+if not is_authorized:
+    st.set_page_config(page_title="Access Denied", layout="wide")
+    st.error("🔒 Access Denied: Admin or HR permissions required.")
+    st.warning("Please access the Resume Analyzer through the authorized links in the HRMS Portal.")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,12 +98,18 @@ def _name_only(name: object) -> str:
 
 def _format_years_to_duration(exp_years: object) -> str:
     try:
-        y = float(exp_years or 0.0)
+        if isinstance(exp_years, str):
+            m = re.search(r"([0-9]+(?:\.[0-9]+)?)", exp_years)
+            y = float(m.group(1)) if m else 0.0
+        else:
+            y = float(exp_years or 0.0)
     except Exception:
         y = 0.0
     if y <= 0:
         return "Not specified"
-    total_months = int(round(y * 12))
+    # Keep fractional experience readable for the table. A half-year becomes
+    # "6 months" instead of displaying the raw decimal year value.
+    total_months = max(1, int(round(y * 12)))
     yrs, mos = divmod(total_months, 12)
     parts: list[str] = []
     if yrs:
@@ -58,6 +117,11 @@ def _format_years_to_duration(exp_years: object) -> str:
     if mos:
         parts.append(f"{mos} month{'s' if mos != 1 else ''}")
     return " ".join(parts)
+
+
+def _resume_detail_url(resume_id: str) -> str:
+    """Relative deep-link into the Streamlit UI for a candidate detail page."""
+    return f"?view=resume&resume_id={resume_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -282,17 +346,30 @@ def _view_skills_dialog_body(resume_id: str) -> None:
             st.rerun()
         return
 
-    # Prefer backend-classified primary/other skills when available
+    def _merge_all_skills(resume_dict: dict) -> list[str]:
+        """Combine skills, primary_skills, other_skills, key_skills (no limit)."""
+        buckets: list = []
+        for key in ("skills", "primary_skills", "other_skills", "key_skills"):
+            val = resume_dict.get(key) or []
+            if isinstance(val, list):
+                buckets.extend(val)
+            elif val:
+                buckets.extend([s.strip() for s in str(val).split(",") if s.strip()])
+        return buckets
+
+    all_raw = _merge_all_skills(resume)
     primary = resume.get("primary_skills") or resume.get("key_skills") or []
     if not isinstance(primary, list):
         primary = [s.strip() for s in str(primary).split(",") if s.strip()]
 
-    # Backend may already send other_skills; otherwise, derive from full skills list
-    other = resume.get("other_skills") or resume.get("skills") or []
+    other = resume.get("other_skills") or []
     if not isinstance(other, list):
         other = [s.strip() for s in str(other).split(",") if s.strip()]
+    if not other:
+        other = [s for s in (resume.get("skills") or []) if isinstance(resume.get("skills"), list)]
+        if not other and resume.get("skills"):
+            other = [s.strip() for s in str(resume.get("skills")).split(",") if s.strip()]
 
-    # Normalise + de-duplicate, enforce exactly "top 5" primary skills from backend ordering
     def _clean_list(items: list[str], candidate_name: str = "") -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
@@ -309,19 +386,30 @@ def _view_skills_dialog_body(resume_id: str) -> None:
             if key in name_parts:
                 continue
             # Filter out common noise
-            if key in {"candidate", "resume", "curriculum", "vitae", "name", "contact"}:
+            if key in {
+                "candidate", "resume", "curriculum", "vitae", "name", "contact",
+                "deployment", "support", "maintenance", "troubleshooting", "documentation",
+                "communication", "collaboration", "leadership", "teamwork", "applications",
+                "application", "professional", "experience", "summary", "objective", "profile",
+                "email", "phone", "location", "vs", "code",
+            }:
                 continue
 
             seen.add(key)
             out.append(s)
         return out
 
-    primary = _clean_list(primary, resume.get("name") or "")[:5]
+    all_skills = _clean_list(all_raw or _merge_all_skills(resume), resume.get("name") or "")
+    primary = _clean_list(primary, resume.get("name") or "")
     other = _clean_list(other, resume.get("name") or "")
-
-    # Ensure other skills do not repeat primary skills
-    primary_norm = {s.lower() for s in primary}
-    other = [s for s in other if s.lower() not in primary_norm]
+    if not all_skills:
+        primary_norm = {s.lower() for s in primary}
+        all_skills = primary + [s for s in other if s.lower() not in primary_norm]
+    else:
+        primary_norm = {s.lower() for s in primary}
+        other = [s for s in all_skills if s.lower() not in primary_norm]
+        if not primary:
+            primary = all_skills[:5]
 
     # When Streamlit supports dialogs, this function is rendered inside the native modal.
     # In that case, do NOT inject a second fixed-position modal overlay (it breaks layout).
@@ -345,10 +433,7 @@ def _view_skills_dialog_body(resume_id: str) -> None:
     )
 
     st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
-    st.markdown(_render_skill_chips_html("Primary Skills", "⭐", primary[:25]), unsafe_allow_html=True)
-    st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
-    st.markdown(_render_skill_chips_html("Other Skills", "🧰", other[:50]), unsafe_allow_html=True)
-    st.markdown("<div class='skills-divider'></div>", unsafe_allow_html=True)
+    st.markdown(_render_skill_chips_html(f"All Skills ({len(all_skills)})", "🧰", all_skills), unsafe_allow_html=True)
 
     # Added a standard button for manual closure; when using st.dialog, rerun cleans up state.
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -429,31 +514,37 @@ def _render_skills_modal_if_open() -> None:
             st.rerun()
         return
 
-    primary = resume.get("primary_skills") or resume.get("key_skills") or []
-    if not isinstance(primary, list):
-        primary = [s.strip() for s in str(primary).split(",") if s.strip()]
+    def _merge_all_skills_modal(resume_dict: dict) -> list[str]:
+        buckets: list = []
+        for key in ("skills", "primary_skills", "other_skills", "key_skills"):
+            val = resume_dict.get(key) or []
+            if isinstance(val, list):
+                buckets.extend(val)
+            elif val:
+                buckets.extend([s.strip() for s in str(val).split(",") if s.strip()])
+        return buckets
 
-    other = resume.get("other_skills") or resume.get("skills") or []
-    if not isinstance(other, list):
-        other = [s.strip() for s in str(other).split(",") if s.strip()]
-
-    # Basic cleanup / de-dupe
-    def _clean_list(items: list[str]) -> list[str]:
+    def _clean_list_modal(items: list[str]) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
+        noise = {
+            "deployment", "support", "maintenance", "troubleshooting", "documentation",
+            "communication", "collaboration", "leadership", "teamwork", "applications",
+            "application", "professional", "experience", "summary", "objective", "profile",
+            "email", "phone", "location", "vs", "code", "contact", "name", "candidate",
+        }
         for raw in items:
             s = str(raw).strip()
             if not s:
                 continue
             key = s.lower()
-            if key in seen:
+            if key in seen or key in noise:
                 continue
             seen.add(key)
             out.append(s)
         return out
 
-    primary = _clean_list(primary)[:5]
-    other = [s for s in _clean_list(other) if s.lower() not in {x.lower() for x in primary}]
+    all_skills_modal = _clean_list_modal(_merge_all_skills_modal(resume))
 
     sidebar_hidden = bool(st.session_state.get("sidebar_hidden"))
     modal_left = "50%" if sidebar_hidden else "56%"
@@ -530,11 +621,8 @@ def _render_skills_modal_if_open() -> None:
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="skills-divider"></div>', unsafe_allow_html=True)
-        primary_html = _render_skill_chips_html("Primary Skills", "⭐", primary[:25])
-        other_html = _render_skill_chips_html("Other Skills", "🧰", other[:60])
-        st.markdown(primary_html, unsafe_allow_html=True)
-        st.markdown('<div class="skills-divider"></div>', unsafe_allow_html=True)
-        st.markdown(other_html, unsafe_allow_html=True)
+        all_html = _render_skill_chips_html(f"All Skills ({len(all_skills_modal)})", "🧰", all_skills_modal)
+        st.markdown(all_html, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1208,6 +1296,7 @@ tabs = st.tabs([
     "Compare",
     "Chat (global)",
     "Resume Chat",
+    "Employee Skills",
     "Export",
 ])
 
@@ -2321,7 +2410,57 @@ with tabs[4]:
 
 
 # ---------------------------------------------------------------------------
+# Tab 5 — Employee Skills
+# ---------------------------------------------------------------------------
 with tabs[5]:
+    st.header("Employee Skills Registry")
+    st.markdown("View and search all skills extracted from employee resumes stored in the database.")
+    
+    # Search and filter input
+    search_q = st.text_input("🔍 Search by Employee Name or Skill Keyword", placeholder="e.g. John Doe, Python, React...", key="skills_search_input")
+    
+    # Fetch employee skills
+    try:
+        headers = {}
+        if st.session_state.get("token"):
+            headers["Authorization"] = f"Bearer {st.session_state['token']}"
+            
+        if search_q.strip():
+            api_res = requests.get(f"{API_URL}/employees/skills/search?query={search_q.strip()}", headers=headers)
+        else:
+            api_res = requests.get(f"{API_URL}/employees/skills", headers=headers)
+            
+        if api_res.status_code == 200:
+            skills_data = api_res.json()
+            if skills_data:
+                df_skills = pd.DataFrame(skills_data)
+                
+                def make_tags(skills_str):
+                    if not skills_str:
+                        return "No skills extracted"
+                    tags = [s.strip() for s in skills_str.split(",") if s.strip()]
+                    return ", ".join(tags)
+                    
+                df_skills["Skills"] = df_skills["skills"].apply(make_tags)
+                df_skills_display = df_skills[["full_name", "email", "Skills"]].rename(columns={
+                    "full_name": "Employee Name",
+                    "email": "Official Email",
+                    "Skills": "Extracted Skills"
+                })
+                
+                st.dataframe(df_skills_display, use_container_width=True, hide_index=True)
+            else:
+                st.info("No employee skills found matching your search.")
+        elif api_res.status_code in (401, 403):
+            st.error("🔒 Access Denied: You do not have permissions to view this section.")
+        else:
+            st.error(f"Error fetching skills: {api_res.text}")
+    except Exception as e:
+        st.error(f"Failed to connect to backend: {e}")
+
+
+# ---------------------------------------------------------------------------
+with tabs[6]:
     render_export_to_google_sheets_tab()
 
 # Render modal overlays LAST so buttons are visible and unique.

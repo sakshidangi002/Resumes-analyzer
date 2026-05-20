@@ -23,8 +23,140 @@ from app.services.leave_service import (
     _count_leave_days,
 )
 from app.services.notification_service import notify_user_for_employee, notify_users_with_roles
+from app.services.email_service import send_notification
+from app.core.config import get_settings
 from decimal import Decimal
 from datetime import date as _date
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _hr_notification_recipients(db: Session, requester_is_hr: bool) -> list[str]:
+    """
+    Decide which addresses receive HR-bound emails (e.g. new leave request).
+
+    Priority:
+      1) `HR_NOTIFICATION_EMAIL` from settings/.env (comma-separated list of addresses).
+         This is the recommended setup: a single mailbox (e.g. hr@company.com) gets
+         every notification, so you don't have to keep DB role assignments in sync
+         with who is allowed to receive HR mail.
+      2) Fallback: all users in the DB with the HR role (or Admin when the
+         requester themselves is HR).
+    """
+    settings = get_settings()
+    configured = (settings.hr_notification_email or "").strip()
+    if configured:
+        addrs = [a.strip() for a in configured.replace(";", ",").split(",") if a.strip()]
+        return addrs
+
+    target_roles = ["Admin"] if requester_is_hr else ["HR"]
+    return _emails_for_roles(db, target_roles)
+
+
+def _emails_for_roles(db: Session, role_names: list[str]) -> list[str]:
+    """Return distinct, non-empty email addresses for users that have ANY of the given roles."""
+    users = (
+        db.query(User)
+        .join(user_roles, User.id == user_roles.c.user_id)
+        .join(Role, Role.id == user_roles.c.role_id)
+        .filter(Role.name.in_(role_names))
+        .all()
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in users:
+        candidates: list[str] = []
+        if u.official_email:
+            candidates.append(u.official_email.strip())
+        if u.username and "@" in u.username:
+            candidates.append(u.username.strip())
+        if u.employee_id:
+            emp = db.query(Employee).filter(Employee.id == u.employee_id).first()
+            if emp and emp.official_email:
+                candidates.append(emp.official_email.strip())
+        for c in candidates:
+            if c and c.lower() not in seen:
+                seen.add(c.lower())
+                out.append(c)
+    return out
+
+
+def _send_leave_apply_email_to_hr(
+    db: Session,
+    requester_is_hr: bool,
+    employee,
+    employee_name: str,
+    leave_type_name: str,
+    start_date,
+    end_date,
+    is_half_day: bool,
+    reason: str,
+    requester_email: str | None,
+) -> None:
+    """
+    Best-effort: notify HR (or Admin when the requester is HR) that a leave
+    was applied. Renders the dashboard-style summary email. Never raises —
+    leave application must not fail because of an email problem.
+    """
+    try:
+        recipients = _hr_notification_recipients(db, requester_is_hr)
+        if not recipients:
+            logger.info("No HR notification recipients configured; skipping leave email.")
+            return
+
+        half_text = " (Half day)" if is_half_day else ""
+        reason_clean = (reason or "").strip().replace("\n", "<br>")
+        subject = f"Leave request from {employee_name} — {leave_type_name}"
+
+        employee_line = employee_name
+        if requester_email:
+            employee_line = (
+                f'{employee_name} &lt;<a href="mailto:{requester_email}" '
+                f'style="color:#1a73e8; text-decoration:none">{requester_email}</a>&gt;'
+            )
+
+        reply_hint = (
+            f'<p style="margin-top:14px"><em>Hit <strong>Reply</strong> '
+            f'to respond directly to {employee_name}.</em></p>'
+            if requester_email
+            else ""
+        )
+
+        body_html = f"""\
+<div style="font-family: Arial, sans-serif; color:#111; line-height:1.55">
+    <h2 style="margin:0 0 12px 0; color:#1a73e8;">New leave request</h2>
+    <p><strong>Employee:</strong> {employee_line}</p>
+    <p><strong>Leave type:</strong> {leave_type_name}{half_text}</p>
+    <p><strong>From:</strong> {start_date} &nbsp; <strong>To:</strong> {end_date}</p>
+    <p><strong>Reason:</strong><br>{reason_clean or '—'}</p>
+    {reply_hint}
+    <hr style="border:none; border-top:1px solid #eee; margin:18px 0">
+    <p style="font-size:12px; color:#666">
+        This request is pending in the HRMS. Open
+        <strong>Leave Approvals</strong> in the portal to approve or reject it.
+    </p>
+</div>"""
+
+        # Reply-To is always the employee so "Reply" composes directly to them,
+        # regardless of how Gmail handles the From-header rewrite.
+        for addr in recipients:
+            ok, err = send_notification(
+                db,
+                addr,
+                subject,
+                body_html,
+                template_code="LEAVE_APPLY",
+                related_entity_type="LeaveRequest",
+                from_email=requester_email or None,
+                from_name=employee_name or None,
+                reply_to=requester_email or None,
+                reply_to_name=employee_name or None,
+            )
+            if not ok:
+                logger.warning("Leave email to %s failed: %s", addr, err)
+    except Exception:
+        logger.exception("Unexpected error while sending leave-apply email")
 
 router = APIRouter()
 
@@ -336,6 +468,21 @@ def create_leave_request(
                 kind="LEAVE",
                 link_path="/leave-approvals",
             )
+        requester_email = (emp.official_email if emp else None) or (
+            current_user.official_email if current_user else None
+        )
+        _send_leave_apply_email_to_hr(
+            db,
+            requester_is_hr=requester_is_hr,
+            employee=emp,
+            employee_name=name,
+            leave_type_name=lt_name,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            is_half_day=data.is_half_day,
+            reason=data.reason or "",
+            requester_email=requester_email,
+        )
         return req
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
