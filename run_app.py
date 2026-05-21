@@ -1,3 +1,23 @@
+"""
+Single-server launcher for Softwiz (HRMS + Resume Analyzer).
+
+The Attendance HRMS backend (Attendance Management/backend/app/main.py) now
+also mounts the Resume Analyzer UI and API, so the entire product runs on
+ONE process and ONE URL:
+
+    http://<host>:<port>/              -> Attendance HRMS (React SPA)
+    http://<host>:<port>/api/...       -> Attendance HRMS API
+    http://<host>:<port>/resume/       -> Resume Analyzer UI
+    http://<host>:<port>/resume-api/   -> Resume Analyzer API
+    http://<host>:<port>/portal.html   -> Unified landing portal
+
+Usage (PowerShell):
+    python run_app.py                  # serves on 0.0.0.0:5001
+    python run_app.py --port 8080      # custom port
+    python run_app.py --host 127.0.0.1 # bind to loopback only
+"""
+
+import argparse
 import os
 import socket
 import subprocess
@@ -5,14 +25,11 @@ import sys
 import threading
 import time
 import webbrowser
-import http.server
-import socketserver
 from pathlib import Path
-import argparse
 
 
 def get_lan_ip() -> str:
-    """Return the machine's LAN IP address (not 127.0.0.1)."""
+    """Return the machine's LAN IP address (best-effort, not 127.0.0.1)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -24,7 +41,6 @@ def get_lan_ip() -> str:
 
 
 def is_port_open(host: str, port: int, timeout: float = 0.4) -> bool:
-    """Best-effort check for an already-running service on the target port."""
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
@@ -33,141 +49,73 @@ def is_port_open(host: str, port: int, timeout: float = 0.4) -> bool:
 
 
 def main() -> None:
-    """
-    Start FastAPI backend, static frontend server, and Attendance backend.
-    All servers bind to 0.0.0.0 so other machines on the network can connect.
-    API_URL is set to the machine's LAN IP so browser API calls work remotely.
-    """
-    parser = argparse.ArgumentParser(description="Start the Resume Analyzer app")
-    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8001")), help="Resume API backend port")
-    parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"), help="Bind host (default: 0.0.0.0 for LAN access)")
-    parser.add_argument("--attendance-port", type=int, default=5001, help="Attendance backend port")
+    parser = argparse.ArgumentParser(description="Start the unified Softwiz server")
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "5001")),
+                        help="HTTP port (default: 5001)")
+    parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"),
+                        help="Bind host (default: 0.0.0.0 for LAN access)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Do not open the browser automatically")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent
-    bind_host = args.host
-    port = str(args.port)
-    attendance_port = str(args.attendance_port)
+    repo_root = Path(__file__).resolve().parent
+    hrms_backend = repo_root / "Attendance Management" / "backend"
 
-    # Detect LAN IP so browser-side API calls reach the correct address
+    if not hrms_backend.exists():
+        sys.exit(f"[error] HRMS backend folder not found: {hrms_backend}")
+
     lan_ip = get_lan_ip()
-    network_base = f"http://{lan_ip}:{port}"
+    port = args.port
 
-    child_env = os.environ.copy()
-    # Override API_URL / BASE_URL with network IP so browser requests work from other devices
-    child_env["API_URL"]  = os.getenv("API_URL")  or network_base
-    child_env["BASE_URL"] = os.getenv("BASE_URL") or network_base
+    if is_port_open("127.0.0.1", port):
+        sys.exit(f"[error] Port {port} is already in use. Stop the other process first.")
 
-    print(f"\n{'='*55}")
-    print(f"  Attendance & HRMS Console — Network Access URLs")
-    print(f"{'='*55}")
-    print(f"  Attendance & HRMS: http://{lan_ip}:{attendance_port}/")
-    print(f"  Resume Analyzer:   http://{lan_ip}:8501/")
-    print(f"  Resume API:        http://{lan_ip}:{port}/")
-    print(f"  Attendance API:    http://{lan_ip}:{attendance_port}/")
-    print(f"{'='*55}\n")
+    print(f"\n{'=' * 60}")
+    print(f"  Softwiz Unified Server")
+    print(f"{'=' * 60}")
+    print(f"  Portal           : http://{lan_ip}:{port}/portal.html")
+    print(f"  Attendance HRMS  : http://{lan_ip}:{port}/")
+    print(f"  Resume Analyzer  : http://{lan_ip}:{port}/resume/")
+    print(f"  HRMS API         : http://{lan_ip}:{port}/api")
+    print(f"  Resume API       : http://{lan_ip}:{port}/resume-api")
+    print(f"{'=' * 60}\n")
 
-    # --- Resume API Backend ---
-    backend_cmd = [
-        sys.executable, "-m", "uvicorn",
-        "backend.api:app",
-        "--host", bind_host,
-        "--port", port,
-    ]
+    env = os.environ.copy()
+    # Make sure the HRMS package (`app.main`) and the Resume Analyzer
+    # package (`backend.api`) are both importable.
+    existing_pp = env.get("PYTHONPATH", "")
+    extra_pp = os.pathsep.join([str(hrms_backend), str(repo_root)])
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (extra_pp, existing_pp) if p)
 
-    # --- Attendance Backend ---
-    attendance_backend_cmd = [
+    cmd = [
         sys.executable, "-m", "uvicorn",
         "app.main:app",
-        "--host", bind_host,
-        "--port", attendance_port,
+        "--host", args.host,
+        "--port", str(port),
     ]
-    attendance_dir = root / "Attendance Management" / "backend"
 
-    backend_proc = None
-    if is_port_open("127.0.0.1", int(port)):
-        print(f"[resume-api] Port {port} already in use, reusing existing backend.")
-    else:
-        try:
-            backend_proc = subprocess.Popen(backend_cmd, cwd=root, env=child_env)
-        except OSError as exc:
-            print(f"[resume-api] Could not start on port {port}: {exc}. Reusing existing server if available.")
+    if not args.no_browser:
+        threading.Timer(
+            2.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/portal.html")
+        ).start()
 
-    attendance_proc = None
-    if attendance_dir.exists():
-        attendance_env = child_env.copy()
-        attendance_env["PYTHONPATH"] = str(attendance_dir)
-        if is_port_open("127.0.0.1", int(attendance_port)):
-            print(f"[attendance-api] Port {attendance_port} already in use, reusing existing backend.")
-        else:
-            try:
-                attendance_proc = subprocess.Popen(attendance_backend_cmd, cwd=attendance_dir, env=attendance_env)
-            except OSError as exc:
-                print(f"[attendance-api] Could not start on port {attendance_port}: {exc}. Reusing existing server if available.")
-
-    # --- Portal static file server (bind to all interfaces) ---
-    PORTAL_PORT = 8000
-
-    def serve_portal():
-        class SilentHandler(http.server.SimpleHTTPRequestHandler):
-            def log_message(self, fmt, *args):
-                pass  # suppress per-request log spam
-
-        if is_port_open("127.0.0.1", PORTAL_PORT):
-            print(f"[portal] Port {PORTAL_PORT} already in use, reusing existing server.")
-            return
-        try:
-            with socketserver.TCPServer(("", PORTAL_PORT), SilentHandler) as httpd:
-                httpd.serve_forever()
-        except OSError as exc:
-            print(f"[portal] Could not bind to port {PORTAL_PORT}: {exc}. Reusing existing server if available.")
-
-    threading.Thread(target=serve_portal, daemon=True).start()
-
-    # --- Resume Analyzer frontend static server ---
-    ANALYZER_PORT = 8501
-
-    def serve_analyzer():
-        class AnalyzerHandler(http.server.SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, directory=str(root / "frontend"), **kwargs)
-            def log_message(self, fmt, *args):
-                pass  # suppress per-request log spam
-
-        if is_port_open("127.0.0.1", ANALYZER_PORT):
-            print(f"[resume-analyzer] Port {ANALYZER_PORT} already in use, reusing existing server.")
-            return
-        try:
-            with socketserver.TCPServer(("", ANALYZER_PORT), AnalyzerHandler) as httpd:
-                httpd.serve_forever()
-        except OSError as exc:
-            print(f"[resume-analyzer] Could not bind to port {ANALYZER_PORT}: {exc}. Reusing existing server if available.")
-
-    threading.Thread(target=serve_analyzer, daemon=True).start()
-
-    # Open browser on local machine after short delay
-    threading.Timer(2.0, lambda: webbrowser.open(f"http://127.0.0.1:{PORTAL_PORT}/portal.html")).start()
+    proc = subprocess.Popen(cmd, cwd=hrms_backend, env=env)
 
     try:
-        print("Both backends are running. Press Ctrl+C to terminate.")
+        print("Server is running. Press Ctrl+C to stop.")
         while True:
-            time.sleep(1)
+            ret = proc.poll()
+            if ret is not None:
+                sys.exit(ret)
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\nTerminating servers...")
+        print("\nStopping server...")
     finally:
-        if backend_proc:
-            backend_proc.terminate()
-            try:
-                backend_proc.wait(timeout=10)
-            except Exception:
-                backend_proc.kill()
-
-        if attendance_proc:
-            attendance_proc.terminate()
-            try:
-                attendance_proc.wait(timeout=10)
-            except Exception:
-                attendance_proc.kill()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
 
 
 if __name__ == "__main__":

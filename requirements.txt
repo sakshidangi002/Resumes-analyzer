@@ -57,11 +57,10 @@ beautifulsoup4==4.12.3
 # Browser automation (Indeed "View resume" link download)
 playwright==1.44.0
 
-# Attendance Management Dependencies
+# Attendance Management Dependencies (also in Attendance Management/backend/requirements.txt)
 aiofiles>=23.0.0
 alembic>=1.13.0
 python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-bcrypt
+bcrypt>=4.0.1,<5
 jinja2>=3.1.0
 tomli; python_version < "3.11"

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resume-analyzer"
+version = "0.1.0"
+description = "FastAPI + Streamlit resume analyzer (backend + frontend)"
+readme = "IMPLEMENTATION_SUMMARY.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Resume Analyzer", email = "you@example.com" }
+]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "sqlalchemy>=2.0",
+  "psycopg2-binary>=2.9",
+  "streamlit>=1.32",
+  "requests>=2.31",
+  "python-dotenv>=1.0",
+  "pandas>=2.0",
+  "pdfplumber>=0.11",
+  "python-docx>=1.1",
+  "transformers>=4.39",
+  "sentence-transformers>=2.5",
+  "chromadb>=0.5",
+  "gspread>=6.0",
+  "oauth2client>=4.1",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "ruff",
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules=["run_app","force_clean"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "frontend*"]
+
+[project.scripts]
+# Run both backend (uvicorn) and frontend (Streamlit) together:
+resume-analyzer = "run_app:main"
+

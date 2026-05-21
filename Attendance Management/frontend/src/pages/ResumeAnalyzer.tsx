@@ -45,8 +45,9 @@ const Icons = {
   )
 };
 
-// Create axios client for Resume Analyzer API (Port 8001)
-const resumeApiUrl = `http://${window.location.hostname}:8001`;
+// Create axios client for Resume Analyzer API.
+// Unified server mounts the Resume API at /resume-api on the same origin.
+const resumeApiUrl = `${window.location.origin}/resume-api`;
 const resClient = axios.create({
   baseURL: resumeApiUrl,
   headers: { "Content-Type": "application/json" }

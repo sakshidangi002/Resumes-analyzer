@@ -42,4 +42,8 @@ if exist "venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 )
 
+:: Expose the repo root on PYTHONPATH so the unified server can import the
+:: Resume Analyzer (backend/api.py) and serve its UI from frontend/.
+set "PYTHONPATH=%cd%;%~dp0..;%PYTHONPATH%"
+
 uvicorn app.main:app --host 0.0.0.0 --port 5001

@@ -1,0 +1,36 @@
+# Environment and secrets
+.venv/
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Backend runtime
+backend/uploads/
+backend/data/
+backend/chromadb/
+backend/*.db
+backend/resume.db
+backend/temp_*.pdf
+chromadb/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

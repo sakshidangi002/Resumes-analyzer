@@ -1430,11 +1430,11 @@ export default function EmployeeProfile() {
                 <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed' }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: 'left', width: '34%' }}>Net salary</th>
-                      <th style={{ textAlign: 'center', width: '14%' }}>Paid days</th>
-                      <th style={{ textAlign: 'center', width: '14%' }}>LOP days</th>
-                      <th style={{ textAlign: 'left', width: '28%' }}>Generated</th>
-                      <th style={{ textAlign: 'center', width: '10%' }}>Actions</th>
+                      <th style={{ textAlign: 'center', width: '20%' }}>Net salary</th>
+                      <th style={{ textAlign: 'center', width: '20%' }}>Paid days</th>
+                      <th style={{ textAlign: 'center', width: '20%' }}>LOP days</th>
+                      <th style={{ textAlign: 'center', width: '20%' }}>Generated</th>
+                      <th style={{ textAlign: 'center', width: '20%' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1443,7 +1443,7 @@ export default function EmployeeProfile() {
                         <td style={{ textAlign: 'center', fontWeight: 600 }}>₹ {Number(p.net_salary).toFixed(2)}</td>
                         <td style={{ textAlign: 'center' }}>{p.paid_days}</td>
                         <td style={{ textAlign: 'center' }}>{p.lop_days}</td>
-                        <td style={{ textAlign: 'left' }}>{formatNiceDate(p.generated_at)}</td>
+                        <td style={{ textAlign: 'center' }}>{formatNiceDate(p.generated_at)}</td>
                         <td style={{ textAlign: 'center' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
                             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setFormulaPayslip(p)} style={{ backgroundColor: "var(--brand-500)", minWidth: '140px' }}>

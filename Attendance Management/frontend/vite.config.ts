@@ -6,19 +6,19 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": {
-        target: "http://127.0.0.1:8000",
-        changeOrigin: true,
-      },
+      "/api":        { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/resume-api": { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/resume":     { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/portal.html":{ target: "http://127.0.0.1:5001", changeOrigin: true },
     },
   },
   preview: {
     port: 4173,
     proxy: {
-      "/api": {
-        target: "http://127.0.0.1:8000",
-        changeOrigin: true,
-      },
+      "/api":        { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/resume-api": { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/resume":     { target: "http://127.0.0.1:5001", changeOrigin: true },
+      "/portal.html":{ target: "http://127.0.0.1:5001", changeOrigin: true },
     },
   },
   build: {

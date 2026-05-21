@@ -275,35 +275,31 @@ export default function MyPayslips() {
               <thead>
                 <tr>
                   <th style={{ textAlign: 'left', paddingLeft: '1.5rem', width: '120px' }}>Period</th>
-                  <th style={{ width: '150px', textAlign: 'left' }}>Net Salary</th>
-                  <th className="hide-md" style={{ width: '120px', textAlign: 'left' }}>Paid Days</th>
-                  <th className="hide-md" style={{ width: '120px', textAlign: 'left' }}>LOP Days</th>
-                  <th className="hide-sm" style={{ width: '220px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', justifyContent: 'center' }}>Generated</div>
-                  </th>
-                  <th style={{ width: '320px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>Actions</div>
-                  </th>
+                  <th style={{ width: '160px', textAlign: 'right' }}>Net Salary</th>
+                  <th className="hide-md" style={{ width: '120px', textAlign: 'right' }}>Paid Days</th>
+                  <th className="hide-md" style={{ width: '120px', textAlign: 'right', paddingRight: '1.5rem' }}>LOP Days</th>
+                  <th className="hide-sm" style={{ width: '220px', textAlign: 'center' }}>Generated</th>
+                  <th style={{ width: '320px', textAlign: 'center', paddingRight: '1.5rem' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredPayslips.map((s) => (
                   <tr key={s.id}>
                     <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{periodLabel(s.payroll_period_id)}</td>
-                    <td style={{ fontWeight: 600, textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>₹ {Number(s.net_salary || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    <td style={{ fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      ₹ {Number(s.net_salary || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td className="hide-md" style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{Number(s.paid_days || 0).toFixed(2)}</div>
+                    <td className="hide-md" style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {Number(s.paid_days || 0).toFixed(2)}
                     </td>
-                    <td className="hide-md" style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{Number(s.lop_days || 0).toFixed(2)}</div>
+                    <td className="hide-md" style={{ textAlign: 'right', paddingRight: '1.5rem', fontVariantNumeric: 'tabular-nums' }}>
+                      {Number(s.lop_days || 0).toFixed(2)}
                     </td>
                     <td className="hide-sm" style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{formatDate(s.generated_at)} {new Date(s.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      {formatDate(s.generated_at)} {new Date(s.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+                    <td style={{ textAlign: 'center', paddingRight: '1.5rem' }}>
+                      <div style={{ display: 'inline-flex', gap: '0.75rem', justifyContent: 'center' }}>
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"

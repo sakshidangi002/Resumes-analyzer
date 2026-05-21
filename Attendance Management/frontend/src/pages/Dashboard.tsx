@@ -406,7 +406,7 @@ export default function Dashboard() {
         <GlobalHeaderControls />
       </div>
 
-      <div className="dash-grid" style={{ marginTop: '-1rem' }}>
+      <div className="dash-grid">
         {/* Row 1 for Admin: 3 Separate Cards | Row 1 for Others: Clock + Overviews */}
         <div className="dash-card dash-card--clock">
           <div className="card-top">

@@ -136,7 +136,7 @@ export default function DashboardLayout() {
                 <Icons.Reports /> Full Reports
               </NavLink>
               <a 
-                href={`http://${window.location.hostname}:8501/?token=${token}`} 
+                href={`/resume/?token=${token}`} 
                 target="_blank" 
                 rel="noopener noreferrer"
                 onClick={closeSidebar}

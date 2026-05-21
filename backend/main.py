@@ -2952,6 +2952,24 @@ def _get_context_blocks_for_evidence(resume_text: str) -> dict:
     }
 
 
+# Career-objective / soft-prose tokens that are never real skills, even when
+# they appear under a "Skills" header (resumes often drift into objective
+# statements right after the section title). Defense-in-depth against the
+# upstream parser slipping them through.
+_NON_SKILL_PROSE_BLOCKLIST = {
+    "growth", "opportunity", "opportunities", "career", "objective",
+    "objectives", "goal", "goals", "ambition", "aim",
+    "looking", "seeking", "interested", "motivation", "motivated",
+    "passion", "passionate", "dedicated", "dedication",
+    "good", "great", "excellent", "strong", "quick", "fast", "best",
+    "skill", "skills", "knowledge", "knowledgeable",
+    "team player", "quick learner", "fast learner", "self learner",
+    "self motivated", "hard working", "hardworking",
+    "result oriented", "results oriented", "detail oriented",
+    "responsible",
+}
+
+
 def _skill_token_is_valid(tok: str) -> bool:
     """
     Strict filter for skill tokens (reject narrative fragments and junk).
@@ -2959,9 +2977,17 @@ def _skill_token_is_valid(tok: str) -> bool:
     if not tok:
         return False
     s = _strip_footnote_numbers(str(tok)).strip()
+    # Strip trailing sentence punctuation that may have leaked through upstream
+    # (e.g. "Growth." -> "Growth"). Keep punctuation that's part of valid skill
+    # names like "Node.js" / "C++" / "C#" intact — those have alphanumerics
+    # after the punctuation, so they're not "trailing".
+    s = re.sub(r"[\s.,;:!?\u2013\u2014\"'`)]+$", "", s)
     if len(s) < 2 or len(s) > 48:
         return False
     if _norm_header(s) in {"core", "web", "api", "rest", "optimization"}:
+        return False
+    # Career-objective / soft prose blocklist
+    if _norm_header(s) in _NON_SKILL_PROSE_BLOCKLIST:
         return False
     # Reject sentence-like fragments (too many words)
     if len(s.split()) > 8:

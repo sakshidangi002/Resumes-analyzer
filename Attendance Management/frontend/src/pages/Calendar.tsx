@@ -390,6 +390,43 @@ export default function Calendar() {
             </div>
             <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
+                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Birthdays</h3>
+                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
+                  {birthdays.length} this month
+                </span>
+              </div>
+              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+                Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
+              </p>
+              {birthdays.length === 0 ? (
+                <p className="text-muted">No birthdays in this month.</p>
+              ) : (
+                <div className="table-wrap table-wrap--dark">
+                  <table className="table-modern table-modern--dark">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 70 }}>Day</th>
+                        <th>Employee</th>
+                        <th style={{ textAlign: "right" }}>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...birthdays]
+                        .sort((a, b) => sortByMonthDay(a.date, b.date))
+                        .map((b) => (
+                          <tr key={b.employee_id}>
+                            <td style={{ fontWeight: 700 }}>{new Date(b.date + "T12:00:00").getDate()}</td>
+                            <td style={{ fontWeight: 500 }}>{b.name}</td>
+                            <td style={{ textAlign: "right" }}>{formatBirthdayDate(b.date)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
                 <h3 style={{ marginTop: 0, marginBottom: 6 }}>Marriage Anniversary</h3>
                 <span className="text-muted" style={{ fontSize: "0.9rem" }}>
                   {marriageAnniversaries.length} this month
@@ -431,43 +468,7 @@ export default function Calendar() {
               )}
             </div>
 
-            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Birthdays</h3>
-                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
-                  {birthdays.length} this month
-                </span>
-              </div>
-              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
-              </p>
-              {birthdays.length === 0 ? (
-                <p className="text-muted">No birthdays in this month.</p>
-              ) : (
-                <div className="table-wrap table-wrap--dark">
-                  <table className="table-modern table-modern--dark">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 70 }}>Day</th>
-                        <th>Employee</th>
-                        <th style={{ textAlign: "right" }}>Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...birthdays]
-                        .sort((a, b) => sortByMonthDay(a.date, b.date))
-                        .map((b) => (
-                          <tr key={b.employee_id}>
-                            <td style={{ fontWeight: 700 }}>{new Date(b.date + "T12:00:00").getDate()}</td>
-                            <td style={{ fontWeight: 500 }}>{b.name}</td>
-                            <td style={{ textAlign: "right" }}>{formatBirthdayDate(b.date)}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            
 
             {/* <div className="card" style={{ borderTop: "4px solid var(--brand-500)", margin: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>

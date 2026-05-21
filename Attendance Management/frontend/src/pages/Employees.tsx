@@ -162,6 +162,39 @@ export default function Employees() {
       `${e.employee_code} ${e.first_name} ${e.last_name} ${e.official_email} ${deptName(e.department_id)} ${e.employment_status}`,
   });
 
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(displayedList.length / pageSize));
+  // Reset to page 1 when filters / search / sort / page size change
+  useEffect(() => {
+    setPage(1);
+  }, [search, filterDept, filterStatus, sort.key, sort.direction, pageSize]);
+  // Clamp page if the data shrinks (e.g. after delete)
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pageStart = (page - 1) * pageSize;
+  const pageEnd = pageStart + pageSize;
+  const pagedList = displayedList.slice(pageStart, pageEnd);
+
+  const pageNumbers = (() => {
+    // Render up to 7 buttons with smart ellipses around current page.
+    const result: (number | "...")[] = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) result.push(i);
+      return result;
+    }
+    const window = new Set<number>([1, totalPages, page, page - 1, page + 1]);
+    const sorted = [...window].filter((n) => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+    let prev = 0;
+    for (const n of sorted) {
+      if (prev && n - prev > 1) result.push("...");
+      result.push(n);
+      prev = n;
+    }
+    return result;
+  })();
+
   const openAdd = async () => {
     setError("");
     setSuccess("");
@@ -372,7 +405,7 @@ export default function Employees() {
                       </td>
                     </tr>
                   ) : null}
-                  {displayedList.map((e) => {
+                  {pagedList.map((e) => {
                     const hasLeft = !!e.date_of_leaving;
                     const rowStyle: React.CSSProperties = hasLeft
                       ? {
@@ -422,6 +455,75 @@ export default function Employees() {
                 </tbody>
               </table>
             </div>
+            {displayedList.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  marginTop: '1rem',
+                  padding: '0.5rem 0.25rem',
+                }}
+              >
+                <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>
+                  Showing <strong>{pageStart + 1}</strong>–<strong>{Math.min(pageEnd, displayedList.length)}</strong> of <strong>{displayedList.length}</strong>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.85rem', opacity: 0.7 }}>Rows:</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    style={{
+                      background: 'rgba(255,255,255,0.05)',
+                      color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    {[10, 25, 50, 100].map((n) => (
+                      <option key={n} value={n} style={{ background: '#153273' }}>{n}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    style={{ padding: '0.3rem 0.75rem' }}
+                  >
+                    Prev
+                  </button>
+                  {pageNumbers.map((n, idx) =>
+                    n === '...' ? (
+                      <span key={`e-${idx}`} style={{ padding: '0 4px', opacity: 0.5 }}>…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        type="button"
+                        className={`btn btn-sm ${n === page ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setPage(n)}
+                        style={{ padding: '0.3rem 0.7rem', minWidth: '34px' }}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    style={{ padding: '0.3rem 0.75rem' }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

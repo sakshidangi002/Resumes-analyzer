@@ -1,0 +1,122 @@
+﻿SOFTWIZ HRMS + RESUME ANALYZER - SERVER SETUP (Windows, single-port)
+=====================================================================
+
+The whole product (HRMS + Resume Analyzer + Portal) now runs as ONE
+unified process on ONE port. Open ONE URL in the browser.
+
+  http://<server>:5001/portal.html  ->  Landing portal
+  http://<server>:5001/             ->  Attendance HRMS  (everyone)
+  http://<server>:5001/resume/      ->  Resume Analyzer  (Admin / HR only)
+
+Place this folder on the server as e.g. C:\SoftwizApp\ .
+
+PREREQUISITES ON SERVER
+-----------------------
+1. Python 3.10 (same as dev machine), add to PATH
+2. PostgreSQL 14+
+3. NSSM (https://nssm.cc) -> copy nssm.exe to C:\Windows\System32\
+4. Open Windows Firewall: ONE port only (default 5001).
+
+DATABASES (PostgreSQL)
+----------------------
+Create two databases:
+  - attendance_hrms      (HRMS)
+  - Resume_analyzer      (Resume Analyzer)
+
+CONFIG FILE 1  ->  C:\SoftwizApp\hrms\backend\.env
+--------------------------------------------------
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=YOUR_PASSWORD
+POSTGRES_DB=attendance_hrms
+SECRET_KEY=change-to-long-random-string
+SMTP_HOST=...
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+SMTP_USE_TLS=true
+SMTP_FROM_EMAIL=noreply@yourcompany.com
+SMTP_FROM_NAME=HRMS
+
+CONFIG FILE 2  ->  C:\SoftwizApp\.env    (Resume Analyzer DB)
+-------------------------------------------------------------
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/Resume_analyzer
+
+PYTHON SETUP (run ONCE on the server, in PowerShell)
+----------------------------------------------------
+cd C:\SoftwizApp
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements-all.txt
+
+# Optional: pre-download the spaCy NER model used by the Resume Analyzer
+python -m spacy download en_core_web_sm
+
+# HRMS database migrations
+$env:PYTHONPATH = "C:\SoftwizApp\hrms\backend"
+cd C:\SoftwizApp\hrms\backend
+python -m alembic upgrade head
+
+QUICK START (manual, no service)
+--------------------------------
+Double-click  C:\SoftwizApp\run-server.bat
+Then open    http://localhost:5001/portal.html
+
+PRODUCTION  -  Install as a Windows Service (NSSM)
+--------------------------------------------------
+ONE service runs the whole product:
+
+  nssm install SoftwizApp ^
+    "C:\SoftwizApp\.venv\Scripts\python.exe" ^
+    "-m" "uvicorn" "app.main:app" "--host" "0.0.0.0" "--port" "5001"
+
+  nssm set SoftwizApp AppDirectory       "C:\SoftwizApp\hrms\backend"
+  nssm set SoftwizApp AppEnvironmentExtra ^
+    "PYTHONPATH=C:\SoftwizApp\hrms\backend;C:\SoftwizApp"
+  nssm set SoftwizApp Start SERVICE_AUTO_START
+
+  nssm start SoftwizApp
+
+FIREWALL
+--------
+netsh advfirewall firewall add rule name="SoftwizApp" ^
+    protocol=TCP dir=in localport=5001 action=allow
+
+VERIFY
+------
+From the server itself:    http://localhost:5001/health   -> {"status":"ok"}
+From any LAN machine:      http://<SERVER-IP>:5001/portal.html
+
+ACCESS CONTROL
+--------------
+The Resume Analyzer (/resume/ and /resume-api/) is locked to users whose
+JWT has the Admin or HR role. Employees and Managers cannot reach it
+even if they type the URL directly (server returns 302 redirect or 403).
+
+UPDATING LATER
+--------------
+1. On the dev laptop:   .\scripts\package-for-server.ps1
+2. Upload deploy\SoftwizApp to the server, overwriting the old folder
+   (keep the existing .venv and .env files).
+3. On the server:
+     nssm restart SoftwizApp
+   If the HRMS database schema changed:
+     cd C:\SoftwizApp\hrms\backend
+     $env:PYTHONPATH = "C:\SoftwizApp\hrms\backend"
+     ..\..\.venv\Scripts\python -m alembic upgrade head
+
+TROUBLESHOOTING
+---------------
+* "ModuleNotFoundError: No module named 'jose'" or similar
+  -> The venv is missing deps. Re-run:
+       cd C:\SoftwizApp
+       .\.venv\Scripts\pip install -r requirements-all.txt
+
+* "Port 5001 is already in use"
+  -> Stop the old uvicorn process or run on another port:
+       run-server.bat 5002
+
+* Browser shows old "8501" / "8001" / blank Resume page
+  -> Hard refresh (Ctrl+Shift+R). The compiled bundle was updated.
