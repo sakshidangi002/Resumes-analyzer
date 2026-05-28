@@ -38,3 +38,7 @@ Thumbs.db
 # Node
 node_modules/
 **/node_modules/
+
+# Deploy sync (local SSH credentials)
+scripts/sync_to_server.json
+scripts/sync.log

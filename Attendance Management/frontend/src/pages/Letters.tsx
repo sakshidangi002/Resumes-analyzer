@@ -580,7 +580,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
 
                   <div style={{ marginBottom: "1.5rem" }}>
                     <div className="flex items-center justify-between mb-4">
-                      <label style={{ margin: 0, fontSize: "0.9rem", fontWeight: 600, color: "#fff" }}>Body Content</label>
+                      <label style={{ margin: "3px", fontSize: "0.9rem", fontWeight: 600, color: "#fff" }}>Body Content</label>
                     </div>
 
                     <div
@@ -630,7 +630,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                       className="preview-container"
                       style={{
                         marginTop: "1.5rem",
-                        border: "1px dashed rgba(255, 255, 255, 0.2)",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
                         borderRadius: 16,
                         padding: "3rem",
                         background: "rgba(255, 255, 255, 0.04)",
@@ -696,15 +696,15 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
               <p className="text-muted">No employee letters generated yet.</p>
             ) : (
               <div className="table-wrap table-wrap--dark">
-                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'auto', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', overflow: 'hidden' }}>
+                <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                   <thead>
-                    <tr style={{ background: 'rgba(255, 255, 255, 0.08)' }}>
-                      <SortableHeader className="hide-xl" label="Generated" columnKey="generated_at" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
-                      <SortableHeader label="Employee" columnKey="employee" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
-                      <SortableHeader className="hide-md" label="Email" columnKey="email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
-                      <SortableHeader label="Subject" columnKey="subject" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
-                      <SortableHeader className="hide-lg" label="Email sent" columnKey="sent_via_email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
-                      <SortableHeader label="Actions" columnKey="__actions" sort={letterSort} onToggle={toggleLetterSort} align="center" notSortable style={{ width: 260, padding: '1rem', fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }} />
+                    <tr>
+                      <SortableHeader className="hide-xl" label="Generated" columnKey="generated_at" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ width: '12%', textAlign: 'center' }} />
+                      <SortableHeader label="Employee" columnKey="employee" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ width: '17%', textAlign: 'center' }} />
+                      <SortableHeader className="hide-md" label="Email" columnKey="email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ width: '20%', textAlign: 'center' }} />
+                      <SortableHeader label="Subject" columnKey="subject" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ width: '18%', textAlign: 'center' }} />
+                      <SortableHeader className="hide-lg" label="Email sent" columnKey="sent_via_email" sort={letterSort} onToggle={toggleLetterSort} align="center" style={{ width: '8%', textAlign: 'center' }} />
+                      <SortableHeader label="Actions" columnKey="__actions" sort={letterSort} onToggle={toggleLetterSort} align="center" notSortable style={{ width: '25%', minWidth: 220, textAlign: 'center' }} />
                     </tr>
                   </thead>
                   <tbody>
@@ -716,28 +716,48 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                       </tr>
                     )}
                     {displayedInstances.map((i: LetterInstance) => (
-                      <tr key={i.id} style={{ background: 'rgba(255,255,255,0.02)' }}>
-                        <td className="hide-xl" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      <tr key={i.id}>
+                        <td className="hide-xl" style={{ textAlign: 'center' }}>
+                          {formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </td>
-                        <td style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>
+                        <td style={{ textAlign: 'center' }}>
+                          <div
+                            className="text-truncate"
+                            style={{ width: '100%' }}
+                            title={
+                              i.employee_code || i.employee_name
+                                ? `${i.employee_code ? i.employee_code + " – " : ""}${i.employee_name ?? ""}`
+                                : "-"
+                            }
+                          >
                             {i.employee_code || i.employee_name
                               ? `${i.employee_code ? i.employee_code + " – " : ""}${i.employee_name ?? ""}`
                               : "-"}
                           </div>
                         </td>
-                        <td className="hide-md" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{i.employee_official_email || i.employee_personal_email || "-"}</div>
+                        <td className="hide-md" style={{ textAlign: 'center' }}>
+                          <div
+                            className="text-truncate"
+                            style={{ width: '100%' }}
+                            title={i.employee_official_email || i.employee_personal_email || "-"}
+                          >
+                            {i.employee_official_email || i.employee_personal_email || "-"}
+                          </div>
                         </td>
-                        <td style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%', fontWeight: 500 }}>{i.subject || "-"}</div>
+                        <td style={{ textAlign: 'center', fontWeight: 500 }}>
+                          <div
+                            className="text-truncate"
+                            style={{ width: '100%' }}
+                            title={i.subject || "-"}
+                          >
+                            {i.subject || "-"}
+                          </div>
                         </td>
-                        <td className="hide-lg" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{i.sent_via_email ? "✅" : "No"}</div>
+                        <td className="hide-lg" style={{ textAlign: 'center' }}>
+                          {i.sent_via_email ? "✅" : "No"}
                         </td>
-                        <td style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', padding: '1rem', width: '100%' }}>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap', minWidth: 220 }}>
+                          <div style={{ display: 'inline-flex', gap: '6px', justifyContent: 'center', flexWrap: 'nowrap' }}>
                             <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleView(i.id)} title="View Letter Content">
                               <Icons.View />
                             </button>
@@ -776,50 +796,38 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
             <p className="text-muted">No documents issued yet.</p>
           ) : (
             <div className="table-wrap table-wrap--dark">
-              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'auto', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', overflow: 'hidden' }}>
+              <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                 <thead>
-                  <tr style={{ background: 'rgba(255, 255, 255, 0.08)' }}>
-                    <th className="hide-xl" style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Generated</div>
-                    </th>
-                    <th style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Subject</div>
-                    </th>
-                    <th className="hide-lg" style={{ padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Email sent</div>
-                    </th>
-                    <th style={{ width: 280, padding: 0, fontSize: '0.75rem', fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>Actions</div>
-                    </th>
+                  <tr>
+                    <th className="hide-xl" style={{ width: '25%', textAlign: 'center' }}>Generated</th>
+                    <th style={{ width: '35%', textAlign: 'center' }}>Subject</th>
+                    <th className="hide-lg" style={{ width: '15%', textAlign: 'center' }}>Email sent</th>
+                    <th style={{ width: '25%', textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ownInstances.map((i: LetterInstance) => (
-                      <tr key={i.id} style={{ background: 'rgba(255,255,255,0.02)' }}>
-                        <td className="hide-xl" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        </td>
-                        <td style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%', fontWeight: 500 }}>{i.subject || "-"}</div>
-                        </td>
-                        <td className="hide-lg" style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1rem', width: '100%' }}>{i.sent_via_email ? "✅" : "No"}</div>
-                        </td>
-                        <td style={{ padding: 0, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', padding: '1rem', width: '100%' }}>
-                            <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleView(i.id)} title="View Document">
-                              <Icons.View />
-                            </button>
-                            <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleDownloadPDF(i.id)} title="Download as PDF">
-                              <Icons.PDF />
-                            </button>
-                            <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openReplies(i.id)} title="View Conversation">
-                              <Icons.Reply />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    <tr key={i.id}>
+                      <td className="hide-xl" style={{ textAlign: 'center' }}>
+                        {formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td style={{ textAlign: 'center', fontWeight: 500 }}>{i.subject || "-"}</td>
+                      <td className="hide-lg" style={{ textAlign: 'center' }}>{i.sent_via_email ? "✅" : "No"}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'inline-flex', gap: '8px', justifyContent: 'center' }}>
+                          <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleView(i.id)} title="View Document">
+                            <Icons.View />
+                          </button>
+                          <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleDownloadPDF(i.id)} title="Download as PDF">
+                            <Icons.PDF />
+                          </button>
+                          <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openReplies(i.id)} title="View Conversation">
+                            <Icons.Reply />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

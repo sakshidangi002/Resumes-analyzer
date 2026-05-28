@@ -105,13 +105,32 @@ def split_resume_sections(text: str) -> dict:
         if not norm:
             return False
         known = {
-            "skills", "technical skills", "tech skills", "key skills", "core competencies",
-            "skill set", "skillset", "tech stack", "technology stack", "technologies",
-            "tools", "tools technologies", "tools and technologies", "expertise",
-            "technical expertise", "areas of expertise", "professional skills", "key hr skills", "hr skills",
-            "core strengths", "it skills", "technical skill set", "skills summary",
-            "key competencies", "technical competencies", "relevant skills",
-            "technical proficiencies", "proficiencies", "technical capabilities",
+            # Core skills headers
+            "skills", "technical skills", "tech skills", "key skills",
+            "core competencies", "competencies", "skill set", "skillset",
+            # Technology/Stack headers
+            "tech stack", "technology stack", "technologies", "technical stack",
+            "tools", "tools and technologies", "tools technologies", "tools & technologies",
+            "programming languages", "languages", "programming",
+            # Expertise headers
+            "expertise", "technical expertise", "areas of expertise",
+            "professional skills", "technical skills",
+            # Proficiency headers
+            "proficiencies", "technical proficiencies", "technical capabilities",
+            "capabilities", "proficiency level",
+            # Knowledge headers
+            "technical knowledge", "knowledge", "domain knowledge",
+            # Certifications (sometimes grouped with skills)
+            "certifications", "certificates", "licenses",
+            # Platform-specific
+            "platforms", "frameworks", "libraries", "packages", "sdks",
+            # Cloud/DevOps
+            "cloud", "cloud platforms", "devops tools",
+            # Generic variations
+            "core strengths", "it skills", "technical skill set",
+            "skills summary", "key competencies", "technical competencies",
+            "relevant skills", "professional expertise", "hr skills", "key hr skills",
+            "management skills", "core technical skills",
         }
         if norm in known:
             return True
@@ -475,6 +494,44 @@ def _build_creative_skill_vocab() -> set[str]:
         "texturing",
         "uv unwrapping",
     }
+
+
+def _is_valid_person_name(name: str) -> bool:
+    """
+    Validate that a candidate string is a plausible person name.
+    Rejects titles, companies, headings, phone numbers.
+    """
+    if not name or len(name) > 60:
+        return False
+
+    BAD_KEYWORDS = {
+        "resume", "cv", "profile", "summary", "objective", "cover letter",
+        "engineer", "developer", "manager", "analyst", "director", "architect",
+        "consultant", "specialist", "lead", "principal", "officer", "executive",
+        "inc", "ltd", "corp", "company", "solutions", "technologies", "services",
+        "phone", "email", "address", "github", "linkedin", "portfolio",
+        "unknown", "anonymous", "n/a", "none"
+    }
+
+    name_lower = name.lower().strip()
+    if any(bad in name_lower for bad in BAD_KEYWORDS):
+        return False
+
+    parts = name.split()
+    if len(parts) < 2 and len(parts[0]) < 3:
+        return False
+
+    if len(parts) > 4:
+        return False
+
+    for part in parts:
+        if not re.match(r"^[a-z'\-]+$", part, re.IGNORECASE):
+            return False
+
+    if re.search(r"\d{3,}", name):
+        return False
+
+    return True
 
 
 def _name_confidence_from_header(text: str, name: str) -> float:

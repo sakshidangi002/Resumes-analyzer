@@ -1,68 +1,50 @@
-﻿SOFTWIZ HRMS + RESUME ANALYZER - SERVER SETUP (Windows, single-port)
-=====================================================================
+﻿SOFTWIZ HRMS + RESUME ANALYZER - COPY, SETUP, RUN (Windows)
+============================================================
 
-The whole product (HRMS + Resume Analyzer + Portal) now runs as ONE
-unified process on ONE port. Open ONE URL in the browser.
+This folder is ready to copy to any Windows PC. React is already built
+(no npm on server). PostgreSQL can be on this PC or a remote server.
 
-  http://<server>:5001/portal.html  ->  Landing portal
-  http://<server>:5001/             ->  Attendance HRMS  (everyone)
-  http://<server>:5001/resume/      ->  Resume Analyzer  (Admin / HR only)
+  http://<server>:5001/             ->  Attendance HRMS (login page)
+  http://<server>:5001/resume/      ->  Resume Analyzer (Admin / HR only)
 
-Place this folder on the server as e.g. C:\SoftwizApp\ .
+WHAT IS INCLUDED
+----------------
+  .env                 -> Resume Analyzer (DATABASE_URL, IMAP, etc.)
+  hrms\backend\.env    -> HRMS (POSTGRES_*, SMTP, SECRET_KEY)
+  setup-server.bat     -> One-time: venv + pip + DB migrations
+  run-server.bat       -> Start the app every day
 
-PREREQUISITES ON SERVER
------------------------
-1. Python 3.10 (same as dev machine), add to PATH
-2. PostgreSQL 14+
-3. NSSM (https://nssm.cc) -> copy nssm.exe to C:\Windows\System32\
-4. Open Windows Firewall: ONE port only (default 5001).
+PREREQUISITES ON TARGET PC
+--------------------------
+1. Python 3.10+ in PATH (no Node.js needed)
+2. PostgreSQL reachable (local or remote IP in .env)
+3. Firewall: allow TCP port 5001 (or your custom port)
 
-DATABASES (PostgreSQL)
-----------------------
-Create two databases:
-  - attendance_hrms      (HRMS)
-  - Resume_analyzer      (Resume Analyzer)
+STEP 1 - COPY FOLDER
+--------------------
+Copy this entire SoftwizApp folder to e.g. C:\SoftwizApp\
 
-CONFIG FILE 1  ->  C:\SoftwizApp\hrms\backend\.env
---------------------------------------------------
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=YOUR_PASSWORD
-POSTGRES_DB=attendance_hrms
-SECRET_KEY=change-to-long-random-string
-SMTP_HOST=...
-SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASSWORD=...
-SMTP_USE_TLS=true
-SMTP_FROM_EMAIL=noreply@yourcompany.com
-SMTP_FROM_NAME=HRMS
-
-CONFIG FILE 2  ->  C:\SoftwizApp\.env    (Resume Analyzer DB)
--------------------------------------------------------------
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/Resume_analyzer
-
-PYTHON SETUP (run ONCE on the server, in PowerShell)
+STEP 2 - EDIT .env (only if DB host/password differ)
 ----------------------------------------------------
-cd C:\SoftwizApp
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements-all.txt
+  C:\SoftwizApp\.env
+  C:\SoftwizApp\hrms\backend\.env
 
-# Optional: pre-download the spaCy NER model used by the Resume Analyzer
-python -m spacy download en_core_web_sm
+Both files should use the SAME database server IP and password.
+POSTGRES_HOST in hrms\backend\.env must match the host in DATABASE_URL.
 
-# HRMS database migrations
-$env:PYTHONPATH = "C:\SoftwizApp\hrms\backend"
-cd C:\SoftwizApp\hrms\backend
-python -m alembic upgrade head
+STEP 3 - ONE-TIME SETUP (double-click)
+--------------------------------------
+  setup-server.bat
 
-QUICK START (manual, no service)
---------------------------------
-Double-click  C:\SoftwizApp\run-server.bat
-Then open    http://localhost:5001/portal.html
+Or in PowerShell:
+  cd C:\SoftwizApp
+  .\setup-server.bat
+
+STEP 4 - START APP (every time)
+-------------------------------
+  run-server.bat
+
+Then open:  http://localhost:5001/
 
 PRODUCTION  -  Install as a Windows Service (NSSM)
 --------------------------------------------------
@@ -87,7 +69,7 @@ netsh advfirewall firewall add rule name="SoftwizApp" ^
 VERIFY
 ------
 From the server itself:    http://localhost:5001/health   -> {"status":"ok"}
-From any LAN machine:      http://<SERVER-IP>:5001/portal.html
+From any LAN machine:      http://<SERVER-IP>:5001/
 
 ACCESS CONTROL
 --------------
@@ -97,9 +79,9 @@ even if they type the URL directly (server returns 302 redirect or 403).
 
 UPDATING LATER
 --------------
-1. On the dev laptop:   .\scripts\package-for-server.ps1
-2. Upload deploy\SoftwizApp to the server, overwriting the old folder
-   (keep the existing .venv and .env files).
+1. On dev laptop:   .\scripts\package-for-server.ps1 -Zip
+2. Copy to server; keep existing .venv if deps unchanged.
+   Overwrite app files; merge .env if you edited secrets on server.
 3. On the server:
      nssm restart SoftwizApp
    If the HRMS database schema changed:

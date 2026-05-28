@@ -1,5 +1,21 @@
 from fastapi import APIRouter
-from app.api.routes import auth, employees, attendance, leave, payroll, letters, reports, calendar, users, company, activity, onboarding
+from app.api.routes import (
+    auth,
+    employees,
+    attendance,
+    leave,
+    payroll,
+    letters,
+    reports,
+    calendar,
+    users,
+    company,
+    activity,
+    onboarding,
+    dsr,
+    dsr_reminder,
+    push,
+)
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="")
@@ -14,3 +30,8 @@ api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(activity.router, prefix="/activity", tags=["activity"])
 api_router.include_router(onboarding.router, prefix="/onboarding", tags=["onboarding"])
+api_router.include_router(dsr.router, prefix="/dsr", tags=["dsr"])
+api_router.include_router(
+    dsr_reminder.router, prefix="/dsr-reminder", tags=["dsr-reminder"]
+)
+api_router.include_router(push.router, prefix="/push", tags=["push"])

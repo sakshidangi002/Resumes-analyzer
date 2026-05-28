@@ -211,6 +211,8 @@ def generate_letter(
         (subject or "").strip()[:300] or None,
         kind="LETTER",
         link_path="/letters",
+        with_push=True,
+        push_tag=f"letter-{inst.id}",
     )
     if send_email:
         emp = db.query(Employee).filter(Employee.id == employee_id).first()
@@ -260,6 +262,8 @@ def generate_letters_bulk(
                 (subject or "").strip()[:300] or None,
                 kind="LETTER",
                 link_path="/letters",
+                with_push=True,
+                push_tag=f"letter-{inst.id}",
             )
             if send_email:
                 emp = db.query(Employee).filter(Employee.id == eid).first()

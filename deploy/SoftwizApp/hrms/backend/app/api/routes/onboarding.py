@@ -85,6 +85,8 @@ def create_task(
         f"New task: {t.title}",
         kind="TASK_HUB",
         link_path="/onboarding",
+        with_push=True,
+        push_tag=f"task-{t.id}",
     )
     return t
 

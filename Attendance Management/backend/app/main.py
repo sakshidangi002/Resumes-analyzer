@@ -5,12 +5,12 @@ PostgreSQL database; SMTP email; role-based access (Admin, HR, Manager, Employee
 Also acts as the unified entry point that exposes Resume Analyzer (UI + API)
 under the same origin, so the whole product is reachable on a single URL:
 
-    /              -> HRMS React SPA
+    /              -> HRMS React SPA (auto-redirects to /login if unauthenticated)
     /api/...       -> HRMS API
     /resume/       -> Resume Analyzer UI (static)
     /resume-api/   -> Resume Analyzer API
-    /portal.html   -> Landing portal
 """
+import logging
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -27,12 +27,13 @@ from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models import User
 
+logger = logging.getLogger(__name__)
+
 
 # --- Resume Analyzer integration -------------------------------------------
 # The Resume Analyzer lives at the repo root (../../.. from this file):
 #   <repo>/backend/api.py        -> Resume API FastAPI app
 #   <repo>/frontend/             -> Resume Analyzer static UI
-#   <repo>/portal.html           -> Unified landing page
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -72,14 +73,186 @@ class Utf8StaticFiles(StaticFiles):
             pass
         return response
 
+def _warn_on_weak_secret_key() -> None:
+    """Loudly flag a JWT secret key that is too short or matches a known placeholder.
+
+    The application refuses to boot if SECRET_KEY is missing (Pydantic raises);
+    this guard catches the next-worst case: a configured but weak key.
+    """
+    s = get_settings().secret_key or ""
+    KNOWN_WEAK = {"abc2025", "change-me-in-production", "secret", "changeme"}
+    if s in KNOWN_WEAK or len(s) < 32:
+        logger.warning(
+            "SECURITY: SECRET_KEY is weak (length=%d). "
+            "Generate a strong key with `openssl rand -hex 32` and set it in .env "
+            "BEFORE deploying to production. Existing JWTs will be invalidated on rotation.",
+            len(s),
+        )
+
+
+def _dsr_reminder_tick():
+    """Run once per minute: if IST hour:minute matches the HR-configured
+    reminder time on an enabled weekday, fire the reminder job.
+
+    The reminder job is itself idempotent per IST day, so even if the tick
+    runs a second time (misfire / coalesce) only one notification is created
+    per user per day.
+    """
+    try:
+        from datetime import datetime, timedelta
+        from app.db.session import SessionLocal
+        from app.services.reminder_settings import read_schedule
+        from app.services.dsr_reminder import send_dsr_reminders
+    except Exception:
+        logger.exception("DSR reminder tick: failed to import dependencies")
+        return
+
+    _WEEKDAY_BY_INDEX = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+    db = SessionLocal()
+    try:
+        enabled, target_h, target_m, weekday_set = read_schedule(db)
+    except Exception:
+        logger.exception("DSR reminder tick: failed to read schedule")
+        db.close()
+        return
+
+    try:
+        if not enabled:
+            return
+        ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+        if ist_now.hour != target_h or ist_now.minute != target_m:
+            return
+        weekday_token = _WEEKDAY_BY_INDEX[ist_now.weekday()]
+        if weekday_token not in weekday_set:
+            return
+        logger.info(
+            "DSR reminder tick FIRING at IST %02d:%02d (%s)",
+            target_h,
+            target_m,
+            weekday_token,
+        )
+        send_dsr_reminders(db)
+    except Exception:
+        logger.exception("DSR reminder tick: send failed")
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def _start_background_scheduler():
+    """Start APScheduler. We tick every minute and decide inside the tick
+    whether to fire the reminder — that way HR can change the time via
+    /api/dsr/reminder-settings and the new time takes effect at the next
+    minute, no restart needed.
+
+    Returns the scheduler instance (or ``None`` if APScheduler isn't
+    installed) so the lifespan can shut it down on exit.
+    """
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+    except Exception:
+        logger.exception(
+            "APScheduler not available — DSR reminder will NOT run. "
+            "Install with: pip install apscheduler tzdata"
+        )
+        return None
+
+    try:
+        sched = AsyncIOScheduler()
+        sched.add_job(
+            _dsr_reminder_tick,
+            trigger=IntervalTrigger(seconds=60),
+            id="dsr_reminder_tick",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=120,
+        )
+        sched.start()
+        logger.info(
+            "Background scheduler started: DSR reminder tick is active "
+            "(time configurable via /api/dsr/reminder-settings, IST)."
+        )
+        return sched
+    except Exception:
+        logger.exception("Failed to start background scheduler for DSR reminder")
+        return None
+
+
+def _sync_blocked_employee_users() -> None:
+    """Retroactively deactivate user accounts whose employee record is already
+    marked Resigned or Terminated. Run once on startup so the new access rule
+    takes effect without HR having to re-save every old record.
+    """
+    try:
+        from app.models.employee import Employee, EmploymentStatus
+
+        db = SessionLocal()
+        try:
+            blocked_emp_ids = [
+                row.id for row in db.query(Employee.id).filter(
+                    Employee.employment_status.in_([
+                        EmploymentStatus.RESIGNED.value,
+                        EmploymentStatus.TERMINATED.value,
+                    ])
+                ).all()
+            ]
+            if not blocked_emp_ids:
+                return
+            updated = (
+                db.query(User)
+                .filter(User.employee_id.in_(blocked_emp_ids), User.is_active.is_(True))
+                .update({"is_active": False}, synchronize_session=False)
+            )
+            if updated:
+                db.commit()
+                logger.info(
+                    "Deactivated %d user account(s) linked to resigned/terminated employees.",
+                    updated,
+                )
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Failed to sync resigned/terminated employee access")
+
+
 @asynccontextmanager
 async def _unified_lifespan(parent_app: FastAPI):
-    """Bridge the Resume API's lifespan so mounted sub-app startup hooks run."""
-    if resume_api_app is not None and getattr(resume_api_app.router, "lifespan_context", None):
-        async with resume_api_app.router.lifespan_context(resume_api_app):
+    """Bridge the Resume API's lifespan so mounted sub-app startup hooks run,
+    and run our background scheduler (5 PM IST DSR reminder) alongside it."""
+    _warn_on_weak_secret_key()
+    _sync_blocked_employee_users()
+
+    # Capture the running asyncio loop so that synchronous request handlers
+    # (e.g. /api/dsr POST) can fan-out real-time WebSocket events via
+    # ``connection_manager.publish_sync``.
+    try:
+        import asyncio as _asyncio
+
+        from app.ws.manager import connection_manager as _wsmgr
+
+        _wsmgr.set_loop(_asyncio.get_running_loop())
+    except Exception:
+        logger.exception("Failed to capture event loop for WebSocket manager")
+
+    scheduler = _start_background_scheduler()
+    try:
+        if resume_api_app is not None and getattr(resume_api_app.router, "lifespan_context", None):
+            async with resume_api_app.router.lifespan_context(resume_api_app):
+                yield
+        else:
             yield
-    else:
-        yield
+    finally:
+        if scheduler is not None:
+            try:
+                if scheduler.running:
+                    scheduler.shutdown(wait=False)
+            except Exception:
+                logger.exception("Error shutting down background scheduler")
 
 
 app = FastAPI(
@@ -96,6 +269,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router, prefix="/api")
+
+# Real-time notification WebSocket. Mounted at the application root (NOT under
+# /api/) so the URL is the conventional ws[s]://host/ws/notifications and
+# isn't swallowed by the SPA fallback below.
+try:
+    from app.ws.notifications import router as ws_router
+
+    app.include_router(ws_router)
+except Exception:
+    logger.exception("Failed to mount WebSocket router /ws/notifications")
 
 # Mount Resume Analyzer API at /resume-api so the existing Resume UI works
 # without code changes other than its base URL.
@@ -193,16 +376,12 @@ if RESUME_UI_DIR.is_dir() and (RESUME_UI_DIR / "index.html").exists():
     app.mount("/resume", Utf8StaticFiles(directory=str(RESUME_UI_DIR), html=True), name="resume_ui")
 
 
-# Serve the landing portal at /portal.html (and /portal -> /portal.html)
-PORTAL_HTML = PROJECT_ROOT / "portal.html"
-if PORTAL_HTML.exists():
-    @app.get("/portal.html", include_in_schema=False)
-    def _portal_page():
-        return FileResponse(str(PORTAL_HTML))
-
-    @app.get("/portal", include_in_schema=False)
-    def _portal_redirect():
-        return RedirectResponse(url="/portal.html")
+# Legacy /portal.html and /portal routes have been removed — the application
+# now lands directly on the HRMS login page (the React SPA handles auth).
+@app.get("/portal.html", include_in_schema=False)
+@app.get("/portal", include_in_schema=False)
+def _portal_redirect_to_root():
+    return RedirectResponse(url="/", status_code=302)
 
 
 # Serve React frontend build (production mode)
@@ -250,6 +429,27 @@ if FRONTEND_DIST.exists():
         f = FRONTEND_DIST / "favicon.ico"
         if f.exists():
             return FileResponse(str(f))
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+
+    # Service worker for Web Push notifications. MUST be served from the root
+    # of the origin so its scope is "/" (otherwise the browser scopes it to
+    # /assets/* which means push events from /dsr etc. would be ignored).
+    # The SPA fallback below would otherwise intercept /sw.js and return
+    # index.html — we explicitly route around it.
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker():
+        f = FRONTEND_DIST / "sw.js"
+        if f.exists():
+            return FileResponse(
+                str(f),
+                media_type="application/javascript",
+                headers={
+                    # Prevent stale SW from sticking around forever after a deploy.
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    # Allow root scope even if the file is later moved.
+                    "Service-Worker-Allowed": "/",
+                },
+            )
         return FileResponse(str(FRONTEND_DIST / "index.html"))
 
     # SPA fallback — serve index.html for ALL non-API routes

@@ -268,11 +268,18 @@ def list_leave_allocations(
     if employee_id is not None:
         if not is_admin_or_hr and current_user.employee_id != employee_id:
             return []
+        if is_admin_or_hr:
+            target_emp = db.query(Employee).filter(Employee.id == employee_id).first()
+            if not target_emp or (target_emp.employment_status or "Active") != "Active":
+                return []
         q = q.filter(LeaveAllocation.employee_id == employee_id)
         target_employee_id = employee_id
     else:
         if is_admin_or_hr and financial_year_id is not None:
-            q = q.filter(LeaveAllocation.financial_year_id == financial_year_id)
+            q = q.join(Employee, Employee.id == LeaveAllocation.employee_id).filter(
+                LeaveAllocation.financial_year_id == financial_year_id,
+                Employee.employment_status == "Active",
+            )
         else:
             if not current_user.employee_id:
                 return []
@@ -320,7 +327,6 @@ def list_leave_allocations(
                 or 0
             )
             
-            from app.models.employee import Employee
             att_records = db.query(AttendanceRecord, Employee).join(Employee, Employee.id == AttendanceRecord.employee_id).filter(
                 AttendanceRecord.employee_id == a.employee_id,
                 AttendanceRecord.date >= start,
@@ -419,6 +425,9 @@ def create_allocation(
     fy = db.query(FinancialYear).filter(FinancialYear.id == financial_year_id).first() if financial_year_id else get_current_financial_year(db)
     if not fy:
         raise HTTPException(status_code=400, detail="Financial year required")
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp or (emp.employment_status or "Active") != "Active":
+        raise HTTPException(status_code=400, detail="Inactive employees cannot receive leave allocations.")
     try:
         return allocate_leave_for_fy(db, employee_id, fy.id, leave_type_id, allocated_days)
     except ValueError as e:
@@ -458,6 +467,8 @@ def create_leave_request(
                 f"{name} ({lt_name}) {data.start_date} → {data.end_date}.",
                 kind="LEAVE",
                 link_path="/leave-approvals",
+                with_push=True,
+                exclude_user_id=current_user.id,
             )
         else:
             notify_users_with_roles(
@@ -467,6 +478,8 @@ def create_leave_request(
                 f"{name} requested {lt_name} ({data.start_date} → {data.end_date}).",
                 kind="LEAVE",
                 link_path="/leave-approvals",
+                with_push=True,
+                exclude_user_id=current_user.id,
             )
         requester_email = (emp.official_email if emp else None) or (
             current_user.official_email if current_user else None
@@ -629,6 +642,8 @@ def approve_reject_leave(
             f"Your leave request was {status_word}. Comment: {comment or '—'}",
             kind="LEAVE",
             link_path="/leave",
+            with_push=True,
+            push_tag=f"leave-decision-{req.id}",
         )
         return req
     except ValueError as e:

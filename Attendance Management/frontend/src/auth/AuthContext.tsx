@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { auth as authApi } from "../api/client";
+import {
+  startNotificationSocket,
+  stopNotificationSocket,
+} from "../lib/notificationsSocket";
 
 export interface UserInfo {
   id: number;
@@ -49,6 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         designation: data.designation ?? null,
         official_email: data.official_email,
       });
+      startNotificationSocket();
     } catch {
       setToken(null);
       setUser(null);
@@ -75,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       employee_code: data.employee_code ?? null,
       designation: data.designation ?? null,
     });
+    startNotificationSocket();
   };
 
   const signup = async (username: string, password: string, official_email?: string) => {
@@ -89,9 +95,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       employee_code: data.employee_code ?? null,
       designation: data.designation ?? null,
     });
+    startNotificationSocket();
   };
 
   const logout = () => {
+    // Fire-and-forget cleanup of any Web Push subscription registered for this
+    // user. Don't await — logout must be instant from the user's POV.
+    import("../lib/push")
+      .then((m) => m.teardownPushSubscription())
+      .catch(() => {});
+    stopNotificationSocket();
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     setToken(null);

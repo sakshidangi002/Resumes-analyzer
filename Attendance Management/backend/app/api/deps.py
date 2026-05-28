@@ -10,8 +10,21 @@ from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.models import User
 from app.models.user import Role
+from app.models.employee import Employee, EmploymentStatus
 
 security = HTTPBearer(auto_error=False)
+
+
+# Statuses that revoke ALL access (login, API calls, websockets, etc.).
+# Admin / HR can still manage these records from their own (active) account.
+BLOCKED_EMPLOYMENT_STATUSES = {
+    EmploymentStatus.RESIGNED.value,
+    EmploymentStatus.TERMINATED.value,
+}
+
+
+def is_employment_status_blocked(value: str | None) -> bool:
+    return bool(value) and value in BLOCKED_EMPLOYMENT_STATUSES
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -43,6 +56,20 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User inactive")
+
+    # Resigned / Terminated employees lose access immediately, even if their
+    # User row is still marked active and a JWT was issued earlier.
+    if user.employee_id:
+        emp_status = (
+            db.query(Employee.employment_status)
+            .filter(Employee.id == user.employee_id)
+            .scalar()
+        )
+        if is_employment_status_blocked(emp_status):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access revoked: employee is {emp_status}.",
+            )
     return user
 
 

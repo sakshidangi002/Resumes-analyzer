@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 import zipfile
+from datetime import datetime as _dt
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, time
@@ -105,6 +107,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 EXCEL_DIR = os.path.join(BASE_DIR, "data")
 EXCEL_FILE = os.path.join(EXCEL_DIR, "resumes_data.xlsx")
+# Always under backend/ — not process cwd (unified server runs from hrms/backend).
+CHROMA_DIR = os.path.join(BASE_DIR, "chromadb")
 
 # Excel column order for append
 EXCEL_COLUMNS = ["name", "email", "phone", "skills", "experience", "resume_link", "created_at"]
@@ -259,19 +263,63 @@ class CandidateDetailsUpdate(BaseModel):
 # Vector / embedding manager
 # ---------------------------------------------------------------------------
 
+def _is_chroma_schema_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "no such column" in msg or "collections.topic" in msg or "schema" in msg
+
+
+def _reset_chroma_store(reason: str) -> None:
+    """Remove incompatible Chroma SQLite data (e.g. after chromadb package upgrade)."""
+    if not os.path.isdir(CHROMA_DIR):
+        return
+    backup = f"{CHROMA_DIR}_backup_{_dt.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        shutil.move(CHROMA_DIR, backup)
+        logger.warning(
+            "ChromaDB store reset (%s). Old data moved to: %s. "
+            "Semantic search will re-index on new uploads; PostgreSQL resumes are unchanged.",
+            reason,
+            backup,
+        )
+    except Exception as move_exc:
+        logger.warning("ChromaDB move failed (%s); deleting folder: %s", reason, move_exc)
+        shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+
+
+def _open_chroma_collection(client: PersistentClient):
+    try:
+        return client.get_collection("resumes")
+    except Exception as exc:
+        if _is_chroma_schema_error(exc):
+            raise
+        return client.create_collection(
+            name="resumes",
+            metadata={"hnsw:space": "cosine"},
+        )
+
+
 class ResumeEmbedding:
     def __init__(self):
-        os.makedirs("./chromadb", exist_ok=True)
-        self.chromaclient = PersistentClient(path="./chromadb")
+        os.makedirs(CHROMA_DIR, exist_ok=True)
+        self.chromaclient = PersistentClient(path=CHROMA_DIR)
         try:
-            self.collection = self.chromaclient.get_collection("resumes")
-            logger.info("Found existing 'resumes' ChromaDB collection.")
-        except Exception:
-            self.collection = self.chromaclient.create_collection(
-                name="resumes", 
-                metadata={"hnsw:space": "cosine"},
-            )
-            logger.info("Created new 'resumes' ChromaDB collection.")
+            self.collection = _open_chroma_collection(self.chromaclient)
+            logger.info("Found existing 'resumes' ChromaDB collection at %s.", CHROMA_DIR)
+        except Exception as exc:
+            if _is_chroma_schema_error(exc):
+                _reset_chroma_store(str(exc))
+                self.chromaclient = PersistentClient(path=CHROMA_DIR)
+                self.collection = self.chromaclient.create_collection(
+                    name="resumes",
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info("Created fresh 'resumes' ChromaDB collection after schema reset.")
+            else:
+                self.collection = self.chromaclient.create_collection(
+                    name="resumes",
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info("Created new 'resumes' ChromaDB collection.")
         self.embedder = get_embedding_model()
         logger.info("Embedding manager ready.")
 
@@ -781,12 +829,28 @@ def _encode_embedding(embedding_text: str):
 
 def _chroma_add(vector_id: str, embedding: list, embedding_text: str, file_name: str, name: str) -> None:
     """Blocking: add vector to ChromaDB."""
-    _get_embedding_manager().collection.add(
-        embeddings=[embedding],
-        documents=[embedding_text],
-        metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
-        ids=[vector_id],
-    )
+    mgr = _get_embedding_manager()
+    try:
+        mgr.collection.add(
+            embeddings=[embedding],
+            documents=[embedding_text],
+            metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
+            ids=[vector_id],
+        )
+    except Exception as exc:
+        if not _is_chroma_schema_error(exc):
+            raise
+        global embedding_manager
+        logger.warning("ChromaDB add failed with schema error; resetting store: %s", exc)
+        embedding_manager = None
+        _reset_chroma_store(str(exc))
+        mgr = _get_embedding_manager()
+        mgr.collection.add(
+            embeddings=[embedding],
+            documents=[embedding_text],
+            metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
+            ids=[vector_id],
+        )
 
 
 def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:

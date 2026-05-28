@@ -12,6 +12,8 @@ from app.models.letter import LetterTemplate, LetterInstance, LetterReply
 from app.models.event import Event
 from app.models.in_app_notification import AppNotification
 from app.models.onboarding import OnboardingTask
+from app.models.dsr import DailyStatusReport
+from app.models.push_subscription import PushSubscription
 
 __all__ = [
     "Base",
@@ -41,4 +43,6 @@ __all__ = [
     "Event",
     "AppNotification",
     "OnboardingTask",
+    "DailyStatusReport",
+    "PushSubscription",
 ]

@@ -15,6 +15,17 @@ class CompanyConfig(Base):
     grace_time_minutes = Column(Integer, default=15)
     half_day_threshold_hours = Column(Integer, default=4)
 
+    # ---- DSR reminder schedule (configurable by Admin / HR) ---------------
+    # All values are interpreted in IST. Stored on the singleton company
+    # config row; the 5 PM IST scheduler reads these every minute.
+    dsr_reminder_enabled = Column(Boolean, nullable=False, default=True)
+    # "HH:MM" 24h IST, e.g. "17:00".
+    dsr_reminder_time = Column(String(5), nullable=False, default="17:00")
+    # Comma-separated lowercase weekday tokens — mon, tue, wed, thu, fri, sat, sun.
+    dsr_reminder_weekdays = Column(
+        String(64), nullable=False, default="mon,tue,wed,thu,fri"
+    )
+
 
 class FinancialYear(Base):
     __tablename__ = "financial_years"

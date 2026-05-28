@@ -9,7 +9,7 @@ from app.models import User
 from app.models.employee import Employee
 from app.models.user import Role, user_roles
 from app.schemas.auth import LoginRequest, SignupRequest, Token, ForgotPasswordRequest
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, is_employment_status_blocked
 from app.schemas.user import UserWithRoles
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -81,20 +81,33 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User inactive")
+
+    # Fetch employee data if linked
+    employee_code = None
+    designation = None
+    emp = None
+    if user.employee_id:
+        emp = db.query(Employee).filter(Employee.id == user.employee_id).first()
+        if emp:
+            # Resigned / Terminated employees cannot log in.
+            if is_employment_status_blocked(emp.employment_status):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Access revoked: this account is linked to an employee "
+                        f"marked '{emp.employment_status}'. Contact HR if this is "
+                        f"a mistake."
+                    ),
+                )
+            employee_code = emp.employee_code
+            if emp.designation:
+                designation = emp.designation.title
+
     role_names = [r.name for r in user.roles]
     access_token = create_access_token(
         subject=user.id,
         extra_claims={"roles": role_names, "employee_id": user.employee_id},
     )
-    # Fetch employee data if linked
-    employee_code = None
-    designation = None
-    if user.employee_id:
-        emp = db.query(Employee).filter(Employee.id == user.employee_id).first()
-        if emp:
-            employee_code = emp.employee_code
-            if emp.designation:
-                designation = emp.designation.title
 
     return Token(
         access_token=access_token,

@@ -790,6 +790,94 @@ body * {
   background: rgb(var(--brand-rgb) / 0.10);
 }
 
+/* DSR (Daily Status Report) — two-column layout collapses on narrow screens */
+.dsr-grid {
+  /* default is set inline (1fr 320px); override below for narrow viewports */
+}
+@media (max-width: 1024px) {
+  .dsr-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* DSR Recent table — keep cells from blowing out on narrow widths */
+.dsr-recent-table .table-modern th,
+.dsr-recent-table .table-modern td {
+  font-size: 0.82rem;
+  padding-top: 0.7rem;
+  padding-bottom: 0.7rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Rounded square action icons used in DSR (and other) tables.
+ * Same visual weight for View / Edit / Delete — only the colour changes for
+ * danger actions so the user can scan for the destructive button at a glance.
+ * ------------------------------------------------------------------------- */
+.btn-icon-action {
+  width: 34px;
+  height: 34px;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.88) !important;
+  transition: background 140ms ease, border-color 140ms ease,
+    transform 80ms ease, color 140ms ease;
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.btn-icon-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #fff !important;
+}
+
+.btn-icon-action:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.btn-icon-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-icon-action--danger {
+  background: #ef4444 !important;
+  border-color: #ef4444 !important;
+  color: #fff !important;
+}
+
+.btn-icon-action--danger:hover:not(:disabled) {
+  background: #dc2626 !important;
+  border-color: #dc2626 !important;
+  color: #fff !important;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.35);
+}
+
+/* Payroll Periods — uniform 4-column layout with centered cells.
+   Overrides the global :first-child / :last-child padding & alignment
+   rules so all four columns render at exactly 25% with centered content. */
+.payroll-periods-table .table-modern th,
+.payroll-periods-table .table-modern td {
+  text-align: center !important;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.payroll-periods-table .table-modern th:first-child,
+.payroll-periods-table .table-modern td:first-child,
+.payroll-periods-table .table-modern th:last-child,
+.payroll-periods-table .table-modern td:last-child {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  text-align: center !important;
+}
+
 /* Leave Approvals — compact, readable table */
 .leave-approvals-table th,
 .leave-approvals-table td {

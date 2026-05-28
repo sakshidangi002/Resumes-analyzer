@@ -276,3 +276,139 @@ export const onboarding = {
     api.patch<OnboardingTaskRow>("/onboarding/tasks/" + id, data),
   deleteTask: (id: number) => api.delete("/onboarding/tasks/" + id),
 };
+
+// ---------------------------------------------------------------------------
+// Daily Status Report (DSR)
+// ---------------------------------------------------------------------------
+export type DSRStatus = "DRAFT" | "SUBMITTED";
+
+export type DSRRow = {
+  id: number;
+  employee_id: number;
+  employee_name: string | null;
+  employee_code: string | null;
+  designation?: string | null;
+  report_date: string; // YYYY-MM-DD
+  project_work: string | null;
+  work_location: string | null;
+  total_hours: string | number | null;
+  work_done: string;
+  plan_for_tomorrow: string | null;
+  status: DSRStatus;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DSRSummaryRow = {
+  year: number;
+  month: number;
+  total: number;
+  submitted: number;
+  draft: number;
+  pending: number;
+};
+
+export type DSRCreatePayload = {
+  report_date: string; // YYYY-MM-DD
+  project_work?: string | null;
+  work_location?: string | null;
+  total_hours?: number | string | null;
+  work_done: string;
+  plan_for_tomorrow?: string | null;
+  status?: DSRStatus;
+};
+
+export type DSRUpdatePayload = Partial<Omit<DSRCreatePayload, "report_date">>;
+
+export type DSRTodayStatus = {
+  today_ist: string;            // YYYY-MM-DD in IST
+  has_dsr: boolean;
+  submitted: boolean;
+  dsr_id: number | null;
+  needs_dsr: boolean;           // true when today's DSR isn't SUBMITTED yet
+};
+
+// ---------------------------------------------------------------------------
+// Web Push (5 PM IST DSR reminder etc.)
+// ---------------------------------------------------------------------------
+export type PushSubscribePayload = {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+};
+
+export const push = {
+  vapidPublicKey: () => api.get<{ key: string }>("/push/vapid-public-key"),
+  subscribe: (data: PushSubscribePayload) =>
+    api.post<{ ok: boolean; subscription_id: number; updated: boolean }>(
+      "/push/subscribe",
+      data
+    ),
+  unsubscribe: (endpoint: string) =>
+    api.post<{ ok: boolean; deleted: number }>("/push/unsubscribe", { endpoint }),
+};
+
+export type DSRReminderSettings = {
+  enabled: boolean;
+  time: string;        // "HH:MM" 24h, IST
+  weekdays: string[];  // ["mon","tue",...]
+  current_ist: string; // "YYYY-MM-DD HH:MM"
+};
+
+export type DSRReminderSettingsUpdate = {
+  enabled?: boolean;
+  time?: string;
+  weekdays?: string[];
+};
+
+export type DSRPendingEmployee = {
+  user_id: number;
+  employee_id: number;
+  employee_name: string;
+  employee_code: string | null;
+  department: string | null;
+  designation: string | null;
+  official_email: string | null;
+  has_draft: boolean;
+};
+
+export type DSRPendingTodayResponse = {
+  today_ist: string;
+  total_active_employees: number;
+  submitted: number;
+  pending: DSRPendingEmployee[];
+};
+
+export type DSRManualRemindResponse = {
+  today_ist: string;
+  notified: number;
+  skipped_submitted: number;
+  skipped_no_target: number;
+};
+
+export const dsr = {
+  mine: (params?: { year?: number; month?: number; limit?: number }) =>
+    api.get<DSRRow[]>("/dsr/me", { params }),
+  summary: (params?: { year?: number; month?: number }) =>
+    api.get<DSRSummaryRow>("/dsr/me/summary", { params }),
+  todayStatus: () => api.get<DSRTodayStatus>("/dsr/me/today-status"),
+  reminderSettings: () => api.get<DSRReminderSettings>("/dsr-reminder/settings"),
+  updateReminderSettings: (data: DSRReminderSettingsUpdate) =>
+    api.put<DSRReminderSettings>("/dsr-reminder/settings", data),
+  notifyMe: () =>
+    api.post<{ created: boolean; reason: string; today_ist: string }>(
+      "/dsr-reminder/notify-me",
+    ),
+  listAll: (params?: { year?: number; month?: number; employee_id?: number; status?: string; limit?: number }) =>
+    api.get<DSRRow[]>("/dsr/all", { params }),
+  get: (id: number) => api.get<DSRRow>("/dsr/" + id),
+  create: (data: DSRCreatePayload) => api.post<DSRRow>("/dsr/me", data),
+  update: (id: number, data: DSRUpdatePayload) => api.patch<DSRRow>("/dsr/" + id, data),
+  remove: (id: number) => api.delete("/dsr/" + id),
+  pendingToday: () =>
+    api.get<DSRPendingTodayResponse>("/dsr-reminder/pending-today"),
+  remindPendingToday: (user_ids: number[] = []) =>
+    api.post<DSRManualRemindResponse>("/dsr-reminder/pending-today/remind", {
+      user_ids,
+    }),
+};

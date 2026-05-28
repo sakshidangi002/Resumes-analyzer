@@ -3404,8 +3404,10 @@ def extract_resume(resume_text: str) -> dict:
     try:
         best_name, low_confidence, name_meta = rank_name_candidates(base_text, email)
         if best_name and _is_extracted_name_acceptable(best_name):
-            if _name_has_header_support(best_name, base_text, email) or not low_confidence or _name_overlaps_email(best_name, email):
-                name = best_name[:60]
+            # Add validation to reject titles, companies, etc.
+            if _is_plausible_person_name(best_name):
+                if _name_has_header_support(best_name, base_text, email) or not low_confidence or _name_overlaps_email(best_name, email):
+                    name = best_name[:60]
         if low_confidence and best_name:
             extraction_warnings.append("name_low_confidence")
             extraction_warnings.append(
@@ -3434,114 +3436,152 @@ def extract_resume(resume_text: str) -> dict:
             extraction_warnings.append("name_swapped_with_location")
             name, location = location, name
 
-    # Comprehensive technical skills list (~500+ items)
+    # Comprehensive technical skills list (300+ items)
     skill_keywords = [
         # Programming Languages
         "python", "java", "javascript", "typescript", "go", "rust", "kotlin",
-        "c", "c++", "c#", "php", "ruby", "swift", "r", "scala", "groovy",
+        "c", "c++", "c#", "csharp", "php", "ruby", "swift", "r", "scala", "groovy",
         "perl", "lua", "elixir", "haskell", "f#", "clojure", "erlang",
-        "objective-c", "julia", "sql",
+        "objective-c", "objective c", "julia", "sql", "plsql", "tsql",
+        "html", "xml", "yaml", "json", "matlab", "vb", "vbnet",
+        "coffeescript", "dart", "nim", "crystal",
 
         # Web Frameworks
-        "react", "angular", "vue", "nextjs", "next.js", "svelte", "ember", "backbone",
-        "django", "flask", "fastapi", "spring", "express", "nestjs", "laravel",
-        "rails", "asp.net", "asp net", ".net", "dotnet",
-        "graphql", "apollo", "redux", "nuxt", "nuxt.js", "gatsby", "prisma", "strapi",
+        "react", "react.js", "angular", "vue", "vue.js", "nextjs", "next.js", "svelte",
+        "ember", "ember.js", "backbone", "django", "flask", "fastapi",
+        "spring", "spring boot", "express", "express.js", "nestjs", "nest.js",
+        "laravel", "laravel framework", "rails", "ruby on rails", "asp.net",
+        "asp.net core", "aspnet", "aspnet core", ".net", "dotnet", "graphql",
+        "apollo", "redux", "nuxt", "nuxt.js", "gatsby", "prisma", "strapi",
+        "docusaurus", "hexo", "jekyll", "phoenix", "meteor", "quart", "sanic",
 
         # Databases
-        "postgresql", "mysql", "mongodb", "dynamodb", "cassandra", "redis",
-        "elasticsearch", "firestore", "oracle", "sqlite", "mariadb", "couchdb",
-        "neo4j", "memcached", "solr", "snowflake", "bigquery",
+        "postgresql", "postgres", "mysql", "mongodb", "mongo", "dynamodb",
+        "cassandra", "redis", "elasticsearch", "firestore", "oracle",
+        "oracle database", "sqlite", "mariadb", "couchdb", "neo4j",
+        "memcached", "solr", "snowflake", "bigquery", "redshift", "cockroachdb",
+        "hazelcast", "influxdb", "timescaledb", "duckdb", "supabase",
+        "rethinkdb", "arangodb", "cosmos db",
 
         # Cloud Platforms
-        "aws", "azure", "gcp", "google cloud", "digitalocean", "heroku",
-        "ibm cloud", "oracle cloud", "linode", "vultr", "aws lambda",
-        "azure functions", "google cloud functions", "cloudflare", "vercel",
-        "netlify", "render",
+        "aws", "amazon web services", "azure", "gcp", "google cloud",
+        "google cloud platform", "digitalocean", "heroku", "ibm cloud",
+        "oracle cloud", "linode", "vultr", "aws lambda", "aws ec2", "aws s3",
+        "aws rds", "azure functions", "google cloud functions", "cloudflare",
+        "cloudflare workers", "vercel", "netlify", "render", "railway",
+        "replit", "glitch", "fly.io",
 
-        # DevOps & Tools
-        "docker", "kubernetes", "jenkins", "gitlab", "github", "git", "terraform",
-        "nginx", "ansible", "vagrant", "prometheus", "grafana", "elk", "splunk",
-        "datadog", "newrelic", "circleci", "travis", "github actions",
+        # DevOps & Deployment
+        "docker", "kubernetes", "k8s", "jenkins", "gitlab", "github",
+        "github actions", "git", "gitops", "terraform", "ansible",
+        "nginx", "apache", "vagrant", "prometheus", "grafana", "elk",
+        "splunk", "datadog", "newrelic", "dynatrace", "appdynamics",
+        "circleci", "travis", "travis ci", "bamboo", "teamcity",
+        "argocd", "helm", "spinnaker", "puppet", "chef", "salt",
+        "dagger", "buildkite", "concourse",
 
         # Enterprise Platforms
-        "salesforce", "servicenow", "sap", "workday", "netsuite",
-        "dynamics 365", "jira", "confluence", "sharepoint", "tableau",
-        "figma", "sketch", "miro", "zeplin",
-        "powerbi", "looker", "qlik",
+        "salesforce", "servicenow", "sap", "sap basis", "sap hana", "workday",
+        "netsuite", "dynamics 365", "dynamics365", "jira", "confluence",
+        "sharepoint", "tableau", "figma", "sketch", "miro", "zeplin",
+        "powerbi", "power bi", "looker", "qlik", "microstrategy", "sisense",
+        "sumo logic", "sentry", "monday.com",
 
         # Mobile Development
-        "react native", "flutter", "xamarin", "cordova",
+        "react native", "react-native", "flutter", "xamarin", "cordova",
         "phonegap", "ionic", "swiftui", "jetpack compose",
+        "kotlin multiplatform", "maui", "nativescript",
 
-        # Testing Frameworks
-        "jest", "pytest", "selenium", "junit", "testng", "mockito", "mocha",
-        "jasmine", "cypress", "puppeteer", "webdriver", "rspec", "cucumber",
-        "postman", "jmeter",
+        # Testing & QA
+        "jest", "pytest", "selenium", "junit", "testng", "mockito",
+        "mocha", "jasmine", "cypress", "puppeteer", "webdriver",
+        "rspec", "cucumber", "behave", "postman", "jmeter", "gatling",
+        "appium", "testcafe", "nightwatch", "protractor", "karma",
+        "vitest", "playwright", "webdriverio",
 
         # Big Data & Analytics
-        "spark", "hadoop", "hive", "pig", "airflow", "dbt",
-        "kafka", "beam", "flink", "presto", "drill", "impala", "sqoop",
+        "spark", "apache spark", "hadoop", "hive", "pig", "airflow",
+        "dbt", "kafka", "beam", "flink", "presto", "drill", "impala",
+        "sqoop", "nifi", "luigi", "prefect", "dagster", "ray",
+        "dask", "clickhouse", "druid",
 
-        # ML & Data Science
+        # Machine Learning & AI
         "tensorflow", "pytorch", "keras", "scikit-learn", "pandas", "numpy",
-        "scipy", "matplotlib", "seaborn", "jupyter", "anaconda", "mlflow",
-        "huggingface", "xgboost", "lightgbm",
-        "machine learning", "deep learning", "nlp", "natural language processing",
-        "computer vision", "data science", "feature engineering",
+        "scipy", "matplotlib", "seaborn", "jupyter", "anaconda",
+        "mlflow", "huggingface", "transformers", "xgboost", "lightgbm",
+        "catboost", "machine learning", "deep learning", "nlp",
+        "natural language processing", "computer vision", "data science",
+        "feature engineering", "neural networks", "llm", "gpt",
+        "langchain", "llamaindex", "openai", "anthropic", "cohere",
 
         # Message Queues
-        "rabbitmq", "activemq", "nats", "zeromq",
-        "nservicebus", "masstransit",
+        "rabbitmq", "activemq", "nats", "zeromq", "zmq",
+        "nservicebus", "masstransit", "pulsar", "mqtt",
 
-        # Front-end Tools
-        "webpack", "vite", "parcel", "rollup", "gulp", "grunt", "npm", "yarn",
-        "pnpm", "bower", "npm scripts", "lerna",
+        # Frontend Tools
+        "webpack", "vite", "parcel", "rollup", "gulp", "grunt",
+        "npm", "yarn", "pnpm", "bower", "lerna", "monorepo",
+        "turbo", "nx", "esbuild", "swc", "tsup",
 
-        # Version Control & CI
-        "git", "svn", "mercurial", "perforce", "github", "gitlab", "bitbucket",
-        "gitea", "gitbucket",
+        # Version Control
+        "git", "svn", "mercurial", "perforce", "gitea", "gitbucket",
+        "github", "gitlab", "bitbucket",
 
         # AWS Certifications
         "aws certified", "aws solutions architect", "aws developer",
-        "aws sysops", "aws devops", "aws data analytics", "aws cloud practitioner",
-        "aws associate",
+        "aws sysops", "aws devops", "aws data analytics",
+        "aws cloud practitioner", "aws associate", "aws professional",
+        "aws specialty", "aws machine learning",
 
         # Azure Certifications
         "azure certified", "azure administrator", "azure developer",
         "azure solutions architect", "azure data engineer", "azure ai",
-        "az-900", "az-104",
+        "az-900", "az-104", "az-500", "az-305",
 
-        # Google Cloud Certifications
+        # GCP Certifications
         "google cloud certified", "gcp associate", "gcp professional",
-        "cloud architect", "cloud engineer",
+        "cloud architect", "cloud engineer", "cloud developer",
 
         # Kubernetes Certifications
-        "cka", "ckad", "kubernetes certified",
+        "cka", "ckad", "kubernetes certified", "certified kubernetes",
+        "certified kubernetes administrator",
 
         # Other Certifications
-        "pmp", "scrum", "cissp", "oscp", "rhce", "comptia", "security+",
-        "lpic", "giac", "cism",
+        "pmp", "scrum", "scrum master", "cissp", "oscp", "rhce",
+        "comptia", "security+", "lpic", "giac", "cism", "ccna", "ccnp",
+        "itil", "cobit",
 
         # IDE & Editors
-        "intellij", "vs code", "visual studio", "eclipse", "pycharm", "webstorm",
-        "sublime text", "atom", "vim", "emacs",
+        "intellij", "intellij idea", "vs code", "visual studio",
+        "eclipse", "pycharm", "webstorm", "sublime text", "atom",
+        "vim", "emacs", "neovim", "cursor",
 
         # OS & Environments
-        "linux", "ubuntu", "centos", "windows", "macos", "solaris",
-        "bsd", "rhel",
+        "linux", "ubuntu", "centos", "debian", "fedora", "rhel",
+        "windows", "macos", "mac os", "osx", "solaris", "bsd",
 
-        # Other Common Skills
-        "microservices", "rest api", "soap", "grpc", "websockets",
-        "mqtt", "socket.io", "html", "css", "tailwind", "bootstrap",
-        "node", "nodejs", "excel", "powerbi",
+        # API & Architecture
+        "microservices", "rest api", "rest", "soap", "grpc",
+        "websockets", "socket.io", "event-driven", "serverless",
+        "crud", "openapi", "swagger", "rpc",
 
-        # Creative / 3D / Media Tools
+        # CSS & Styling
+        "css", "css3", "sass", "less", "postcss", "styled-components",
+        "emotion", "chakra", "shadcn", "storybook", "tailwind",
+        "tailwind css", "bootstrap", "material ui", "ant design",
+
+        # Misc Technical
+        "nodejs", "node.js", "node", "excel", "powerbi",
+        "html5", "ci/cd", "devops", "microservice", "containerization",
+        "ci cd", "infrastructure as code", "iac",
+
+        # Creative & 3D
         "autodesk maya", "maya", "substance painter", "substance 3d painter",
-        "arnold renderer", "arnold", "rizom uv", "adobe photoshop", "photoshop",
-        "blender", "3ds max", "cinema 4d", "zbrush", "after effects",
-        "premiere pro", "3d modeling", "hard surface modeling",
-        "product visualization", "uv unwrapping", "texturing", "rendering",
+        "arnold renderer", "arnold", "rizom uv", "adobe photoshop",
+        "photoshop", "blender", "3ds max", "cinema 4d", "zbrush",
+        "after effects", "premiere pro", "final cut pro", "davinci resolve",
+        "3d modeling", "hard surface modeling", "product visualization",
+        "uv unwrapping", "texturing", "rendering", "animation",
     ]
     _tech_vocab = _build_tech_skill_vocab(skill_keywords)
     # --- Skills extraction (cleaned, context-aware) ---
@@ -3604,6 +3644,45 @@ def extract_resume(resume_text: str) -> dict:
 
     # Education extraction: prefer EDUCATION section to avoid false positives
     # like "engineering" in role descriptions or "certificate" in cert lists.
+    def is_truly_educational_item(text):
+        """Filter out certifications, only keep real educational degrees."""
+        if not text or len(text) > 200:
+            return False
+
+        text_lower = text.lower()
+
+        # Certification indicators (NOT education)
+        cert_keywords = {
+            "certification", "certified", "certifications",
+            "certificate of", "accredited", "license", "licensed",
+            "trained in", "proficiency", "competency",
+        }
+
+        if any(kw in text_lower for kw in cert_keywords):
+            return False
+
+        # Known certifications
+        known_certs = {
+            "aws", "azure", "gcp", "kubernetes", "docker",
+            "cka", "ckad", "pmp", "scrum", "cissp", "oscp",
+            "security+", "comptia", "lpic", "giac", "cism",
+            "rhce", "ccna", "ccnp",
+        }
+
+        if any(cert in text_lower for cert in known_certs):
+            return False
+
+        # Degree indicators
+        degree_keywords = {
+            "bachelor", "master", "phd", "doctorate", "associate",
+            "diploma", "b.tech", "m.tech", "b.sc", "m.sc",
+            "b.a", "b.s", "m.a", "m.s", "m.b.a",
+            "b.com", "m.com", "b.e", "m.e",
+            "degree", "graduated", "completed",
+        }
+
+        return any(kw in text_lower for kw in degree_keywords)
+
     degree_keywords = [
         "bachelor",
         "master",
@@ -3613,14 +3692,21 @@ def extract_resume(resume_text: str) -> dict:
         "diploma",
         "b.sc",
         "m.sc",
+        "b.a",
+        "b.s",
+        "m.a",
+        "m.s",
         "engineering",
-        "certificate",
     ]
     edu_block = _find_section_block(resume_text, {"education"}, max_lines=40)
     edu_text = (edu_block or resume_text or "").lower()
+
     for degree in degree_keywords:
         if degree.lower() in edu_text:
-            education.append(degree.title())
+            # Only add if it passes the education filter (not a certification)
+            if is_truly_educational_item(degree):
+                education.append(degree.title())
+
     education = list(dict.fromkeys(education))
 
     if "project" in resume_lower:

@@ -344,16 +344,10 @@ export default function Leave() {
                   <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                     <thead>
                       <tr>
-                        <th style={{ width: '25%', textAlign: 'left' }}>LEAVE TYPE</th>
-                        <th style={{ width: '25%', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>TOTAL LEAVES</div>
-                        </th>
-                        <th style={{ width: '25%', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>LEAVES TAKEN</div>
-                        </th>
-                        <th style={{ width: '25%', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>LEAVES LEFT</div>
-                        </th>
+                        <th style={{ width: '25%', textAlign: 'center' }}>LEAVE TYPE</th>
+                        <th style={{ width: '25%', textAlign: 'center' }}>TOTAL LEAVES</th>
+                        <th style={{ width: '25%', textAlign: 'center' }}>LEAVES TAKEN</th>
+                        <th style={{ width: '25%', textAlign: 'center' }}>LEAVES LEFT</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -362,22 +356,10 @@ export default function Leave() {
                           a.balance_days != null ? Number(a.balance_days) : Number(a.allocated_days) - Number(a.used_days);
                         return (
                           <tr key={a.leave_type_id}>
-                            <td style={{ textAlign: 'left' }}>{types.find((t) => t.id === a.leave_type_id)?.name ?? a.leave_type_id}</td>
-                            <td style={{ textAlign: 'center' }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                                {Math.round(Number(a.allocated_days))}
-                              </div>
-                            </td>
-                            <td style={{ textAlign: 'center' }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                                {Math.round(Number(a.used_days))}
-                              </div>
-                            </td>
-                            <td style={{ textAlign: 'center', fontWeight: 800 }}>
-                              <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                                {Math.round(left)}
-                              </div>
-                            </td>
+                            <td style={{ textAlign: 'center' }}>{types.find((t) => t.id === a.leave_type_id)?.name ?? a.leave_type_id}</td>
+                            <td style={{ textAlign: 'center' }}>{Math.round(Number(a.allocated_days))}</td>
+                            <td style={{ textAlign: 'center' }}>{Math.round(Number(a.used_days))}</td>
+                            <td style={{ textAlign: 'center', fontWeight: 800 }}>{Math.round(left)}</td>
                           </tr>
                         );
                       })}
@@ -610,10 +592,10 @@ export default function Leave() {
                 requests.length > 0 && <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                   <thead>
                     <tr>
-                      <SortableHeader label="DATES" columnKey="start_date" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
-                      <SortableHeader label="TYPE" columnKey="type" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
-                      <SortableHeader label="REASON" columnKey="reason" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
-                      <SortableHeader label="STATUS" columnKey="status" sort={leaveSort} onToggle={toggleLeaveSort} style={{ width: '20%' }} />
+                      <SortableHeader label="DATES" columnKey="start_date" sort={leaveSort} onToggle={toggleLeaveSort} align="center" style={{ width: '20%' }} />
+                      <SortableHeader label="TYPE" columnKey="type" sort={leaveSort} onToggle={toggleLeaveSort} align="center" style={{ width: '20%' }} />
+                      <SortableHeader label="REASON" columnKey="reason" sort={leaveSort} onToggle={toggleLeaveSort} align="center" style={{ width: '20%' }} />
+                      <SortableHeader label="STATUS" columnKey="status" sort={leaveSort} onToggle={toggleLeaveSort} align="center" style={{ width: '20%' }} />
                       <SortableHeader label="ACTIONS" columnKey="__actions" sort={leaveSort} onToggle={toggleLeaveSort} notSortable align="center" style={{ width: '20%' }} />
                     </tr>
                   </thead>
@@ -643,23 +625,23 @@ export default function Leave() {
                             : "Full day";
                       return (
                         <tr key={r.id}>
-                          <td style={{ whiteSpace: 'nowrap', textAlign: 'left' }}>
+                          <td style={{ whiteSpace: 'nowrap', textAlign: 'center' }}>
                             {formatDate(r.start_date)} - {formatDate(r.end_date)}
                           </td>
-                          <td style={{ textAlign: 'left' }}>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', justifyContent: 'flex-start' }}>
+                          <td style={{ textAlign: 'center' }}>
+                            <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', justifyContent: 'center' }}>
                               <span>{typeName}</span>
                               <span style={{ opacity: 0.8, fontSize: '0.75rem' }}>({kindLabel})</span>
                             </div>
                           </td>
-                          <td style={{ textAlign: 'left' }}>
+                          <td style={{ textAlign: 'center' }}>
                             <div className="text-truncate" style={{ width: '100%' }} title={r.reason || "-"}>
                               {r.reason || "-"}
                             </div>
                           </td>
                           <td
                             style={{
-                              textAlign: 'left',
+                              textAlign: 'center',
                               fontWeight: 900,
                               color:
                                 r.status === "APPROVED"
@@ -728,13 +710,9 @@ export default function Leave() {
                 <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                   <thead>
                     <tr>
-                      <th style={{ width: '25%', textAlign: 'left' }}>LEAVE TYPE</th>
-                      <th style={{ width: '25%', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>TOTAL LEAVES</div>
-                      </th>
-                      <th style={{ width: '25%', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>LEAVES TAKEN</div>
-                      </th>
+                      <th style={{ width: '25%', textAlign: 'center' }}>LEAVE TYPE</th>
+                      <th style={{ width: '25%', textAlign: 'center' }}>TOTAL LEAVES</th>
+                      <th style={{ width: '25%', textAlign: 'center' }}>LEAVES TAKEN</th>
                       <th style={{ width: '25%', textAlign: 'center' }}>
                         <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>LEAVES LEFT</div>
                       </th>
@@ -747,26 +725,14 @@ export default function Leave() {
                       const typeName = types.find((t) => t.id === a.leave_type_id)?.name ?? String(a.leave_type_id);
                       return (
                         <tr key={a.leave_type_id} style={{ height: '50px' }}>
-                          <td style={{ textAlign: 'left' }}>
+                          <td style={{ textAlign: 'center' }}>
                             <div className="text-truncate" style={{ width: '100%' }} title={typeName}>
                               {typeName}
                             </div>
                           </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                              {Math.round(Number(a.allocated_days))}
-                            </div>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                              {Math.round(Number(a.used_days))}
-                            </div>
-                          </td>
-                          <td style={{ textAlign: 'center', fontWeight: 800 }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                              {Math.round(balance)}
-                            </div>
-                          </td>
+                          <td style={{ textAlign: 'center' }}>{Math.round(Number(a.allocated_days))}</td>
+                          <td style={{ textAlign: 'center' }}>{Math.round(Number(a.used_days))}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 800 }}>{Math.round(balance)}</td>
                         </tr>
                       );
                     })}

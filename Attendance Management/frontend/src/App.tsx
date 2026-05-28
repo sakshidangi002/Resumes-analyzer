@@ -23,6 +23,7 @@ import Calendar from "./pages/Calendar";
 import Notifications from "./pages/Notifications";
 import Inbox from "./pages/Inbox";
 import Onboarding from "./pages/Onboarding";
+import DSR from "./pages/DSR";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth();
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="inbox" element={<Inbox />} />
         <Route path="onboarding" element={<Onboarding />} />
+        <Route path="dsr" element={<DSR />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

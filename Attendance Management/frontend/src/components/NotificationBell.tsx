@@ -14,8 +14,34 @@ export default function NotificationBell() {
 
   useEffect(() => {
     load();
+    // 60 s safety-net poll. With the WebSocket connected this is almost
+    // never the trigger, but we keep it so the badge still updates if the
+    // socket is closed by an aggressive proxy.
     const t = window.setInterval(load, 60_000);
-    return () => window.clearInterval(t);
+    const onRefresh = () => load();
+    // Realtime push from /ws/notifications — the freshest possible signal.
+    const onRealtime = () => load();
+    // Components that just created a new notification (e.g. the DSR reminder
+    // banner calling /notify-me) dispatch this event so the badge updates
+    // immediately rather than after the next 60 s poll.
+    window.addEventListener("softwiz:notif-refresh", onRefresh);
+    window.addEventListener("softwiz:notif-realtime", onRealtime);
+    // Inbox tab in another window/tab may mark items read; resync on focus.
+    window.addEventListener("focus", onRefresh);
+    // The service worker forwards every Web Push to open tabs so we can
+    // refresh the bell badge the moment a leave / letter / task / event /
+    // DSR push lands — without waiting for the 60 s timer.
+    const onSwMessage = (e: MessageEvent) => {
+      if (e && e.data && e.data.type === "softwiz:notif-refresh") load();
+    };
+    navigator.serviceWorker?.addEventListener("message", onSwMessage);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener("softwiz:notif-refresh", onRefresh);
+      window.removeEventListener("softwiz:notif-realtime", onRealtime);
+      window.removeEventListener("focus", onRefresh);
+      navigator.serviceWorker?.removeEventListener("message", onSwMessage);
+    };
   }, []);
 
   return (

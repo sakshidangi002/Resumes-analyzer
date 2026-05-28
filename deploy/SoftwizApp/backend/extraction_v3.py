@@ -105,13 +105,32 @@ def split_resume_sections(text: str) -> dict:
         if not norm:
             return False
         known = {
-            "skills", "technical skills", "tech skills", "key skills", "core competencies",
-            "skill set", "skillset", "tech stack", "technology stack", "technologies",
-            "tools", "tools technologies", "tools and technologies", "expertise",
-            "technical expertise", "areas of expertise", "professional skills", "key hr skills", "hr skills",
-            "core strengths", "it skills", "technical skill set", "skills summary",
-            "key competencies", "technical competencies", "relevant skills",
-            "technical proficiencies", "proficiencies", "technical capabilities",
+            # Core skills headers
+            "skills", "technical skills", "tech skills", "key skills",
+            "core competencies", "competencies", "skill set", "skillset",
+            # Technology/Stack headers
+            "tech stack", "technology stack", "technologies", "technical stack",
+            "tools", "tools and technologies", "tools technologies", "tools & technologies",
+            "programming languages", "languages", "programming",
+            # Expertise headers
+            "expertise", "technical expertise", "areas of expertise",
+            "professional skills", "technical skills",
+            # Proficiency headers
+            "proficiencies", "technical proficiencies", "technical capabilities",
+            "capabilities", "proficiency level",
+            # Knowledge headers
+            "technical knowledge", "knowledge", "domain knowledge",
+            # Certifications (sometimes grouped with skills)
+            "certifications", "certificates", "licenses",
+            # Platform-specific
+            "platforms", "frameworks", "libraries", "packages", "sdks",
+            # Cloud/DevOps
+            "cloud", "cloud platforms", "devops tools",
+            # Generic variations
+            "core strengths", "it skills", "technical skill set",
+            "skills summary", "key competencies", "technical competencies",
+            "relevant skills", "professional expertise", "hr skills", "key hr skills",
+            "management skills", "core technical skills",
         }
         if norm in known:
             return True
@@ -250,6 +269,66 @@ def extract_deterministic_name(text: str) -> str:
 # ---------------------------------------------------------------------------
 # 4. Improve Skill Extraction
 # ---------------------------------------------------------------------------
+
+# Common English / career-objective / soft-prose tokens that frequently leak
+# into a parsed "Skills" section (because the resume layout drifts into a
+# summary or objective right after the header). These are NEVER skills, no
+# matter how prominently they appear.
+_NON_SKILL_PROSE_TOKENS = {
+    # Career-goal / objective vocabulary
+    "growth", "growth opportunity", "growth opportunities", "opportunity",
+    "opportunities", "career", "career growth", "career objective",
+    "objective", "objectives", "goal", "goals", "aim", "ambition",
+    "looking", "seeking", "interested", "motivation", "motivated",
+    "passion", "passionate", "dedicated", "dedication",
+    # Filler superlatives / soft fluff
+    "good", "great", "excellent", "strong", "quick", "fast", "best",
+    "skilled", "skill", "skills", "knowledge", "knowledgeable",
+    "etc", "etc.", "and", "or", "the", "with", "of", "in", "on",
+    # Soft-skill phrases on their own line
+    "team player", "quick learner", "fast learner", "self learner",
+    "self motivated", "self-motivated", "hard working", "hardworking",
+    "responsible", "result oriented", "result-oriented", "results oriented",
+    "results-oriented", "detail oriented", "detail-oriented",
+}
+
+
+def _strip_trailing_punct(s: str) -> str:
+    """Remove trailing whitespace + sentence punctuation (. , ; : ! ? –) and outer quotes."""
+    return re.sub(r"[\s.,;:!?\u2013\u2014\"'`)]+$", "", s.strip())
+
+
+def _looks_like_sentence_fragment(original_line: str, cleaned: str) -> bool:
+    """A multi-word token that originally ended with sentence punctuation is prose, not a skill."""
+    if " " not in cleaned:
+        return False
+    return bool(re.search(r"[.!?]\s*$", original_line))
+
+
+def _looks_like_prose_token(cleaned: str, tech_vocab_lower: set) -> bool:
+    """
+    Reject a candidate skill token if it looks like English prose.
+    A token is considered prose when it satisfies any of:
+      - Lower-cased form is in the curated NON_SKILL_PROSE_TOKENS blocklist.
+      - Starts lowercase and contains multiple words (sentence fragment).
+      - Contains > 4 words (too long for a typical skill name).
+    Tokens that exist in tech_vocab always survive (e.g. "Node.js").
+    """
+    if not cleaned:
+        return True
+    low = cleaned.lower()
+    if low in tech_vocab_lower:
+        return False
+    if low in _NON_SKILL_PROSE_TOKENS:
+        return True
+    if len(cleaned.split()) > 4:
+        return True
+    if " " in cleaned and cleaned[0].islower():
+        # multi-word fragment starting lowercase, e.g. "looking for growth"
+        return True
+    return False
+
+
 def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab: set) -> list[str]:
     """
     Section-first skill extraction. 
@@ -258,6 +337,7 @@ def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab
     """
     extracted_skills = []
     weak_phrases = {"familiar with", "basic knowledge", "exposure to", "worked on", "understanding of"}
+    tech_vocab_lower = {v.lower() for v in (tech_vocab or set())}
     
     def process_text_vocab(text):
         words = re.split(r"[,\n|•\u2022;]+", text.lower())
@@ -309,22 +389,47 @@ def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab
                 skills_part = colon_match.group(2).strip()
                 # Split the skills part by comma
                 for s in re.split(r",\s*", skills_part):
-                    s = s.strip()
-                    if s and 2 <= len(s) <= 65 and s.lower() not in weak_phrases:
-                        skills.append(s)
+                    s_clean = _strip_trailing_punct(s)
+                    if not s_clean or not (2 <= len(s_clean) <= 65):
+                        continue
+                    if s_clean.lower() in weak_phrases:
+                        continue
+                    if _looks_like_prose_token(s_clean, tech_vocab_lower):
+                        continue
+                    skills.append(s_clean)
                 continue
 
             # Plain line - could be "Python, MySQL, Excel" or just "Teamwork"
             # Split on commas only if the line looks like a list
             if "," in line:
-                parts = [p.strip() for p in line.split(",")]
-                for p in parts:
-                    if p and 2 <= len(p) <= 65 and p.lower() not in weak_phrases:
-                        skills.append(p)
+                for p in line.split(","):
+                    p_clean = _strip_trailing_punct(p)
+                    if not p_clean or not (2 <= len(p_clean) <= 65):
+                        continue
+                    if p_clean.lower() in weak_phrases:
+                        continue
+                    if _looks_like_prose_token(p_clean, tech_vocab_lower):
+                        continue
+                    skills.append(p_clean)
             else:
-                # Single skill or multi-word skill on its own line
-                if 2 <= len(line) <= 65:
-                    skills.append(line)
+                # Single skill or multi-word skill on its own line.
+                # This is the most permissive branch and is what historically let
+                # sentence fragments like "Growth." leak through. Apply the
+                # strictest filter here:
+                #   - strip trailing punctuation
+                #   - reject if the original line ended in a sentence terminator
+                #     and the cleaned token has multiple words (prose fragment)
+                #   - reject prose / soft-fluff tokens
+                cleaned = _strip_trailing_punct(line)
+                if not cleaned or not (2 <= len(cleaned) <= 65):
+                    continue
+                if cleaned.lower() in weak_phrases:
+                    continue
+                if _looks_like_sentence_fragment(line, cleaned):
+                    continue
+                if _looks_like_prose_token(cleaned, tech_vocab_lower):
+                    continue
+                skills.append(cleaned)
 
         return skills
     
@@ -389,6 +494,44 @@ def _build_creative_skill_vocab() -> set[str]:
         "texturing",
         "uv unwrapping",
     }
+
+
+def _is_valid_person_name(name: str) -> bool:
+    """
+    Validate that a candidate string is a plausible person name.
+    Rejects titles, companies, headings, phone numbers.
+    """
+    if not name or len(name) > 60:
+        return False
+
+    BAD_KEYWORDS = {
+        "resume", "cv", "profile", "summary", "objective", "cover letter",
+        "engineer", "developer", "manager", "analyst", "director", "architect",
+        "consultant", "specialist", "lead", "principal", "officer", "executive",
+        "inc", "ltd", "corp", "company", "solutions", "technologies", "services",
+        "phone", "email", "address", "github", "linkedin", "portfolio",
+        "unknown", "anonymous", "n/a", "none"
+    }
+
+    name_lower = name.lower().strip()
+    if any(bad in name_lower for bad in BAD_KEYWORDS):
+        return False
+
+    parts = name.split()
+    if len(parts) < 2 and len(parts[0]) < 3:
+        return False
+
+    if len(parts) > 4:
+        return False
+
+    for part in parts:
+        if not re.match(r"^[a-z'\-]+$", part, re.IGNORECASE):
+            return False
+
+    if re.search(r"\d{3,}", name):
+        return False
+
+    return True
 
 
 def _name_confidence_from_header(text: str, name: str) -> float:

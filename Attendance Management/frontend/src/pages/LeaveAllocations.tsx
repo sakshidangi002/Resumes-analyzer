@@ -33,6 +33,7 @@ interface EmployeeOption {
   id: number;
   employee_code: string;
   full_name: string;
+  employment_status?: string;
 }
 
 // Premium SVG Icons for Actions
@@ -66,15 +67,18 @@ export default function LeaveAllocations() {
   const canManage = hasRole("Admin") || hasRole("HR");
 
   useEffect(() => {
-    Promise.all([companyApi.financialYears(), leaveApi.types(), employeesApi.list()])
+    Promise.all([companyApi.financialYears(), leaveApi.types(), employeesApi.list({ status: "Active" })])
       .then(([fyRes, tRes, eRes]) => {
         setFinancialYears(fyRes.data || []);
         setTypes(tRes.data || []);
         setEmployees(
-          (eRes.data as any[]).map((e: any) => ({
+          ((eRes.data as any[]) || [])
+            .filter((e: any) => (e.employment_status || "Active") === "Active")
+            .map((e: any) => ({
             id: e.id,
             employee_code: e.employee_code,
             full_name: e.full_name,
+            employment_status: e.employment_status,
           }))
         );
         if ((fyRes.data || []).length > 0 && !selectedFyId)
@@ -92,10 +96,14 @@ export default function LeaveAllocations() {
     setLoading(true);
     leaveApi
       .allocations({ financial_year_id: selectedFyId })
-      .then((res) => setAllocations(res.data || []))
+      .then((res) =>
+        setAllocations(
+          (res.data || []).filter((a: Allocation) => employees.some((e) => e.id === a.employee_id))
+        )
+      )
       .catch(() => setAllocations([]))
       .finally(() => setLoading(false));
-  }, [selectedFyId, canManage]);
+  }, [selectedFyId, canManage, employees]);
 
   const employeeLabel = (id: number) => {
     const e = employees.find((x) => x.id === id);
@@ -288,7 +296,7 @@ export default function LeaveAllocations() {
                   onChange={(val) => setForm((f) => ({ ...f, employee_id: val }))}
                   options={[
                     { value: "", label: "Select employee" },
-                    ...[...employees].sort((a, b) => {
+                    ...[...employees].filter((e) => (e.employment_status || "Active") === "Active").sort((a, b) => {
                       const nA = parseInt(a.employee_code.replace(/\D/g, ""), 10) || 0;
                       const nB = parseInt(b.employee_code.replace(/\D/g, ""), 10) || 0;
                       return nA - nB;

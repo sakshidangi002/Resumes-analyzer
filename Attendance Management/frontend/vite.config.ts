@@ -9,7 +9,6 @@ export default defineConfig({
       "/api":        { target: "http://127.0.0.1:5001", changeOrigin: true },
       "/resume-api": { target: "http://127.0.0.1:5001", changeOrigin: true },
       "/resume":     { target: "http://127.0.0.1:5001", changeOrigin: true },
-      "/portal.html":{ target: "http://127.0.0.1:5001", changeOrigin: true },
     },
   },
   preview: {
@@ -18,7 +17,6 @@ export default defineConfig({
       "/api":        { target: "http://127.0.0.1:5001", changeOrigin: true },
       "/resume-api": { target: "http://127.0.0.1:5001", changeOrigin: true },
       "/resume":     { target: "http://127.0.0.1:5001", changeOrigin: true },
-      "/portal.html":{ target: "http://127.0.0.1:5001", changeOrigin: true },
     },
   },
   build: {

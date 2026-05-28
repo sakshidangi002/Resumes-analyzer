@@ -206,14 +206,20 @@ export default function Payroll() {
         ) : periods.length === 0 ? (
           <p className="text-muted">No payroll periods.</p>
         ) : (
-          <div className="table-wrap table-wrap--dark" style={{ marginTop: "1.25rem" }}>
+          <div className="table-wrap table-wrap--dark payroll-periods-table" style={{ marginTop: "1.25rem" }}>
             <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <colgroup>
+                <col style={{ width: '25%' }} />
+                <col style={{ width: '25%' }} />
+                <col style={{ width: '25%' }} />
+                <col style={{ width: '25%' }} />
+              </colgroup>
               <thead>
                 <tr>
-                  <SortableHeader label="Month" columnKey="month" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%', paddingLeft: '1.5rem' }} />
-                  <SortableHeader label="Year" columnKey="year" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%' }} />
-                  <SortableHeader label="Status" columnKey="status" sort={periodSort} onToggle={togglePeriodSort} style={{ width: '25%' }} />
-                  <SortableHeader label="Action" columnKey="__actions" sort={periodSort} onToggle={togglePeriodSort} notSortable align="right" style={{ width: '25%' }} />
+                  <SortableHeader label="Month" columnKey="month" sort={periodSort} onToggle={togglePeriodSort} align="center" />
+                  <SortableHeader label="Year" columnKey="year" sort={periodSort} onToggle={togglePeriodSort} align="center" />
+                  <SortableHeader label="Status" columnKey="status" sort={periodSort} onToggle={togglePeriodSort} align="center" />
+                  <SortableHeader label="Action" columnKey="__actions" sort={periodSort} onToggle={togglePeriodSort} notSortable align="center" />
                 </tr>
               </thead>
               <tbody>
@@ -226,11 +232,11 @@ export default function Payroll() {
                 )}
                 {displayedPeriods.map((p) => (
                   <tr key={p.id}>
-                    <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{monthName(p.month)}</td>
-                    <td>{p.year}</td>
-                    <td>{p.status}</td>
-                    <td className="actions-center">
-                      <div className="actions-stack">
+                    <td style={{ textAlign: 'center' }}>{monthName(p.month)}</td>
+                    <td style={{ textAlign: 'center' }}>{p.year}</td>
+                    <td style={{ textAlign: 'center' }}>{p.status}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div className="actions-stack" style={{ justifyContent: 'center' }}>
                         <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openEdit(p)} title="Edit Period">
                           <Icons.Edit />
                         </button>

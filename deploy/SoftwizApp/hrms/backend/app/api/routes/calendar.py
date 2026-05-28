@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, Holiday, Event, Employee
 from app.api.deps import get_current_user, require_roles
+from app.services.notification_service import notify_user_for_employee
 
 router = APIRouter()
 
@@ -130,6 +131,19 @@ def create_event(
     if ev.employee_id:
         emp = db.query(Employee).filter(Employee.id == ev.employee_id).first()
         emp_name = emp.full_name if emp else None
+        notify_user_for_employee(
+            db,
+            ev.employee_id,
+            f"New event: {ev.title}",
+            (
+                f"{ev.event_type} on {ev.date.strftime('%d %b %Y')}"
+                + (f" — {ev.description.strip()[:200]}" if ev.description else "")
+            ),
+            kind="EVENT",
+            link_path="/calendar",
+            with_push=True,
+            push_tag=f"event-{ev.id}",
+        )
     return {
         "id": ev.id,
         "title": ev.title,

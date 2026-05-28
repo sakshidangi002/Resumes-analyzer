@@ -321,7 +321,7 @@ export default function Onboarding() {
                             style={{
                               width: "36px",
                               height: "36px",
-                              borderRadius: "50%",
+                              borderRadius: "8px",
                               background: "rgba(239, 68, 68, 0.1)",
                               border: "1px solid rgba(239, 68, 68, 0.2)",
                               color: "#f87171",

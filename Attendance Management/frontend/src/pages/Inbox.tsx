@@ -126,9 +126,6 @@ export default function Inbox() {
               <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 900, color: n.read_at ? "rgba(255, 255, 255, 0.78)" : "rgba(255, 255, 255, 0.96)" }}>{formatTitle(n)}</div>
-                  {n.body && (
-                    <div style={{ fontSize: "0.875rem", color: "rgba(255, 255, 255, 0.78)", marginTop: 4, whiteSpace: "pre-wrap" }}>{n.body}</div>
-                  )}
                   <div style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.65)", marginTop: 8 }}>
                     {formatDate(n.created_at)} {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     {n.kind && (

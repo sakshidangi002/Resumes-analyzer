@@ -17,8 +17,7 @@ echo.
 echo ============================================
 echo   Softwiz Unified Server -- port %PORT%
 echo ============================================
-echo   Portal           : http://localhost:%PORT%/portal.html
-echo   Attendance HRMS  : http://localhost:%PORT%/
+echo   Login / HRMS     : http://localhost:%PORT%/
 echo   Resume Analyzer  : http://localhost:%PORT%/resume/      (Admin/HR only)
 echo   HRMS API         : http://localhost:%PORT%/api
 echo   Resume API       : http://localhost:%PORT%/resume-api   (Admin/HR only)

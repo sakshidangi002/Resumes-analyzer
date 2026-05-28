@@ -514,7 +514,7 @@ export default function Attendance() {
         .btn-icon-circle {
           background: rgba(255,255,255,0.06);
           border: 1px solid rgba(255,255,255,0.1);
-          border-radius: 50%;
+          border-radius: 8px;
           width: 32px;
           height: 32px;
           display: flex;

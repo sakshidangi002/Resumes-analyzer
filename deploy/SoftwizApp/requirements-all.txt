@@ -103,3 +103,10 @@ beautifulsoup4>=4.12.0
 python-dotenv>=1.0.0
 jinja2>=3.1.0
 
+# Scheduled jobs (daily 5 PM IST DSR reminder etc.)
+apscheduler>=3.10.4
+tzdata>=2024.1
+
+# Web Push notifications (5 PM IST DSR reminder OS-level popup)
+pywebpush>=2.0.0
+

@@ -23,7 +23,9 @@ export default function GlobalHeaderControls() {
 
   return (
     <div className="global-header-controls-inner" style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
+      
       <NotificationBell />
+      
       <button
         type="button"
         onClick={() => setShowLogoutConfirm(true)}

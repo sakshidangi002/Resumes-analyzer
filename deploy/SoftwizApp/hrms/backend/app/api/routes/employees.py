@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
+from app.api.deps import is_employment_status_blocked
 from app.models import (
     User,
     Employee,
@@ -16,6 +17,7 @@ from app.models import (
     LeaveRequest,
     Event,
 )
+from app.models.employee import EmploymentStatus
 from app.schemas.employee import (
     EmployeeCreate,
     EmployeeUpdate,
@@ -296,8 +298,24 @@ def update_employee(
     if "employee_code" in patch and patch["employee_code"] and patch["employee_code"] != emp.employee_code:
         if db.query(Employee).filter(Employee.employee_code == patch["employee_code"]).first():
             raise HTTPException(status_code=400, detail="Employee code already exists")
+    previous_status = emp.employment_status
     for k, v in patch.items():
         setattr(emp, k, v)
+
+    # When an Admin/HR marks an employee as Resigned or Terminated, deactivate
+    # the linked user account so existing tokens / future logins are rejected.
+    # If they are later reactivated to "Active", the linked user is reactivated
+    # too so they can log in again without a manual fix in the Users panel.
+    new_status = emp.employment_status
+    if new_status != previous_status:
+        linked_users = db.query(User).filter(User.employee_id == emp.id).all()
+        if is_employment_status_blocked(new_status):
+            for u in linked_users:
+                u.is_active = False
+        elif new_status == EmploymentStatus.ACTIVE.value:
+            for u in linked_users:
+                u.is_active = True
+
     db.commit()
     db.refresh(emp)
     return emp

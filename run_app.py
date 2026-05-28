@@ -5,11 +5,10 @@ The Attendance HRMS backend (Attendance Management/backend/app/main.py) now
 also mounts the Resume Analyzer UI and API, so the entire product runs on
 ONE process and ONE URL:
 
-    http://<host>:<port>/              -> Attendance HRMS (React SPA)
+    http://<host>:<port>/              -> Attendance HRMS login / dashboard
     http://<host>:<port>/api/...       -> Attendance HRMS API
     http://<host>:<port>/resume/       -> Resume Analyzer UI
     http://<host>:<port>/resume-api/   -> Resume Analyzer API
-    http://<host>:<port>/portal.html   -> Unified landing portal
 
 Usage (PowerShell):
     python run_app.py                  # serves on 0.0.0.0:5001
@@ -73,8 +72,7 @@ def main() -> None:
     print(f"\n{'=' * 60}")
     print(f"  Softwiz Unified Server")
     print(f"{'=' * 60}")
-    print(f"  Portal           : http://{lan_ip}:{port}/portal.html")
-    print(f"  Attendance HRMS  : http://{lan_ip}:{port}/")
+    print(f"  Login / HRMS     : http://{lan_ip}:{port}/")
     print(f"  Resume Analyzer  : http://{lan_ip}:{port}/resume/")
     print(f"  HRMS API         : http://{lan_ip}:{port}/api")
     print(f"  Resume API       : http://{lan_ip}:{port}/resume-api")
@@ -96,7 +94,7 @@ def main() -> None:
 
     if not args.no_browser:
         threading.Timer(
-            2.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/portal.html")
+            2.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")
         ).start()
 
     proc = subprocess.Popen(cmd, cwd=hrms_backend, env=env)
