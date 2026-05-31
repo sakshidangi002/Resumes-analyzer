@@ -152,7 +152,11 @@ export default function DSR() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
 
-  const [view, setView] = useState<"mine" | "all" | "pending">("mine");
+  // Admin-only accounts can't file their own DSRs, so the "My DSRs" tab is
+  // pointless for them — drop them straight onto "All DSRs" as the landing tab.
+  const [view, setView] = useState<"mine" | "all" | "pending">(
+    canMutateDsr ? "mine" : "all"
+  );
   const [rows, setRows] = useState<DSRRow[]>([]);
   const [allRows, setAllRows] = useState<DSRRow[]>([]);
   const [summary, setSummary] = useState<DSRSummaryRow | null>(null);
@@ -236,6 +240,14 @@ export default function DSR() {
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  // Safety net: if the active view somehow becomes "mine" for an admin-only
+  // account (e.g. stale state after a role change), bounce them to "All DSRs".
+  useEffect(() => {
+    if (!canMutateDsr && view === "mine") {
+      setView("all");
+    }
+  }, [canMutateDsr, view]);
 
   // Load all DSRs for Admin/HR/Manager when "All" tab is active or filters change.
   const loadAll = useCallback(() => {
@@ -497,15 +509,17 @@ export default function DSR() {
             borderBottom: "1px solid rgba(255,255,255,0.08)",
           }}
         >
-          <TabButton
-            active={view === "mine"}
-            onClick={() => {
-              setView("mine");
-              resetForm();
-              setShowForm(false);
-            }}
-            label="My DSRs"
-          />
+          {canMutateDsr && (
+            <TabButton
+              active={view === "mine"}
+              onClick={() => {
+                setView("mine");
+                resetForm();
+                setShowForm(false);
+              }}
+              label="My DSRs"
+            />
+          )}
           <TabButton
             active={view === "all"}
             onClick={() => {
@@ -658,7 +672,7 @@ export default function DSR() {
             >
               <Icons.Eye /> &nbsp; View My DSRs
             </button> */}
-            {isAdminOrHR && (
+            {canMutateDsr && isAdminOrHR && (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
@@ -694,7 +708,7 @@ export default function DSR() {
       </div>
 
       {view === "pending" ? (
-        <PendingTodayView onBanner={(b) => setBanner(b)} />
+        <PendingTodayView canRemind={canMutateDsr} onBanner={(b) => setBanner(b)} />
       ) : view === "all" ? (
         <AllDsrsView
           rows={filteredAllRows}
@@ -2091,8 +2105,10 @@ function AllDsrsView({
 // Pending Today view (Admin/HR only)
 // ---------------------------------------------------------------------------
 function PendingTodayView({
+  canRemind,
   onBanner,
 }: {
+  canRemind: boolean;
   onBanner: (b: { kind: "ok" | "err"; text: string }) => void;
 }) {
   const [loading, setLoading] = useState(true);
@@ -2296,23 +2312,27 @@ function PendingTodayView({
           >
             {loading ? "Refreshing…" : "Refresh"}
           </button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => sendReminders("selected")}
-            disabled={reminding || selected.size === 0}
-            style={{ padding: "0.5rem 1rem" }}
-          >
-            {reminding ? "Sending…" : `Remind Selected (${selected.size})`}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => sendReminders("all")}
-            disabled={reminding || filtered.length === 0}
-          >
-            Remind All
-          </button>
+          {canRemind && (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => sendReminders("selected")}
+                disabled={reminding || selected.size === 0}
+                style={{ padding: "0.5rem 1rem" }}
+              >
+                {reminding ? "Sending…" : `Remind Selected (${selected.size})`}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => sendReminders("all")}
+                disabled={reminding || filtered.length === 0}
+              >
+                Remind All
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -2335,17 +2355,19 @@ function PendingTodayView({
           <table className="table-modern table-modern--dark" style={{ width: "100%" }}>
             <thead>
               <tr>
-                <th style={{ width: 36, textAlign: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={selected.size > 0 && selected.size === filtered.length}
-                    ref={(el) => {
-                      if (el) el.indeterminate = selected.size > 0 && selected.size < filtered.length;
-                    }}
-                    onChange={toggleAll}
-                    aria-label="Select all"
-                  />
-                </th>
+                {canRemind && (
+                  <th style={{ width: 36, textAlign: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={selected.size > 0 && selected.size === filtered.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selected.size > 0 && selected.size < filtered.length;
+                      }}
+                      onChange={toggleAll}
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
                 <th>Employee</th>
                 <th>Code</th>
                 <th>Designation</th>
@@ -2356,14 +2378,16 @@ function PendingTodayView({
             <tbody>
               {filtered.map((p) => (
                 <tr key={p.user_id}>
-                  <td style={{ textAlign: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(p.user_id)}
-                      onChange={() => toggleOne(p.user_id)}
-                      aria-label={`Select ${p.employee_name}`}
-                    />
-                  </td>
+                  {canRemind && (
+                    <td style={{ textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(p.user_id)}
+                        onChange={() => toggleOne(p.user_id)}
+                        aria-label={`Select ${p.employee_name}`}
+                      />
+                    </td>
+                  )}
                   <td style={{ fontWeight: 700, color: "#fff" }}>{p.employee_name}</td>
                   <td>{p.employee_code || "—"}</td>
                   <td>{p.designation || "—"}</td>

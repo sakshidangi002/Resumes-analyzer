@@ -66,7 +66,11 @@ function parseHhmm(value: string): { hour: number; minute: number } {
 }
 
 export default function DsrReminderBanner() {
-  const { token } = useAuth();
+  const { token, hasRole } = useAuth();
+  // Admin-only accounts are view-only on DSRs (they can't file one), so we
+  // never nag them with the 5 PM "Submit your DSR" reminder. HR (with or
+  // without Admin) still gets the reminder like any other employee.
+  const isAdminOnly = hasRole("Admin") && !hasRole("HR");
   const [show, setShow] = useState(false);
   const [dateLabel, setDateLabel] = useState<string>("");
   const lastCheckedYmd = useRef<string>("");
@@ -87,7 +91,7 @@ export default function DsrReminderBanner() {
   }, [token]);
 
   useEffect(() => {
-    if (!token) {
+    if (!token || isAdminOnly) {
       setShow(false);
       settingsRef.current = null;
       return;
@@ -220,7 +224,7 @@ export default function DsrReminderBanner() {
       cancelled = true;
       window.clearInterval(t);
     };
-  }, [token]);
+  }, [token, isAdminOnly]);
 
   if (!show) return null;
 

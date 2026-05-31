@@ -1286,7 +1286,7 @@ export default function EmployeeProfile() {
                   <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
                     <thead>
                       <tr>
-                        <th style={{ textAlign: 'left', paddingLeft: '1.5rem', width: '25%' }}>Type</th>
+                        <th style={{ width: '25%', textAlign: 'center' }}>Type</th>
                         <th style={{ width: '25%', textAlign: 'center' }}>Allocated</th>
                         <th style={{ width: '25%', textAlign: 'center' }}>Used</th>
                         <th style={{ width: '25%', textAlign: 'center' }}>Balance</th>
@@ -1295,7 +1295,7 @@ export default function EmployeeProfile() {
                     <tbody>
                       {allocs.map((a) => (
                         <tr key={a.id}>
-                          <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{leaveTypes.find((t) => t.id === a.leave_type_id)?.name ?? a.leave_type_id}</td>
+                          <td style={{ textAlign: 'center' }}>{leaveTypes.find((t) => t.id === a.leave_type_id)?.name ?? a.leave_type_id}</td>
                           <td style={{ textAlign: 'center' }}>{Math.round(Number(a.allocated_days))}</td>
                           <td style={{ textAlign: 'center' }}>{Math.round(Number(a.used_days))}</td>
                           <td style={{ textAlign: 'center' }}>{Math.round(Number(a.balance_days))}</td>
