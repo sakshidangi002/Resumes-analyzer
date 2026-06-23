@@ -91,6 +91,45 @@ def _sanitize_embedding_text(text: str) -> str:
         lines.append(s)
     return re.sub(r"\s+", " ", "\n".join(lines)).strip()
 
+
+def _parse_text_list(value) -> list[str]:
+    """Parse a DB text field that may be JSON list or comma-separated text."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, tuple):
+        return [str(x).strip() for x in value if str(x).strip()]
+    s = str(value).strip()
+    if not s:
+        return []
+    if s.startswith("["):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+    return [part.strip() for part in re.split(r"[\n,]", s) if part.strip()]
+
+
+def _dump_text_list(values) -> str | None:
+    """Store a text field as JSON array so skills remain structured."""
+    if values is None:
+        return None
+    if isinstance(values, str):
+        items = _parse_text_list(values)
+    else:
+        items = [str(x).strip() for x in values if str(x).strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return json.dumps(deduped, ensure_ascii=False) if deduped else None
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -734,11 +773,7 @@ def _derive_primary_skills_fallback(r: ResumeDB) -> list[str]:
 
 
 def _resume_to_dict(r: ResumeDB) -> dict:
-    primary_list = [
-        s.strip()
-        for s in (_safe_get(r, "primary_skills") or "").split(",")
-        if s.strip()
-    ]
+    primary_list = _parse_text_list(_safe_get(r, "primary_skills"))
     # If DB has a role label in primary_skills, derive 3 real skills at read-time.
     if len(primary_list) == 1 and _looks_like_role_label(primary_list[0]):
         primary_list = _derive_primary_skills_fallback(r)
@@ -749,15 +784,15 @@ def _resume_to_dict(r: ResumeDB) -> dict:
         "email": r.email or "",
         "phone": r.phone or "",
         "location": _safe_get(r, "location", "") or "",
-        "skills": [s.strip() for s in (r.skills or "").split(",") if s.strip()],
+        "skills": _parse_text_list(r.skills),
         "experience_years": r.experience_years,
         "total_experience_years": float(getattr(r, "total_experience_years", 0.0) or 0.0),
         "experience_level": _safe_get(r, "experience_level", "") or "",
         "internship_present": bool(getattr(r, "internship_present", False) or False),
         "experience_notes": _safe_get(r, "experience_notes", "") or "",
         "experience_summary": r.experience_summary or "",
-        "education": [s.strip() for s in (r.education or "").split(",") if s.strip()],
-        "projects": [s.strip() for s in (r.projects or "").split(",") if s.strip()],
+        "education": _parse_text_list(r.education),
+        "projects": _parse_text_list(r.projects),
         "resume_link": r.resume_link,
         "summary": _safe_get(r, "summary", "") or "",
         "companies_worked_at": [
@@ -772,7 +807,7 @@ def _resume_to_dict(r: ResumeDB) -> dict:
             if s.strip()
         ],
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
-        "tags": [s.strip() for s in (_safe_get(r, "tags") or "").split(",") if s.strip()],
+        "tags": _parse_text_list(_safe_get(r, "tags")),
         "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "source": _safe_get(r, "source", "") or "",
         "source_file": r.source_file or "",
@@ -1322,15 +1357,15 @@ async def upload_resume(
                     email=cleaned.email,
                     phone=cleaned.phone,
                     location=cleaned.location or "",
-                    skills=", ".join(cleaned.skills),
+                    skills=_dump_text_list(cleaned.skills),
                     experience_years=cleaned.experience_years,
                     experience_summary=cleaned.experience_summary,
                     total_experience_years=getattr(cleaned, "total_experience_years", None),
                     experience_level=getattr(cleaned, "experience_level", None),
                     internship_present=getattr(cleaned, "internship_present", False),
                     experience_notes=getattr(cleaned, "experience_notes", None),
-                    education=", ".join(cleaned.education),
-                    projects=", ".join(cleaned.projects),
+                    education=_dump_text_list(cleaned.education),
+                    projects=_dump_text_list(cleaned.projects),
                     resume_link=resume_link,
                     source_file=new_name,
                     vector_id=vector_id,
@@ -1339,14 +1374,14 @@ async def upload_resume(
                 if include_new_cols:
                     base.update(
                         summary=cleaned.summary or None,
-                        companies_worked_at=", ".join(cleaned.companies_worked_at) if cleaned.companies_worked_at else None,
+                        companies_worked_at=_dump_text_list(cleaned.companies_worked_at),
                         role=cleaned.role,
-                        important_keywords=", ".join(cleaned.important_keywords) if cleaned.important_keywords else None,
+                        important_keywords=_dump_text_list(cleaned.important_keywords),
                         experience_line=getattr(cleaned, "experience_line", None),
                         experience_tags=", ".join(getattr(cleaned, "experience_tags", []) or []) or None,
-                        key_skills=", ".join(getattr(cleaned, "key_skills", []) or []) or None,
-                        primary_skills=", ".join(getattr(cleaned, "primary_skills", []) or []) or None,
-                        other_skills=", ".join(getattr(cleaned, "other_skills", []) or []) or None,
+                        key_skills=_dump_text_list(getattr(cleaned, "key_skills", []) or []),
+                        primary_skills=_dump_text_list(getattr(cleaned, "primary_skills", []) or []),
+                        other_skills=_dump_text_list(getattr(cleaned, "other_skills", []) or []),
                         is_shortlisted=False,
                         tags=None,
                         deleted_at=None,
@@ -1659,10 +1694,10 @@ def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
     if not skills:
         return {"updated": False, "skills": [], "message": "No skills found in resume text."}
 
-    resume.skills = ", ".join(skills)
-    resume.key_skills = ", ".join(key_skills) if key_skills else None
-    resume.primary_skills = ", ".join(primary_skills) if primary_skills else None
-    resume.other_skills = ", ".join(other_skills) if other_skills else None
+    resume.skills = _dump_text_list(skills)
+    resume.key_skills = _dump_text_list(key_skills)
+    resume.primary_skills = _dump_text_list(primary_skills)
+    resume.other_skills = _dump_text_list(other_skills)
     db.add(resume)
     db.commit()
     db.refresh(resume)

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -781,6 +781,24 @@
         }
         .hrms-modal-panel .border-white\/10 {
             border-color: var(--hrms-border) !important;
+        }
+
+        .candidate-notes-inline {
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0;
+            padding: 1.15rem !important;
+            border-radius: 1.35rem !important;
+            box-shadow: none !important;
+            background: rgba(255, 255, 255, 0.04) !important;
+        }
+
+        .candidate-notes-inline #modalNotesList {
+            max-height: 24vh;
+        }
+
+        .candidate-notes-inline .hrms-btn {
+            min-width: 0;
         }
 
         .hrms-section-title {
@@ -2976,7 +2994,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
                 <div>
-                    <h3 class="font-outfit font-extrabold text-base text-white">Interview Log & Evaluation Notes</h3>
+                    <h3 class="font-outfit font-extrabold text-base text-white">Interview Notes</h3>
                     <p class="text-[10px] font-semibold text-brand-300 uppercase tracking-widest mt-0.5"
                         id="notesModalCandidate">Candidate Notes</p>
                 </div>
@@ -3035,16 +3053,25 @@
     <div id="detailsModal"
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
         <div
-            class="hrms-modal-panel p-6 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col gap-4 max-h-[95vh]">
+            class="hrms-modal-panel p-5 sm:p-6 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col gap-4 max-h-[95vh] bg-gradient-to-br from-[#0f1628] via-[#0d1322] to-[#0a0f1a]">
             <!-- Header -->
-            <div class="flex items-center justify-between border-b border-white/10 pb-3">
-                <div>
-                    <h3 class="font-outfit font-extrabold text-base text-white">Candidate Details Form</h3>
-                    <p class="text-[10px] font-semibold text-indigo-400 uppercase tracking-widest mt-0.5"
-                        id="detailsModalCandidate">Edit Details</p>
+            <div class="flex items-center justify-between border-b border-white/10 pb-4">
+                <div class="flex items-center gap-4">
+                    <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border border-brand-400/25 bg-brand-500/10 flex items-center justify-center text-brand-200 shadow-lg shadow-brand-500/10">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21a8 8 0 0 0-16 0" />
+                            <circle cx="12" cy="8" r="4" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-outfit font-extrabold text-xl sm:text-[1.35rem] leading-tight text-white">Candidate Details Form</h3>
+                        <p class="text-[9px] sm:text-[10px] font-semibold text-brand-300 uppercase tracking-[0.2em] mt-0.5"
+                            id="detailsModalCandidate">Edit Details</p>
+                    </div>
                 </div>
                 <button onclick="closeDetailsModal()"
-                    class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    class="w-11 h-11 rounded-xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center text-slate-400 hover:text-white transition-all">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18" />
@@ -3141,19 +3168,30 @@
                 <!-- Interview Notes Accordion -->
                 <div class="border-t border-white/10 pt-4">
                     <button type="button" onclick="toggleCandidateNotesAccordion()"
-                        class="w-full flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left hover:bg-white/[0.05] transition">
-                        <div>
-                            <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Interview logs / Recruiter Notes</div>
-                            <div id="notesAccordionSubtitle" class="text-sm font-semibold text-white mt-1">Click to expand notes</div>
+                        class="w-full flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3.5 text-left hover:bg-white/[0.06] transition shadow-sm shadow-black/10">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-11 h-11 rounded-xl bg-brand-500/15 border border-brand-400/20 flex items-center justify-center text-brand-200 shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+                                    <path d="M9 2v4" />
+                                    <path d="M15 2v4" />
+                                    <path d="M6 7h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z" />
+                                </svg>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Interview logs / Recruiter Notes</div>
+                                <div id="notesAccordionSubtitle" class="text-sm font-semibold text-white mt-1">Click to expand notes</div>
+                            </div>
                         </div>
-                        <svg id="notesAccordionChevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                        <svg id="notesAccordionChevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18"
                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round"
-                            class="text-slate-400 transition-transform duration-200">
+                            class="text-slate-400 transition-transform duration-200 shrink-0">
                             <polyline points="6 9 12 15 18 9" />
                         </svg>
                     </button>
-                    <div id="candidateNotesMount" class="hidden mt-4"></div>
+                    <div id="candidateNotesMount" class="hidden mt-4" style="display:none;"></div>
                 </div>
 
                 <!-- Form Actions -->
@@ -4119,16 +4157,14 @@
                             <a href="${resumeApiUrl}/files/${r.source_file}?token=${jwtToken}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                             </a>
-                            <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details Form" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
+                            <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                             </button>
                             <button type="button" onclick="openCandidateSkillsModal('${r.id}', event)" title="View & Edit Technical Skills" aria-label="View and edit technical skills" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                             </button>
-                            <button onclick="openCandidateNotesModal('${r.id}', event)" title="View & Add Interview Notes" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
-                            </button>
-                            <button onclick="toggleShortlist('${r.id}', event)" title="Shortlist" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-amber-400 transition-all">
+
+                            <button type="button" onclick="toggleShortlist('${r.id}', event)" title="${r.is_shortlisted ? 'Remove from shortlist' : 'Shortlist candidate'}" class="p-2 hover:bg-white/5 rounded-lg transition-all ${r.is_shortlisted ? 'text-amber-400' : 'text-slate-400 hover:text-amber-400'}">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${r.is_shortlisted ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" class="${r.is_shortlisted ? 'text-amber-400' : ''}"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                             </button>
                             <button onclick="confirmDeleteCandidate('${r.id}', event)" title="Delete" class="p-2 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-all">
@@ -4483,11 +4519,10 @@
                     `openCandidateDetailsModal('${r.id}', event)`);
                 const skillsBtn = iconBtn("View & Edit Technical Skills", "hover:text-brand-300", tagIcon,
                     `openCandidateSkillsModal('${r.id}', event)`);
-                const notesBtn = iconBtn("View notes", "hover:text-brand-300", clipboardIcon,
-                    `openCandidateNotesModal('${r.id}', event)`);
+
                 const shortlistBtn = iconBtn(
                     r.is_shortlisted ? "Remove from shortlist" : "Shortlist candidate",
-                    r.is_shortlisted ? "text-amber-300 hover:text-amber-200" : "hover:text-amber-300",
+                    r.is_shortlisted ? "text-amber-400" : "hover:text-amber-300",
                     starIcon(!!r.is_shortlisted),
                     `toggleShortlist('${r.id}', event)`
                 );
@@ -4527,7 +4562,7 @@
                         </td>
                         <td class="px-4 py-3 align-middle text-right" onclick="event.stopPropagation()">
                             <div class="inline-flex items-center gap-1 justify-end">
-                                ${pdfBtn}${editBtn}${skillsBtn}${notesBtn}${shortlistBtn}${delBtn}
+                                ${pdfBtn}${editBtn}${skillsBtn}${shortlistBtn}${delBtn}
                             </div>
                         </td>
                     </tr>`;
@@ -4758,28 +4793,57 @@
             const r = findResumeById(id);
             if (!r) return;
 
-            const updatedState = !r.is_shortlisted;
+            const previousState = !!r.is_shortlisted;
+            const updatedState = !previousState;
             const url = `${resumeApiUrl}/resumes/${id}/shortlist`;
+            const btn = e?.currentTarget || null;
+            const svg = btn ? btn.querySelector("svg") : null;
+
+            const paintButton = (shortlisted) => {
+                if (!btn) return;
+                btn.title = shortlisted ? "Remove from shortlist" : "Shortlist candidate";
+                btn.classList.toggle("text-amber-400", shortlisted);
+                btn.classList.toggle("text-slate-400", !shortlisted);
+                btn.classList.toggle("hover:text-amber-400", !shortlisted);
+                if (svg) {
+                    svg.setAttribute("fill", shortlisted ? "currentColor" : "none");
+                    svg.classList.toggle("text-amber-400", shortlisted);
+                }
+            };
+
+            // Optimistically update local state first so the UI changes instantly.
+            resumes = (resumes || []).map(x => String(x.id) === String(id) ? { ...x, is_shortlisted: updatedState } : x);
+            filteredResumes = (filteredResumes || []).map(x => String(x.id) === String(id) ? { ...x, is_shortlisted: updatedState } : x);
+            if (activeResume && String(activeResume.id) === String(id)) {
+                activeResume.is_shortlisted = updatedState;
+            }
+            paintButton(updatedState);
+            setTimeout(() => {
+                if (typeof renderDatabaseTable === "function") renderDatabaseTable();
+                if (typeof renderDetailsTable === "function" && document.getElementById("details-tbody")) renderDetailsTable();
+            }, 0);
 
             try {
-                if (updatedState) {
-                    await fetch(url, { method: "POST", headers: { "Authorization": `Bearer ${jwtToken}` } });
-                } else {
-                    await fetch(url, { method: "DELETE", headers: { "Authorization": `Bearer ${jwtToken}` } });
+                const response = await fetch(url, {
+                    method: updatedState ? "POST" : "DELETE",
+                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Shortlist request failed (${response.status})`);
                 }
-
-                r.is_shortlisted = updatedState;
-                if (activeResume && String(activeResume.id) === String(id)) {
-                    activeResume.is_shortlisted = updatedState;
-                }
-
-                // Keep local lists updated
-                const item = filteredResumes.find(x => x.id === id);
-                if (item) item.is_shortlisted = updatedState;
-
-                renderDatabaseTable();
             } catch (err) {
                 console.error("Shortlist update failed", err);
+                resumes = (resumes || []).map(x => String(x.id) === String(id) ? { ...x, is_shortlisted: previousState } : x);
+                filteredResumes = (filteredResumes || []).map(x => String(x.id) === String(id) ? { ...x, is_shortlisted: previousState } : x);
+                if (activeResume && String(activeResume.id) === String(id)) {
+                    activeResume.is_shortlisted = previousState;
+                }
+                paintButton(previousState);
+                setTimeout(() => {
+                    if (typeof renderDatabaseTable === "function") renderDatabaseTable();
+                    if (typeof renderDetailsTable === "function" && document.getElementById("details-tbody")) renderDetailsTable();
+                }, 0);
             }
         }
 
@@ -6121,7 +6185,9 @@
 
         // CANDIDATE ACTIONS DETAILS FORM LOGIC
         let activeDetailsResumeId = null;
-        const candidateNotesPanel = document.querySelector("#notesModal > div");
+        function getCandidateNotesPanel() {
+            return document.querySelector("#notesModal > div");
+        }
         let candidateNotesExpanded = false;
 
         function syncCandidateNotesAccordion(open) {
@@ -6131,6 +6197,7 @@
             if (!mount) return;
             const shouldOpen = typeof open === "boolean" ? open : !mount.classList.contains("hidden");
             mount.classList.toggle("hidden", !shouldOpen);
+            mount.style.display = shouldOpen ? "block" : "none";
             candidateNotesExpanded = shouldOpen;
             if (chevron) chevron.style.transform = shouldOpen ? "rotate(180deg)" : "rotate(0deg)";
             if (subtitle) subtitle.textContent = shouldOpen ? "Click to collapse notes" : "Click to expand notes";
@@ -6171,10 +6238,12 @@
             document.getElementById("detailsModal").classList.remove("hidden");
             const detailsModalBody = document.querySelector("#detailsModal > div.hrms-modal-panel");
             const notesMount = document.getElementById("candidateNotesMount");
+            const candidateNotesPanel = getCandidateNotesPanel();
+            if (candidateNotesPanel) candidateNotesPanel.classList.add("candidate-notes-inline");
             if (detailsModalBody && candidateNotesPanel && notesMount && candidateNotesPanel.parentElement !== notesMount) {
                 notesMount.appendChild(candidateNotesPanel);
             }
-            syncCandidateNotesAccordion(focusNotes);
+            syncCandidateNotesAccordion(true);
             loadModalNotes(id, focusNotes);
         }
 

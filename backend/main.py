@@ -2703,281 +2703,153 @@ def _passes_technical_skill_output(raw: str, vocab: set[str]) -> bool:
     return False
 def extract_skills_from_text(resume_text: str) -> list[str]:
     """
-    Extract skills as explicitly written in the resume (e.g., under 'SKILLS').
-    Avoids calling the LLM; designed to be fast and deterministic.
+    Extract deduped skill phrases from the full resume text.
+    Scans explicit skills, summary, experience, projects and certifications sections
+    so non-technical domains are also captured.
     """
     text = (resume_text or "").strip()
     if not text:
         return []
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
 
-    # Find all skills-like section headers (not just the first one)
-    section_blocks: list[list[str]] = []
-    i = 0
-    n = len(lines)
-    stop_headers = {
+    section_headers = {
         "skills",
         "technical skills",
         "key skills",
         "skill set",
+        "skillset",
         "tech stack",
-        "tools & technologies",
         "tools and technologies",
-        "experience",
-        "work experience",
-        "work history",
-        "professional experience",
-        "projects",
-        "project experience",
-        "education",
+        "tools & technologies",
         "summary",
+        "professional summary",
         "profile",
         "objective",
+        "experience",
+        "work experience",
+        "professional experience",
+        "employment history",
+        "projects",
+        "project experience",
         "certifications",
+        "certification",
+        "licenses",
         "achievements",
         "awards",
-        "languages",
     }
-    while i < n:
-        ln = lines[i]
-        if _is_skills_header_line(ln):
-            start = i + 1
-            section: list[str] = []
-            blank_streak = 0
-            for j in range(start, n):
-                cur = lines[j]
-                if not cur:
-                    blank_streak += 1
-                    if section and blank_streak >= 2:
-                        break
-                    continue
-                blank_streak = 0
-                cur_norm = _norm_header(cur)
-                if cur_norm in stop_headers and section:
-                    break
-                if _looks_like_header(cur) and section:
-                    break
-                section.append(cur)
-                if len(section) >= 20:
-                    break
-            if section:
-                section_blocks.append(section)
-            i = j
-        else:
-            i += 1
 
-    if not section_blocks:
-        return []
-
-    # Join all skill section lines and tokenize using the strict cleaner.
-    section_joined = "\n".join(["\n".join(sec) for sec in section_blocks if sec]).strip()
-    if not section_joined:
-        return []
-
-    # ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ Pre-processing: normalize the raw section text before tokenization ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬
-    # 1. Fix hyphen-broken words across line breaks (e.g. "Pro-\ngramming" ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ "Programming")
-    section_joined = re.sub(r"-\n(\S)", r"\1", section_joined)
-
-    # 2. Fix mid-word spurious spaces inserted by PDF parser (e.g. "Progra mming" ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ "Programming")
-    #    Only merge when right fragment starts with a known broken-word prefix pattern.
-    def _fix_broken_word(m: re.Match) -> str:
-        left, right = m.group(1), m.group(2)
-        _standalone = {
-            "in", "an", "of", "to", "at", "by", "or", "as", "is", "it", "be", "on",
-            "up", "no", "so", "do", "go", "my", "we", "us", "for", "the", "and",
-            "are", "but", "not", "was", "has", "had", "its", "can", "may", "one",
-            "two", "our", "via", "per", "data", "open", "code", "core", "java",
-            "html", "node", "next", "pipe", "time", "user", "base", "work", "word",
-        }
-        if left.lower() in _standalone or right.lower() in _standalone:
-            return m.group(0)
-        if right.lower().startswith(('mm', 'nd', 'tt', 'ss', 'pp', 'll', 'rr', 'cc')) or \
-           any(right.lower().startswith(s) for s in ('mming', 'tion', 'ning', 'ring', 'ling', 'king')):
-            return left + right
-        return m.group(0)
-    section_joined = re.sub(r'([a-zA-Z]{2,6}) ([a-z]{2,6})\b', _fix_broken_word, section_joined)
-
-    # 3. Resolve "Category Label: skill1, skill2" lines ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â strip the category prefix,
-    #    keep only the skills listed after the colon. This prevents category names like
-    #    "Computer Vision", "Programming Languages" from being treated as skills.
-    processed_lines = []
-    for raw_ln in section_joined.splitlines():
-        stripped = raw_ln.strip()
-        colon_match = re.match(r'^([^:]{2,50}):\s*(.+)$', stripped)
-        if colon_match:
-            # Replace the line with just the skills part (comma-separated items after colon)
-            processed_lines.append(colon_match.group(2).strip())
-        else:
-            processed_lines.append(stripped)
-    section_text = "\n".join(processed_lines)
-
-    # Candidate collection is limited strictly to the skills section.
-    def _explode_compact_skill_line(tok: str) -> list[str]:
-        """
-        Split compact lines like 'HTML CSS JS' into individual tokens safely.
-        Only applies when the token looks like a short list of short words.
-        """
-        s = _collapse_whitespace(tok or "")
-        if not s or " " not in s:
-            return [tok]
-
-        # Guard: if any word in the token is CamelCase (e.g. UiPath, OpenCV, MediaPipe)
-        # keep the whole token intact ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â CamelCase words are almost always single tool names.
-        camel_words = [w for w in s.split() if re.match(r'^[A-Z][a-z]+[A-Z]', w) or re.match(r'^[A-Z]{2,}[a-z]', w)]
-        if camel_words:
-            return [s]
-
-        norm = _norm_header(s)
-        if not norm:
-            return [tok]
-
-        # Pull out common multi-word technical phrases first so a line such as
-        # "ASP.NET MVC .NET Core Entity Framework" becomes separate skills.
-        phrase_hints = [
-            "asp net mvc",
-            "asp net core",
-            "asp net core mvc",
-            "asp net core web api",
-            "asp net web api",
-            "net core",
-            "visual studio",
-            "entity framework",
-            "entity framework core",
-            "core java",
-            "advanced java",
-            "react native",
-            "java script",
-            "type script",
-            "power bi",
-            "adobe photoshop",
-            "substance 3d painter",
-            "substance painter",
-            "autodesk maya",
-            "rizom uv",
-            "uv unwrapping",
-            "product visualization",
-            "hard surface modeling",
-            "project management tool",
-            "sql server",
-            "ms sql server",
-            "web api",
-            "rest api",
-            "next js",
-            "node js",
-            "vs code",
-            "visual studio code",
-            "ado net",
-            # Added: modern tools & multi-word skills
-            "uipath orchestrator",
-            "uipath studio",
-            "process automation",
-            "problem solving",
-            "computer vision",
-            "machine learning",
-            "deep learning",
-            "natural language processing",
-            "data analytics",
-            "data analysis",
-            "data visualization",
-            "business intelligence",
-            "microsoft excel",
-            "google sheets",
-            "google cloud",
-            "github actions",
-            "gitlab ci",
-            "ci cd",
-            "react js",
-            "vue js",
-            "spring boot",
-            "ruby on rails",
-            "ms office",
-            "microsoft office",
-            "google workspace",
-            "conflict resolution",
-            "time management",
-            "project management",
-        ]
-        extracted: list[str] = []
-        working = norm
-        for phrase in sorted(phrase_hints, key=len, reverse=True):
-            pattern = rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])"
-            if re.search(pattern, working):
-                extracted.append(phrase)
-                working = re.sub(pattern, " ", working)
-
-        parts = [p for p in re.split(r"\s+", working) if p]
-        if extracted:
-            generic_residuals = {"core", "web", "api", "rest", "optimization"}
-            extracted.extend([p for p in parts if _norm_header(p) not in generic_residuals])
-            return extracted
-
-        if 2 <= len(parts) <= 6 and all(1 < len(p) <= 12 for p in parts):
-            # Avoid splitting sentences: require low symbol ratio and no verbs.
-            if _symbol_ratio(s) <= 0.18 and not re.search(
-                r"\b(created|developed|implemented|managed|responsible)\b",
-                norm,
-            ):
-                return parts
-        return [tok]
-
-
-    def _collect_tokens(txt: str, *, cap: int) -> list[str]:
-        toks: list[str] = []
-        for t in _tokenize_skill_candidates(txt or ""):
-            for x in _explode_compact_skill_line(t):
-                x = _collapse_whitespace(x)
-                if x:
-                    toks.append(x)
-            if len(toks) >= cap:
-                break
-        return toks[:cap]
-
-    # Source A: skills section (highest precision)
-    candidates = _collect_tokens(section_text, cap=260)
-
-    # Source B: experience/projects ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ONLY when no real skills section was found.
-    # If the resume has an explicit Skills / Technical Skills block, harvesting from
-    # experience/projects pulls narrative words ("For", "Registration", verbs, etc.).
-    # Normalize + pre-filter (lightweight). Final acceptance is evidence-based.
-    normalized: list[str] = []
-    seen_norm: set[str] = set()
-    for tok in candidates:
-        norm = _normalize_skill_token(tok)
-        if not norm:
+    candidate_lines: list[str] = []
+    current_section = ""
+    for line in lines:
+        norm = _norm_header(line)
+        if _is_skills_header_line(line):
+            current_section = "skills"
             continue
-        if _skill_is_noise(norm):
+        if norm in section_headers:
+            current_section = norm
             continue
-        if _norm_header(norm) in _COMMON_SECTION_HEADERS:
+        if current_section in section_headers:
+            candidate_lines.append(line)
+            continue
+        if any(sep in line for sep in (",", ";", "|", "/", "•", "·", "&")):
+            candidate_lines.append(line)
+
+    if not candidate_lines:
+        candidate_lines = lines[:]
+
+    raw_candidates: list[str] = []
+    skip_counts: dict[str, int] = {}
+
+    def _note_skip(reason: str) -> None:
+        skip_counts[reason] = skip_counts.get(reason, 0) + 1
+
+    for line in candidate_lines:
+        s = _strip_skill_decorators(line)
+        if not s:
+            _note_skip("empty")
+            continue
+        if _looks_like_header(s) and not _is_skills_header_line(s):
+            _note_skip("header")
+            continue
+        if len(s) > 120 and not any(sep in s for sep in (",", ";", "|", "/", "•", "·", "&")):
+            _note_skip("long_narrative")
+            continue
+
+        # Split list-like lines, but preserve multi-word phrases as tokens.
+        parts = re.split(r"[\n\r,;|•·]+|\s+[\/&]\s+|\s+-\s+", s)
+        for part in parts:
+            tok = _collapse_whitespace(part).strip(" -–—•·\t")
+            if not tok:
+                _note_skip("blank_token")
+                continue
+            raw_candidates.append(tok)
+
+    # Light fallback for short single-line skill lists that use spaces only.
+    for line in candidate_lines:
+        s = _collapse_whitespace(line)
+        if not s or len(s.split()) > 6:
+            continue
+        if re.search(r"\b(created|developed|implemented|managed|responsible|worked)\b", s, re.I):
+            continue
+        if re.fullmatch(r"[A-Za-z0-9 .+#\-/]+", s):
+            raw_candidates.append(s)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    accepted_debug: list[str] = []
+
+    for raw in raw_candidates:
+        cleaned = _strip_skill_decorators(raw)
+        if not cleaned:
+            _note_skip("cleaned_empty")
+            continue
+        if _is_education_like_phrase(cleaned):
+            _note_skip("education")
+            continue
+        if _is_percentage_metric(cleaned):
+            _note_skip("percentage")
+            continue
+        if len(cleaned) < 2 or len(cleaned) > 60:
+            _note_skip("length")
+            continue
+        if not re.search(r"[A-Za-z]", cleaned):
+            _note_skip("no_letters")
+            continue
+
+        norm = canonicalise_skill(cleaned) or _normalize_skill_token(cleaned)
+        norm = _strip_footnote_numbers(norm)
+        if not norm:
+            _note_skip("normalization_empty")
+            continue
+        low = _norm_header(norm)
+        if not low or low in {"and", "or", "with", "using", "based", "of"}:
+            _note_skip("connector")
             continue
         if _looks_like_header(norm):
+            _note_skip("header_like")
             continue
-        if not _skill_token_is_valid(norm):
+        if re.search(r"\b(created|developed|implemented|managed|handled|responsible|experience|summary|objective)\b", low):
+            _note_skip("narrative")
             continue
-        key = norm.lower()
-        if key in seen_norm:
+        if low in seen:
+            _note_skip("duplicate")
             continue
-        seen_norm.add(key)
-        normalized.append(norm)
 
-    # Evidence-based acceptance & weighting (generalizes across PDF layouts).
-    # Use the skills-section-only list as a precision anchor.
-    section_anchor = _collect_tokens(section_text, cap=260)
-    section_anchor_norm = []
-    for t in section_anchor:
-        n = _normalize_skill_token(t)
-        if n and not _skill_is_noise(n) and _skill_token_is_valid(n):
-            section_anchor_norm.append(n)
+        seen.add(low)
+        out.append(norm)
+        if len(accepted_debug) < 12:
+            accepted_debug.append(norm)
 
-    # Low-confidence detection based on overall text quality.
-    c, _ = _compute_extraction_confidence(text)
-    filtered, _weights = _compute_skill_weights(
-        normalized,
-        resume_text=text,
-        section_skills=section_anchor_norm,
-        extraction_low_confidence=bool(c < 0.5),
+    logger.debug(
+        "skill_extract_from_text accepted=%d samples=%s skipped=%s",
+        len(out),
+        accepted_debug,
+        skip_counts,
     )
-    return _finalize_skills_list(filtered, apply_vocab_gate=False)
+    return out
 
 
 def _get_context_blocks_for_evidence(resume_text: str) -> dict:
@@ -4037,287 +3909,87 @@ def extract_resume(resume_text: str) -> dict:
     experience_level_final = experience_level if experience_level else _experience_level_from_years(total_experience_years, internship_only=False)
     experience_notes_final = exp_notes or ""
 
-    # --- Skills validation (prevent hallucinations) ---
-    # Re-parse explicit SKILLS/TECH SKILLS section (same sanitised text as earlier pass).
-    try:
-        section_skills = extract_skills_from_text(base_text)
-    except Exception:
-        section_skills = []
+    # --- Skills consolidation (broad, deduped, normalized) ---
+    # Merge all sources: model output, section parser, and full-text candidate scan.
+    skill_sources: list[str] = []
+    for src in (skills, key_skills, primary_skills, other_skills, important_keywords, section_skills):
+        if isinstance(src, list):
+            skill_sources.extend(str(x).strip() for x in src if str(x).strip())
+        elif isinstance(src, str) and src.strip():
+            skill_sources.append(src.strip())
 
-    # Track which skills came directly from explicit SKILLS sections so we can
-    # treat them as high-confidence (less strict support checks).
-    section_skill_keys: set[str] = set()
-    for s in section_skills or []:
-        raw = _strip_skill_decorators(str(s)).strip()
-        if not raw:
-            continue
-        section_skill_keys.add(raw.lower())
-        section_skill_keys.add(_norm_header(raw))
-        cn = canonicalise_skill(raw)
-        if cn:
-            section_skill_keys.add(cn.lower())
-            section_skill_keys.add(_norm_header(cn))
+    try:
+        skill_sources.extend(extract_skills_from_text(base_text))
+    except Exception as exc:
+        logger.debug("broad skill extraction failed: %s", exc)
+
+    def _is_generic_bad_skill(s: str) -> bool:
+        low = _norm_header(s)
+        if not low:
+            return True
+        if len(low) < 2 or len(low) > 60:
+            return True
+        if low in {"and", "or", "with", "using", "based", "of"}:
+            return True
+        if _looks_like_header(s):
+            return True
+        if _is_education_like_phrase(s) or _is_percentage_metric(s):
+            return True
+        if re.search(r"\b(created|developed|implemented|managed|handled|responsible|experience|summary|objective)\b", low):
+            return True
+        return False
 
     merged_skills: list[str] = []
     seen_sk: set[str] = set()
-    # Section-only: when an explicit skills block exists, ignore LLM/V3/body tokens.
-    if section_skills:
-        skill_source_list: list = [str(x).strip() for x in section_skills if str(x).strip()]
-    else:
-        skill_source_list = list(
-            dict.fromkeys([str(x).strip() for x in (skills or []) if str(x).strip()])
-        )
-    for raw in skill_source_list:
-        text_raw = _strip_skill_decorators(str(raw))
-        # Filter 1: Drop entries that clearly belong to education (degrees, universities, etc.)
-        if _is_education_like_phrase(text_raw):
+    skip_reasons: dict[str, int] = {}
+
+    def _skill_skip(reason: str) -> None:
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+    for raw in skill_sources:
+        raw0 = _strip_skill_decorators(str(raw)).strip()
+        if not raw0:
+            _skill_skip("empty")
             continue
-        # Filter 2: Drop percentage metrics (e.g., "Studies 60%", "Management 75%")
-        if _is_percentage_metric(text_raw):
-            continue
-        norm = canonicalise_skill(text_raw)
-        if not norm:
-            continue
+        norm = canonicalise_skill(raw0) or _normalize_skill_token(raw0)
         norm = _strip_footnote_numbers(norm)
-        if not _skill_token_is_valid(norm):
-            continue
-        if _skill_is_noise(norm):
-            continue
-        k = norm.lower()
-        if k in seen_sk:
-            continue
-        tr = text_raw.strip()
-        c_tr = canonicalise_skill(tr)
-        from_explicit_section = (
-            tr.lower() in section_skill_keys
-            or _norm_header(tr) in section_skill_keys
-            or (bool(c_tr) and c_tr.lower() in section_skill_keys)
-        )
-        # Skills coming from an explicit SKILLS/TECHNICAL SKILLS section are
-        # trusted more and do not require a strict global text support check.
-        if from_explicit_section or _skill_is_supported_by_text(norm, resume_text_sanitised or resume_text):
-            seen_sk.add(k)
-            merged_skills.append(norm)
-
-    skills = merged_skills
-
-    # key_skills are a subset; validate the same way
-    merged_key: list[str] = []
-    seen_ks: set[str] = set()
-    for raw in key_skills or []:
-        raw = _strip_skill_decorators(str(raw))
-        if _is_education_like_phrase(raw):
-            continue
-        if _is_percentage_metric(raw):
-            continue
-        norm = canonicalise_skill(raw)
         if not norm:
+            _skill_skip("normalization_empty")
             continue
-        norm = _strip_footnote_numbers(norm)
-        if not _skill_token_is_valid(norm):
+        if _is_generic_bad_skill(norm):
+            _skill_skip("generic_bad")
             continue
-        if _skill_is_noise(norm):
+        key = _norm_header(norm)
+        if key in seen_sk:
+            _skill_skip("duplicate")
             continue
-        k = norm.lower()
-        if k in seen_ks:
-            continue
-        if _skill_is_supported_by_text(norm, resume_text_sanitised or resume_text) or k in seen_sk:
-            seen_ks.add(k)
-            merged_key.append(norm)
-    key_skills = merged_key
+        seen_sk.add(key)
+        merged_skills.append(norm)
 
-    # Evidence-gated filtering + internal weighting (not exposed)
-    try:
-        filtered_skills, skill_weights = _compute_skill_weights(
-            skills or [],
-            resume_text=resume_text_sanitised or resume_text,
-            section_skills=section_skills or [],
-            extraction_low_confidence=extraction_low_confidence,
-        )
-        if filtered_skills:
-            skills = filtered_skills
-        # Rebuild key_skills as the top weighted skills, preserving any existing key_skills preference
-        if skills:
-            key_pref = [canonicalise_skill(s).lower() for s in (key_skills or []) if canonicalise_skill(s)]
-            ordered = sorted(
-                skills,
+    if merged_skills:
+        try:
+            merged_skills = sorted(
+                merged_skills,
                 key=lambda s: (
-                    1 if s.lower() in set(key_pref) else 0,
-                    skill_weights.get(s.lower(), 0),
-                    _count_skill_occurrences(s, (resume_text_sanitised or resume_text).lower()),
+                    _count_skill_occurrences(s, resume_text_sanitised or resume_text),
+                    len(s.split()),
+                    1 if any(_norm_header(x) == _norm_header(s) for x in (section_skills or [])) else 0,
                 ),
                 reverse=True,
             )
-            key_skills = ordered[:15]
-    except Exception as exc:
-        logger.debug("skill weighting failed: %s", exc)
+        except Exception as exc:
+            logger.debug("skill ordering failed: %s", exc)
 
-    # Internal risk flags (surfaced only via extraction_warnings logs)
-    if len(skills or []) >= 60 and "tool_dumping" not in extraction_warnings:
-        extraction_warnings.append("tool_dumping")
-    if extraction_low_confidence and "low_text_quality" not in extraction_warnings:
-        extraction_warnings.append("low_text_quality")
-
-    # --- Boost domain stack (e.g. .NET, React) based on role/experience text ---
-    skills, key_skills = _boost_domain_skills(
-        resume_text=resume_text,
-        skills=skills,
-        key_skills=key_skills,
-        current_role=current_role,
-        experience_summary=experience_summary,
-    )
-
-    # Keep only technical-looking skills (vocabulary + tech-shaped tokens), not soft skills.
-    skills = _finalize_skills_list(skills or [], apply_vocab_gate=True, vocab=_tech_vocab)
-    key_skills = _finalize_skills_list(key_skills or [], apply_vocab_gate=True, vocab=_tech_vocab)
-    important_keywords = [
-        k for k in (important_keywords or []) if _passes_technical_skill_output(str(k), _tech_vocab)
-    ]
-
-    # --- Primary vs other skills classification ---
-    # Primary skills must be skill names (not designations).
-    def _is_primary_candidate_skill(s: str) -> bool:
-        if not s:
-            return False
-        if _skill_is_noise(s):
-            return False
-        if len(s) < 2 or len(s) > 40:
-            return False
-        if len(s.split()) > 5:
-            return False
-        # Prefer core tech labels and common tech punctuation
-        return _is_core_tech_label(s) or any(ch in s for ch in (".", "#", "+"))
-
-    # other_skills: cleaned + deduped technical skills list (no connectors/stopwords)
-    other_skills = []
-    seen_o: set[str] = set()
-    for s in skills or []:
-        ss = _normalize_skill_token(str(s))
-        if not ss or _skill_is_noise(ss):
-            continue
-        k = ss.lower()
-        if k in seen_o:
-            continue
-        seen_o.add(k)
-        other_skills.append(ss)
-
-    # primary_skills: top 3 evidence-weighted skills, excluding junk phrases
-    primary_skills = []
-    for s in key_skills or []:
-        ss = _normalize_skill_token(str(s))
-        if not ss or not _is_primary_candidate_skill(ss):
-            continue
-        if ss.lower() in {x.lower() for x in primary_skills}:
-            continue
-        primary_skills.append(ss)
-        if len(primary_skills) >= 3:
-            break
-    if not primary_skills:
-        # Leave primary_skills empty rather than backfilling with generic section text.
-        primary_skills = [s for s in other_skills if _is_primary_candidate_skill(str(s))][:3]
-
-    # Final name gate before persistence
-    name, final_name_warnings = reconcile_name_with_email(name, email)
-    for w in final_name_warnings:
-        if w not in extraction_warnings:
-            extraction_warnings.append(w)
-    if name and _is_rejected_person_name_label(name):
-        name = _name_from_email_local(email) or ""
-        if "name_rejected_label" not in extraction_warnings:
-            extraction_warnings.append("name_rejected_label")
-
-    # Fallback: derive a best-effort name from email local-part when header/LLM failed
-    if not name or name == "Unknown":
-        top_lines = [ln.strip().lower() for ln in base_text.splitlines() if ln.strip()][:12]
-        if email and any(email in ln for ln in top_lines):
-            local = email.split("@", 1)[0]
-            # Replace common separators with spaces and title-case
-            local = re.sub(r"[._\-]+", " ", local)
-            local = re.sub(r"\s+", " ", local).strip()
-            if local and any(ch.isalpha() for ch in local):
-                parts = [p for p in local.split(" ") if p]
-                if 1 <= len(parts) <= 4:
-                    name = " ".join(w.capitalize() for w in parts)
-                    if "name_low_confidence" not in extraction_warnings:
-                        extraction_warnings.append("name_low_confidence")
-
-    logger.info(
-        "Extracted: name=%s email=%s skills_count=%d primary=%s exp_years=%.1f",
-        name,
-        email,
+    skills = merged_skills
+    key_skills = skills[:15]
+    primary_skills = skills[:3]
+    other_skills = [s for s in skills if s not in primary_skills]
+    logger.debug(
+        "skills_final count=%d primary=%s skipped=%s",
         len(skills),
-        ", ".join(primary_skills),
-        experience_years,
+        primary_skills,
+        skip_reasons,
     )
-    try:
-        logger.info(
-            "extraction_audit %s",
-            json.dumps(
-                {
-                    "extraction_confidence": round(float(extraction_confidence), 3),
-                    "low_confidence": bool(extraction_low_confidence),
-                    "warnings": extraction_warnings[:10],
-                    "skills_count": int(len(skills)),
-                    "primary_count": int(len(primary_skills)),
-                    "exp_years": float(experience_years or 0.0),
-                    **(_conf_meta or {}),
-                },
-                ensure_ascii=False,
-            ),
-        )
-    except Exception:
-        pass
-
-    # Final strict skills policy: only return skills that came from an explicit
-    # skills section. This prevents body text, projects, and experience lines
-    # from leaking into the final skills fields.
-    # Fallback: if no explicit section exists, preserve the already verified/extracted skills.
-    explicit_skill_section = list(section_skills or [])
-    if explicit_skill_section:
-        cleaned_explicit: list[str] = []
-        seen_explicit: set[str] = set()
-        for raw in explicit_skill_section:
-            s = _SKILL_CATEGORY_PREFIX_RE.sub("", _strip_skill_decorators(str(raw))).strip()
-            if not s:
-                continue
-            norm = canonicalise_skill(s) or _normalize_skill_token(s)
-            norm = _strip_footnote_numbers(norm)
-            if not norm or _skill_is_noise(norm):
-                continue
-            key = norm.lower()
-            if key in seen_explicit:
-                continue
-            seen_explicit.add(key)
-            cleaned_explicit.append(norm)
-        skills = _finalize_skills_list(cleaned_explicit, apply_vocab_gate=True, vocab=_tech_vocab)
-        key_skills = skills[:15]
-        primary_skills = [s for s in skills if _is_primary_candidate_skill(str(s))][:3]
-        other_skills = [s for s in skills if s not in primary_skills]
-    else:
-        if skills:
-            cleaned_fallback: list[str] = []
-            seen_fallback: set[str] = set()
-            for s in skills:
-                norm = canonicalise_skill(s) or _normalize_skill_token(s)
-                norm = _strip_footnote_numbers(norm)
-                if not norm or _skill_is_noise(norm):
-                    continue
-                key = norm.lower()
-                if key in seen_fallback:
-                    continue
-                seen_fallback.add(key)
-                cleaned_fallback.append(norm)
-            skills = cleaned_fallback[:]
-            key_skills = cleaned_fallback[:15]
-            primary_skills = [s for s in skills if _is_primary_candidate_skill(str(s))][:3]
-            other_skills = [s for s in skills if s not in primary_skills]
-        else:
-            skills = []
-            key_skills = []
-            primary_skills = []
-            other_skills = []
-
-
     # Final sanitization before returning/persisting
     summary = _collapse_whitespace(summary or "")
     experience_summary = _collapse_whitespace(experience_summary or "")
