@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -1582,6 +1582,14 @@
                 </svg>
                 Resume AI Chat
             </button>
+            <!-- <button onclick="switchTab('skills')" id="menu-skills"
+                class="hrms-sidebar-nav-btn w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="8" r="7"></circle>
+                    <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline>
+                </svg>
+                Employee Skills
+            </button> -->
 
             <!-- <button onclick="switchTab('export')" id="menu-export"
                 class="w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 border border-transparent transition-all">
@@ -3031,7 +3039,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
                 <div>
-                    <h3 class="font-outfit font-extrabold text-base text-white">Candidate Professional Details Form</h3>
+                    <h3 class="font-outfit font-extrabold text-base text-white">Candidate Details Form</h3>
                     <p class="text-[10px] font-semibold text-indigo-400 uppercase tracking-widest mt-0.5"
                         id="detailsModalCandidate">Edit Details</p>
                 </div>
@@ -3130,6 +3138,24 @@
                         class="hrms-textarea"></textarea>
                 </div>
 
+                <!-- Interview Notes Accordion -->
+                <div class="border-t border-white/10 pt-4">
+                    <button type="button" onclick="toggleCandidateNotesAccordion()"
+                        class="w-full flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left hover:bg-white/[0.05] transition">
+                        <div>
+                            <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Interview logs / Recruiter Notes</div>
+                            <div id="notesAccordionSubtitle" class="text-sm font-semibold text-white mt-1">Click to expand notes</div>
+                        </div>
+                        <svg id="notesAccordionChevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            class="text-slate-400 transition-transform duration-200">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </button>
+                    <div id="candidateNotesMount" class="hidden mt-4"></div>
+                </div>
+
                 <!-- Form Actions -->
                 <div class="flex gap-2 justify-end pt-3 border-t border-white/10">
                     <button type="button" onclick="closeDetailsModal()" class="hrms-btn hrms-btn-secondary">Cancel</button>
@@ -3151,7 +3177,7 @@
     <div id="candidateSkillsModal"
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
         <div
-            class="hrms-modal-panel p-6 rounded-2xl w-full max-w-xl shadow-2xl flex flex-col gap-4 max-h-[90vh]">
+            class="hrms-modal-panel p-6 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-hidden">
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
                 <div>
@@ -3209,9 +3235,15 @@
                     <div class="flex items-center justify-between gap-2 mb-2">
                         <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Technical Skills &
                             Expertise</h4>
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 shrink-0">
                             <button type="button" id="cv-skills-view-btn" onclick="setSkillsModalEditMode(true)"
-                                class="text-[10px] font-semibold text-brand-300 hover:text-brand-200 uppercase tracking-wider">
+                                class="inline-flex items-center gap-1.5 rounded-full border border-brand-400/20 bg-brand-500/10 px-2.5 py-1 text-[10px] font-semibold text-brand-200 hover:bg-brand-500/15 hover:text-white transition uppercase tracking-wider">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                                </svg>
                                 Edit Skills
                             </button>
                             <div id="cv-skills-edit-actions" class="hidden items-center gap-2">
@@ -3223,10 +3255,11 @@
                                     class="hrms-btn hrms-btn-primary text-[10px] py-1 px-2.5">
                                     Save Skills
                                 </button>
-                            </button>
+                            </div>
                         </div>
                     </div>
-                    <div id="cv-skills" class="flex flex-wrap gap-1.5 p-3 bg-black/15 rounded-xl border border-white/5">
+                    <div id="cv-skills"
+                        class="flex flex-wrap gap-1.5 p-3 bg-black/15 rounded-xl border border-white/5 max-h-[38vh] overflow-y-auto pr-1">
                         <!-- Loaded dynamically -->
                     </div>
                     <div id="cv-skills-edit-panel" class="hidden mt-3 space-y-2">
@@ -3304,6 +3337,41 @@
             return [];
         }
 
+        function isLikelyTechnicalSkill(token) {
+            const t = String(token || "").trim();
+            if (!t) return false;
+            if (t.length > 48) return false;
+            const norm = t.toLowerCase();
+            const blockedSingles = new Set([
+                "business", "executive", "lead", "leadership", "thinking", "handling",
+                "social", "media", "design", "designing", "solution", "solutions",
+                "platform", "platforms", "portal", "portals", "synthesis", "critical",
+                "creative", "different", "mining", "tree", "multi", "tasking", "generation",
+                "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+                "english", "hindi", "for", "and", "or", "in", "of", "the", "with",
+                "open", "code", "core", "work", "time", "support", "knowledge", "profile",
+                "candidate", "resume", "name", "contact", "email", "phone", "location",
+            ]);
+            if (blockedSingles.has(norm)) return false;
+            if (/^[A-Z]{2,6}$/.test(t)) return true;
+            if (/^[A-Za-z][a-z0-9]*([A-Z][a-z0-9]*)+$/.test(t)) return true;
+            if (/[.#+\/]/.test(t)) return true;
+            if (/\d/.test(t) && /[a-z]/i.test(t)) return true;
+            const techWords = [
+                "python", "java", "javascript", "typescript", "react", "angular", "vue",
+                "node", "django", "flask", "fastapi", "spring", "sql", "mysql", "postgres",
+                "mongodb", "redis", "docker", "kubernetes", "aws", "azure", "gcp", "linux",
+                "git", "github", "excel", "power bi", "tableau", "figma", "photoshop",
+                "autocad", "cad", "sap", "salesforce", "jira", "pandas", "numpy", "tensorflow",
+                "pytorch", "opencv", "mediapipe", "uipath", "html", "css", "rest", "api",
+                "data", "analysis", "analytics", "machine learning", "deep learning",
+                "computer vision", "ui", "ux", "cloud", "devops",
+            ];
+            if (techWords.some(w => norm.includes(w))) return true;
+            if (t.split(/\s+/).length > 1 && /[.#+\/]/.test(t)) return true;
+            return false;
+        }
+
         /** Merge skills, primary_skills, other_skills, key_skills — de-duplicated, stable order. */
         function getAllSkills(candidate) {
             if (!candidate) return [];
@@ -3315,18 +3383,12 @@
             ];
             const seen = new Set();
             const out = [];
-            const noise = new Set([
-                "deployment", "support", "maintenance", "troubleshooting", "documentation",
-                "communication", "collaboration", "leadership", "teamwork", "applications",
-                "application", "professional", "experience", "summary", "objective", "profile",
-                "candidate", "resume", "name", "contact", "email", "phone", "location", "vs", "code",
-            ]);
             for (const field of fields) {
                 for (const s of getSkillsArray(field)) {
                     const t = String(s || "").trim();
                     if (!t) continue;
                     const key = t.toLowerCase();
-                    if (seen.has(key) || noise.has(key)) continue;
+                    if (seen.has(key) || !isLikelyTechnicalSkill(t)) continue;
                     seen.add(key);
                     out.push(t);
                 }
@@ -3442,12 +3504,30 @@
             return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
         }
 
+        function _formatDateTime(iso) {
+            if (!iso) return "—";
+            try {
+                const d = new Date(iso);
+                if (isNaN(d.getTime())) return "—";
+                const day = String(d.getDate()).padStart(2, '0');
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const year = d.getFullYear();
+                const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                return `${day}-${month}-${year} ${time}`;
+            } catch (e) {
+                return "—";
+            }
+        }
+
         function _dashFormatDate(iso) {
             if (!iso) return "—";
             try {
                 const d = new Date(iso);
                 if (isNaN(d.getTime())) return "—";
-                return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+                const day = String(d.getDate()).padStart(2, '0');
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const year = d.getFullYear();
+                return `${day}-${month}-${year}`;
             } catch (e) {
                 return "—";
             }
@@ -4006,11 +4086,11 @@
                 tr.onclick = () => openDrawer(r);
 
                 // Skills badges
-                const primary = getSkillsArray(r.primary_skills || r.skills || r.key_skills);
+                const primary = getAllSkills(r);
                 const pills = primary.slice(0, 3).map(s =>
-                    `<span class="px-2 py-0.5 rounded bg-brand-900/50 border border-brand-300/10 text-brand-300 text-[9px] leading-none">${s}</span>`
+                    `<span class="px-2 py-0.5 rounded bg-brand-900/50 border border-brand-300/10 text-brand-300 text-[9px] leading-none cursor-pointer hover:bg-brand-500/20 hover:border-brand-400/40 transition-colors">${s}</span>`
                 ).join(" ");
-                const countBadge = primary.length > 3 ? `<span class="text-[9px] text-slate-500 font-medium">+${primary.length - 3}</span>` : "";
+                const countBadge = primary.length > 3 ? `<span class="text-[9px] text-slate-500 font-medium cursor-pointer">+${primary.length - 3}</span>` : "";
 
                 // Contact block
                 const contactBlob = `
@@ -4028,8 +4108,8 @@
                     </td>
                     <td class="p-4">${contactBlob}</td>
                     <td class="p-3.5 font-bold text-left text-slate-200 text-[11px]">${parseFloat(r.experience_years || 0).toFixed(1)} yr</td>
-                    <td class="p-4">
-                        <div class="flex flex-wrap items-center gap-1 max-w-[280px]">
+                    <td class="p-4" onclick="event.stopPropagation(); openCandidateSkillsModal('${r.id}', event)" title="Click to view/edit skills">
+                        <div class="flex flex-wrap items-center gap-1 max-w-[280px] cursor-pointer">
                             ${pills} ${countBadge}
                         </div>
                     </td>
@@ -4097,11 +4177,12 @@
         function _detailsDate(iso) {
             if (!iso) return "?";
             try {
-                return new Date(iso).toLocaleDateString("en-GB", {
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric"
-                });
+                const d = new Date(iso);
+                if (isNaN(d.getTime())) return "?";
+                const day = String(d.getDate()).padStart(2, '0');
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const year = d.getFullYear();
+                return `${day}-${month}-${year}`;
             } catch (_) {
                 return "?";
             }
@@ -4327,13 +4408,7 @@
                     <path d="M12 20h9" />
                     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
                 </svg>`;
-            const eyeIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                </svg>`;
-            const clipboardIcon = `
+                        const clipboardIcon = `
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="2" width="6" height="4" rx="1" />
@@ -4352,9 +4427,15 @@
                     <polyline points="3 6 5 6 21 6" />
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                 </svg>`;
+            const tagIcon = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                </svg>`;
 
             const buf = pageRows.map((r, idx) => {
-                const skills = getSkillsArray(r.primary_skills || r.skills || r.key_skills);
+                const skills = getAllSkills(r);
                 const visibleSkills = skills.slice(0, 4);
                 const extraSkills = skills.length > 4
                     ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-white/5 border border-white/10 text-slate-400 text-[10px] font-semibold">+${skills.length - 4}</span>`
@@ -4386,7 +4467,7 @@
                     </div>`;
 
                 const skillsHtml = visibleSkills.length
-                    ? `<div class="flex flex-wrap items-center gap-1">
+                    ? `<div class="flex flex-wrap items-center gap-1 cursor-pointer" onclick="openCandidateSkillsModal('${r.id}', event)" title="Click to view/edit skills">
                             ${visibleSkills.map(s => `<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-brand-500/15 border border-brand-400/25 text-brand-200 text-[10px] font-semibold">${_detailsEscape(s)}</span>`).join("")}
                             ${extraSkills}
                         </div>`
@@ -4398,10 +4479,10 @@
                     ? iconBtn("Open resume PDF", "hover:text-emerald-300", fileIcon,
                         `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}?token=${encodeURIComponent(jwtToken)}','_blank','noopener')`)
                     : iconBtn("No resume file", "opacity-30 cursor-not-allowed", fileIcon, "void(0)");
-                const viewBtn = iconBtn("View candidate", "hover:text-cyan-300", eyeIcon,
-                    `openCandidateDetailsFromTable('${r.id}', event)`);
-                const editBtn = iconBtn("Edit candidate details", "hover:text-indigo-300", editIcon,
+                                const editBtn = iconBtn("Edit candidate details", "hover:text-indigo-300", editIcon,
                     `openCandidateDetailsModal('${r.id}', event)`);
+                const skillsBtn = iconBtn("View & Edit Technical Skills", "hover:text-brand-300", tagIcon,
+                    `openCandidateSkillsModal('${r.id}', event)`);
                 const notesBtn = iconBtn("View notes", "hover:text-brand-300", clipboardIcon,
                     `openCandidateNotesModal('${r.id}', event)`);
                 const shortlistBtn = iconBtn(
@@ -4446,7 +4527,7 @@
                         </td>
                         <td class="px-4 py-3 align-middle text-right" onclick="event.stopPropagation()">
                             <div class="inline-flex items-center gap-1 justify-end">
-                                ${pdfBtn}${viewBtn}${editBtn}${notesBtn}${shortlistBtn}${delBtn}
+                                ${pdfBtn}${editBtn}${skillsBtn}${notesBtn}${shortlistBtn}${delBtn}
                             </div>
                         </td>
                     </tr>`;
@@ -4789,13 +4870,22 @@
             const box = document.getElementById("uploadStatus");
             const icon = document.getElementById("uploadStatusIcon");
             const text = document.getElementById("uploadStatusText");
-            const tone = kind === "ok"
-                ? { bg: "bg-emerald-500/10", border: "border-emerald-400/30", color: "text-emerald-300" }
-                : { bg: "bg-rose-500/10", border: "border-rose-400/30", color: "text-rose-300" };
+            let tone;
+            if (kind === "ok") {
+                tone = { bg: "bg-emerald-500/10", border: "border-emerald-400/30", color: "text-emerald-300" };
+            } else if (kind === "warn") {
+                tone = { bg: "bg-amber-500/10", border: "border-amber-400/30", color: "text-amber-300" };
+            } else {
+                tone = { bg: "bg-rose-500/10", border: "border-rose-400/30", color: "text-rose-300" };
+            }
             box.className = `mt-3 p-2.5 rounded-lg flex items-center gap-2.5 text-[11px] font-semibold text-left ${tone.bg} ${tone.border} border ${tone.color}`;
-            icon.innerHTML = kind === "ok"
-                ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
-                : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`;
+            if (kind === "ok") {
+                icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+            } else if (kind === "warn") {
+                icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+            } else {
+                icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`;
+            }
             text.textContent = msg;
         }
 
@@ -4868,9 +4958,47 @@
                     } catch (_) { /* non-JSON body */ }
                     throw new Error(detail);
                 }
+                const results = await resp.json();
+                
+                let successCount = 0;
+                let duplicateNames = [];
+                let errorMessages = [];
+                
+                results.forEach(res => {
+                    if (res.status === "success") {
+                        successCount++;
+                    } else if (res.status === "duplicate") {
+                        duplicateNames.push(res.message);
+                    } else if (res.status === "error") {
+                        errorMessages.push(`${res.file || 'File'}: ${res.message}`);
+                    }
+                });
+
                 progressText.innerText = "Re-indexing files catalogue...";
                 await fetchResumes();
-                _showUploadStatus("ok", `Imported ${files.length} resume${files.length === 1 ? "" : "s"} successfully.`);
+
+                if (duplicateNames.length > 0 || errorMessages.length > 0) {
+                    let msg = "";
+                    if (successCount > 0) {
+                        msg += `Imported ${successCount} resume${successCount === 1 ? "" : "s"} successfully. `;
+                    }
+                    if (duplicateNames.length > 0) {
+                        msg += `Duplicate skipped: ${duplicateNames.join(", ")}. `;
+                    }
+                    if (errorMessages.length > 0) {
+                        msg += `Failed: ${errorMessages.join("; ")}.`;
+                    }
+                    
+                    if (successCount > 0) {
+                        _showUploadStatus("ok", msg.trim());
+                    } else if (duplicateNames.length > 0 && errorMessages.length === 0) {
+                        _showUploadStatus("warn", msg.trim());
+                    } else {
+                        _showUploadStatus("err", msg.trim());
+                    }
+                } else {
+                    _showUploadStatus("ok", `Imported ${files.length} resume${files.length === 1 ? "" : "s"} successfully.`);
+                }
             } catch (err) {
                 console.error("Resume upload failed:", err);
                 _showUploadStatus("err", `Upload failed: ${err.message || err}`);
@@ -4909,9 +5037,53 @@
                     } catch (_) { /* non-JSON body */ }
                     throw new Error(detail);
                 }
+                const results = await resp.json();
+                
+                let successCount = 0;
+                let duplicateNames = [];
+                let errorMessages = [];
+                let skippedCount = 0;
+                
+                results.forEach(res => {
+                    if (res.status === "success") {
+                        successCount++;
+                    } else if (res.status === "duplicate") {
+                        duplicateNames.push(res.message);
+                    } else if (res.status === "skipped") {
+                        skippedCount++;
+                    } else {
+                        errorMessages.push(`${res.file || 'File'}: ${res.message}`);
+                    }
+                });
+
                 progressText.innerText = "Running extraction...";
                 await fetchResumes();
-                _showUploadStatus("ok", "ZIP bundle uploaded and extracted successfully.");
+
+                if (duplicateNames.length > 0 || errorMessages.length > 0 || skippedCount > 0) {
+                    let msg = "";
+                    if (successCount > 0) {
+                        msg += `Imported ${successCount} resume${successCount === 1 ? "" : "s"} successfully. `;
+                    }
+                    if (duplicateNames.length > 0) {
+                        msg += `Duplicate skipped: ${duplicateNames.join(", ")}. `;
+                    }
+                    if (skippedCount > 0) {
+                        msg += `${skippedCount} skipped. `;
+                    }
+                    if (errorMessages.length > 0) {
+                        msg += `Failed: ${errorMessages.join("; ")}.`;
+                    }
+                    
+                    if (successCount > 0) {
+                        _showUploadStatus("ok", msg.trim());
+                    } else if (duplicateNames.length > 0 && errorMessages.length === 0) {
+                        _showUploadStatus("warn", msg.trim());
+                    } else {
+                        _showUploadStatus("err", msg.trim());
+                    }
+                } else {
+                    _showUploadStatus("ok", "ZIP bundle uploaded and extracted successfully.");
+                }
             } catch (err) {
                 console.error("ZIP bulk upload failed:", err);
                 _showUploadStatus("err", `ZIP import failed: ${err.message || err}`);
@@ -5142,7 +5314,7 @@
 
                 resultsBox.innerHTML = "";
                 results.forEach(r => {
-                    const primary = getSkillsArray(r.primary_skills || r.skills || r.key_skills);
+                    const primary = getAllSkills(r);
                     const pills = primary.slice(0, 3).map(s =>
                         `<span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px]">${s}</span>`
                     ).join(" ");
@@ -5212,7 +5384,9 @@
                 // Render best matches candidates
                 if (data.best_matches && data.best_matches.length > 0) {
                     data.best_matches.forEach(m => {
-                        const scoreColor = m.match_score >= 80 ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/10' : (m.match_score >= 50 ? 'text-amber-400 border-amber-500/20 bg-amber-500/10' : 'text-slate-400 border-white/10 bg-white/5');
+                        const matchScore = Number(m.match_score ?? m.fit_score ?? m.score_1_10 ?? 0);
+                        const scoreColor = matchScore >= 80 ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/10' : (matchScore >= 50 ? 'text-amber-400 border-amber-500/20 bg-amber-500/10' : 'text-slate-400 border-white/10 bg-white/5');
+                        const scoreLabel = matchScore > 0 ? `${matchScore}% Match` : 'Match N/A';
 
                         resultsBox.innerHTML += `
                             <div class="p-4 rounded-xl bg-white/[0.02] border border-white/10 flex items-center justify-between gap-4 cursor-pointer hover:bg-white/[0.04] transition-all shadow-md" onclick="openDrawerById('${m.id}')">
@@ -5220,11 +5394,11 @@
                                     <h4 class="font-bold text-slate-100 text-sm">${m.name}</h4>
                                     <div class="text-[10px] text-slate-400 mt-1 flex gap-2">
                                         <span>EXP: ${parseFloat(m.experience || 0).toFixed(1)} yr</span>
-                                        <span>EMAIL: ${m.email || '—'}</span>
+                                        <span>EMAIL: ${m.email || '-'}</span>
                                     </div>
                                 </div>
                                 <div class="px-3 py-1.5 rounded-lg border text-xs font-black ${scoreColor}">
-                                    ${m.match_score}% Match
+                                    ${scoreLabel}
                                 </div>
                             </div>
                         `;
@@ -5238,6 +5412,9 @@
                 alert("Search failed.");
             } finally {
                 loader.classList.add("hidden");
+                if (focusNotes && box && typeof box.scrollIntoView === "function") {
+                    box.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
             }
         }
 
@@ -5633,7 +5810,7 @@
                     box.innerHTML = `<div class="text-[11px] text-slate-500">No interview logs found.</div>`;
                 } else {
                     notes.forEach(n => {
-                        const date = new Date(n.created_at).toLocaleDateString() + ' ' + new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const date = _formatDateTime(n.created_at);
                         box.innerHTML += `
                             <div class="p-3 bg-black/25 rounded-lg border border-white/5 flex items-center justify-between gap-3 shadow">
                                 <div>
@@ -5654,6 +5831,9 @@
                 console.error("Notes load failed", err);
             } finally {
                 loader.classList.add("hidden");
+                if (focusNotes && box && typeof box.scrollIntoView === "function") {
+                    box.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
             }
         }
 
@@ -5736,7 +5916,7 @@
                 skillBox.innerHTML = `<span class="text-xs text-slate-400">None parsed. <button type="button" onclick="openDrawerSkillsEditor()" class="text-brand-300 hover:text-brand-200 underline ml-1">Add skills</button></span>`;
             } else {
                 skills.forEach(s => {
-                    skillBox.innerHTML += `<span class="px-2.5 py-1 rounded bg-brand-900 border border-brand-300/15 text-brand-300 text-[11px] font-medium">${escapeHtml(s)}</span>`;
+                    skillBox.innerHTML += `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-brand-900/70 border border-brand-300/15 text-brand-200 text-[11px] font-medium">${escapeHtml(s)}</span>`;
                 });
             }
         }
@@ -5783,9 +5963,9 @@
                 });
             } else {
                 editableSkillsList.forEach(s => {
-                    skillBox.innerHTML += `<span class="px-2 py-1 rounded bg-brand-900 border border-brand-300/10 text-brand-300 text-[10px] font-semibold">${escapeHtml(s)}</span>`;
+                    skillBox.innerHTML += `<span class="inline-flex items-center px-2 py-1 rounded-full bg-brand-900/70 border border-brand-300/10 text-brand-200 text-[10px] font-semibold">${escapeHtml(s)}</span>`;
                 });
-                skillBox.innerHTML += `<span class="text-[10px] text-slate-500 self-center ml-1">(${editableSkillsList.length} skills)</span>`;
+                skillBox.innerHTML += `<span class="text-[10px] text-slate-500 self-center ml-1 whitespace-nowrap">(${editableSkillsList.length} skills)</span>`;
             }
 
             if (editPanel) editPanel.classList.toggle("hidden", !editing);
@@ -5870,6 +6050,9 @@
                 editableSkillsList = getAllSkills(updated);
                 setSkillsModalEditMode(false);
                 renderDatabaseTable();
+                if (typeof renderDetailsTable === "function") {
+                    renderDetailsTable();
+                }
             } catch (err) {
                 console.error("Save skills error:", err);
                 alert("Error saving skills: " + err.message);
@@ -5938,15 +6121,39 @@
 
         // CANDIDATE ACTIONS DETAILS FORM LOGIC
         let activeDetailsResumeId = null;
+        const candidateNotesPanel = document.querySelector("#notesModal > div");
+        let candidateNotesExpanded = false;
 
-        function openCandidateDetailsModal(id, event) {
+        function syncCandidateNotesAccordion(open) {
+            const mount = document.getElementById("candidateNotesMount");
+            const chevron = document.getElementById("notesAccordionChevron");
+            const subtitle = document.getElementById("notesAccordionSubtitle");
+            if (!mount) return;
+            const shouldOpen = typeof open === "boolean" ? open : !mount.classList.contains("hidden");
+            mount.classList.toggle("hidden", !shouldOpen);
+            candidateNotesExpanded = shouldOpen;
+            if (chevron) chevron.style.transform = shouldOpen ? "rotate(180deg)" : "rotate(0deg)";
+            if (subtitle) subtitle.textContent = shouldOpen ? "Click to collapse notes" : "Click to expand notes";
+        }
+
+        function toggleCandidateNotesAccordion() {
+            syncCandidateNotesAccordion();
+        }
+
+        function openCandidateDetailsModal(id, event, focusNotes = false) {
             if (event) event.stopPropagation();
             activeDetailsResumeId = id;
+            activeNotesResumeId = id;
 
             const candidate = findResumeById(id);
             if (!candidate) return;
 
             document.getElementById("detailsModalCandidate").innerText = `Details for ${candidate.name}`;
+            document.getElementById("notesModalCandidate").innerText = `Notes for ${candidate.name}`;
+            const modalNoteInput = document.getElementById("modalNewNoteInput");
+            if (modalNoteInput) modalNoteInput.value = "";
+            const modalNoteStatus = document.getElementById("modalNoteStatus");
+            if (modalNoteStatus) modalNoteStatus.value = "General Note";
 
             // Populate form fields
             document.getElementById("detailsForm-name").value = candidate.name || "";
@@ -5962,11 +6169,20 @@
             document.getElementById("detailsForm-reasonJobChange").value = candidate.reason_job_change || "";
 
             document.getElementById("detailsModal").classList.remove("hidden");
+            const detailsModalBody = document.querySelector("#detailsModal > div.hrms-modal-panel");
+            const notesMount = document.getElementById("candidateNotesMount");
+            if (detailsModalBody && candidateNotesPanel && notesMount && candidateNotesPanel.parentElement !== notesMount) {
+                notesMount.appendChild(candidateNotesPanel);
+            }
+            syncCandidateNotesAccordion(focusNotes);
+            loadModalNotes(id, focusNotes);
         }
 
         function closeDetailsModal() {
             document.getElementById("detailsModal").classList.add("hidden");
             activeDetailsResumeId = null;
+            activeNotesResumeId = null;
+            syncCandidateNotesAccordion(false);
         }
 
         async function saveCandidateDetails(event) {
@@ -6032,14 +6248,7 @@
 
         async function openCandidateNotesModal(id, event) {
             if (event) event.stopPropagation();
-            activeNotesResumeId = id;
-
-            const candidate = findResumeById(id);
-            document.getElementById("notesModalCandidate").innerText = candidate ? `Notes for ${candidate.name}` : "Recruiter Notes";
-
-            document.getElementById("notesModal").classList.remove("hidden");
-            document.getElementById("modalNewNoteInput").value = "";
-            await loadModalNotes(id);
+            openCandidateDetailsModal(id, event, true);
         }
 
         function closeNotesModal() {
@@ -6047,7 +6256,7 @@
             activeNotesResumeId = null;
         }
 
-        async function loadModalNotes(id) {
+        async function loadModalNotes(id, focusNotes = false) {
             const loader = document.getElementById("modalNotesLoader");
             const box = document.getElementById("modalNotesList");
             box.innerHTML = "";
@@ -6063,7 +6272,7 @@
                     box.innerHTML = `<div class="text-xs text-slate-500 text-center py-6">No recruiter logs found. Start by writing one below!</div>`;
                 } else {
                     notes.forEach(n => {
-                        const date = new Date(n.created_at).toLocaleDateString() + ' ' + new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const date = _formatDateTime(n.created_at);
                         box.innerHTML += `
                             <div class="p-3 bg-black/25 rounded-xl border border-white/5 flex items-center justify-between gap-3 shadow">
                                 <div class="min-w-0 flex-1">
@@ -6084,6 +6293,9 @@
                 console.error("Notes load failed", err);
             } finally {
                 loader.classList.add("hidden");
+                if (focusNotes && box && typeof box.scrollIntoView === "function") {
+                    box.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
             }
         }
 
@@ -6414,3 +6626,9 @@
 </body>
 
 </html>
+
+
+
+
+
+

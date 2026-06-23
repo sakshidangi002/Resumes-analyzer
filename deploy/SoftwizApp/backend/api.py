@@ -46,7 +46,7 @@ import pandas as pd
 from chromadb import PersistentClient
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s – %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s - %(message)s")
 
 
 def _log_json(event: str, payload: dict) -> None:
@@ -100,14 +100,16 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:root@localhost:5432/Resume_analyzer",
 )
-# Used for building resume download links — override in .env if behind a proxy
+# Used for building resume download links; override in .env if behind a proxy
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+LEGACY_UPLOAD_DIR = os.path.join(PROJECT_ROOT, "uploads")
 EXCEL_DIR = os.path.join(BASE_DIR, "data")
 EXCEL_FILE = os.path.join(EXCEL_DIR, "resumes_data.xlsx")
-# Always under backend/ — not process cwd (unified server runs from hrms/backend).
+# Always under backend/ - not process cwd (unified server runs from hrms/backend).
 CHROMA_DIR = os.path.join(BASE_DIR, "chromadb")
 
 # Excel column order for append
@@ -243,6 +245,63 @@ class BulkDeleteRequest(BaseModel):
 class NoteCreate(BaseModel):
     note: str
     status: Optional[str] = None
+
+
+def _candidate_upload_dirs() -> list[str]:
+    dirs = []
+    legacy = globals().get("LEGACY_UPLOAD_DIR") or os.path.join(PROJECT_ROOT, "uploads")
+    for path in (UPLOAD_DIR, legacy):
+        if path and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def _normalize_uploaded_filename(filename: str) -> str:
+    name = (filename or "").strip().replace("\\", "/")
+    return os.path.basename(name)
+
+
+def _resolve_resume_file_path(filename: str) -> Optional[str]:
+    """
+    Resolve a stored resume filename across current and legacy upload roots.
+    """
+    raw = (filename or "").strip()
+    if not raw:
+        return None
+
+    normalized = _normalize_uploaded_filename(raw)
+    search_names = []
+    for item in (raw, normalized):
+        if item and item not in search_names:
+            search_names.append(item)
+
+    for candidate in search_names:
+        if os.path.isabs(candidate) and os.path.exists(candidate):
+            return candidate
+
+    for upload_dir in _candidate_upload_dirs():
+        for candidate in search_names:
+            direct = os.path.join(upload_dir, candidate)
+            if os.path.exists(direct):
+                return direct
+
+    for upload_dir in _candidate_upload_dirs():
+        if not os.path.isdir(upload_dir):
+            continue
+        for root, _dirs, files in os.walk(upload_dir):
+            if normalized in files:
+                return os.path.join(root, normalized)
+
+    return None
+
+
+def _resume_file_media_type(filename: str) -> str:
+    ext = os.path.splitext((filename or "").lower())[1]
+    if ext == ".docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if ext == ".pdf":
+        return "application/pdf"
+    return "application/octet-stream"
 
 
 class CandidateDetailsUpdate(BaseModel):
@@ -432,7 +491,7 @@ async def lifespan(app: FastAPI):
 
     # 3. Pre-warm embedding model (fast, ~1 sec)
     try:
-        logger.info("Loading embedding model…")
+        logger.info("Loading embedding model...")
         model = get_embedding_model()
         test_vec = model.encode(["test"])
         logger.info("Embedding model OK. Shape: %s", test_vec.shape)
@@ -443,20 +502,20 @@ async def lifespan(app: FastAPI):
     if os.getenv("PRELOAD_CHAT_MODEL", "").strip().lower() in ("1", "true", "yes"):
         def _preload_chat():
             try:
-                logger.info("Preloading chat model in background…")
+                logger.info("Preloading chat model in background...")
                 preload_chat_model()
                 logger.info("Chat model preloaded.")
             except Exception as exc:
                 logger.warning("Chat model preload failed (will load on first chat): %s", exc)
         loop = asyncio.get_event_loop()
         loop.run_in_executor(executor, _preload_chat)
-        # Do not await — let startup complete immediately; model loads in background
+        # Do not await; let startup complete immediately; model loads in background
 
     # 5. Optional: preload extraction model so first upload is fast (no cold start)
     if os.getenv("PRELOAD_EXTRACT_MODEL", "").strip().lower() in ("1", "true", "yes"):
         def _preload_extract():
             try:
-                logger.info("Preloading extraction model in background…")
+                logger.info("Preloading extraction model in background...")
                 preload_extract_model()
                 logger.info("Extraction model preloaded.")
             except Exception as exc:
@@ -472,7 +531,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Resume Analyzer",
     version="2.1.0",
-    description="FastAPI backend for Resume Analyzer – upload, search, rank, chat.",
+    description="FastAPI backend for Resume Analyzer - upload, search, rank, chat.",
     lifespan=lifespan,
 )
 
@@ -1228,11 +1287,13 @@ async def upload_resume(
                 }
                 continue
 
-            os.makedirs(UPLOAD_DIR, exist_ok=True)
+
             safe_name = _sanitize_filename(filename or "resume")
             new_name = f"{uuid.uuid4()}_{safe_name}"
-            with open(os.path.join(UPLOAD_DIR, new_name), "wb") as fh:
-                fh.write(file_bytes)
+            for upload_dir in _candidate_upload_dirs():
+                os.makedirs(upload_dir, exist_ok=True)
+                with open(os.path.join(upload_dir, new_name), "wb") as fh:
+                    fh.write(file_bytes)
             resume_link = f"{BASE_URL}/files/{new_name}"
 
             embedding_text = (
@@ -1397,7 +1458,7 @@ async def upload_resume(
                 },
             )
 
-            logger.info("Upload complete: %s → %s", filename, cleaned.name)
+            logger.info("Upload complete: %s -> %s", filename, cleaned.name)
             results[idx] = {"status": "success", "candidate_name": cleaned.name, "resume_link": resume_link}
 
         except Exception as exc:
@@ -1543,7 +1604,7 @@ def list_resumes(
                         if not a:
                             continue
                         if re.fullmatch(r"[a-z0-9]+", a):
-                            # pure alphanumeric → word boundary
+                            # pure alphanumeric word boundary
                             if re.search(rf"\b{re.escape(a)}\b", blob):
                                 found_any = True
                                 break
@@ -1881,7 +1942,7 @@ def list_resumes_by_field(
     if not field_norm:
         raise HTTPException(status_code=400, detail="field required")
 
-    # Map UI field → canonical token we can expand
+    # Map UI field -> canonical token we can expand
     field_to_token = {
         ".net": ".net",
         "dotnet": ".net",
@@ -1934,22 +1995,22 @@ def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
 async def get_resume(resume_id: str, db: Session = Depends(get_db)):
     resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
     if resume and resume.source_file:
-        file_path = os.path.join(UPLOAD_DIR, resume.source_file)
-        if os.path.exists(file_path):
+        file_path = _resolve_resume_file_path(resume.source_file)
+        if file_path and os.path.exists(file_path):
             return FileResponse(
                 file_path,
                 filename=resume.source_file,
-                media_type="application/pdf",
+                media_type=_resume_file_media_type(resume.source_file),
             )
     raise HTTPException(status_code=404, detail="Resume file not found")
 
 
 @app.get("/files/{filename}", tags=["Files"])
 def serve_file(filename: str):
-    file_path = os.path.join(UPLOAD_DIR, filename)
-    if not os.path.exists(file_path):
+    file_path = _resolve_resume_file_path(filename)
+    if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path=file_path, media_type="application/pdf")
+    return FileResponse(path=file_path, media_type=_resume_file_media_type(filename))
 
 
 # ---------------------------------------------------------------------------
@@ -2141,7 +2202,7 @@ def delete_note(resume_id: str, note_id: str, db: Session = Depends(get_db)):
 # Chat endpoints
 # ---------------------------------------------------------------------------
 
-# Skill/keyword groups for candidate search (query → DB filter)
+# Skill/keyword groups for candidate search (query -> DB filter)
 _SEARCH_SKILL_GROUPS = {
     "dotnet": [".net", "dotnet", "asp.net", "c#", "c sharp", "asp.net core", "entity framework"],
     "python": ["python", "django", "flask", "fastapi", "pandas", "numpy"],
@@ -2151,23 +2212,34 @@ _SEARCH_SKILL_GROUPS = {
     "devops": ["devops", "docker", "kubernetes", "aws", "azure", "ci/cd"],
 }
 
-def _extract_search_intent(question: str) -> tuple[list[str], float]:
+def _extract_search_intent(question: str) -> tuple[list[str], float, float | None]:
     """
-    Detect if the question is a candidate search and extract skill keywords and min experience.
-    Returns (list of search terms for DB ilike, min_experience in years or 0).
+    Detect if the question is a candidate search and extract skill keywords plus an experience range.
+    Returns (list of search terms for DB ilike, min_experience in years, max_experience if specified).
     """
     q = (question or "").lower().strip()
     search_terms: list[str] = []
     min_exp = 0.0
+    max_exp: float | None = None
 
-    # Min experience: e.g. "3+ years", "1 year", "5 years experience"
-    exp_match = re.search(r"(\d+)\s*\+\s*years?", q)
-    if exp_match:
-        min_exp = float(exp_match.group(1))
+    # Experience patterns:
+    # - "3+ years"
+    # - "1 year"
+    # - "0-1 year" / "0 to 1 years"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*years?", q)
+    if range_match:
+        min_exp = float(range_match.group(1))
+        max_exp = float(range_match.group(2))
+        if max_exp < min_exp:
+            min_exp, max_exp = max_exp, min_exp
     else:
-        exp_match = re.search(r"(?:with|having)?\s*(\d+)\s*years?\s*(?:experience|exp)?", q)
+        exp_match = re.search(r"(\d+(?:\.\d+)?)\s*\+\s*years?", q)
         if exp_match:
             min_exp = float(exp_match.group(1))
+        else:
+            exp_match = re.search(r"(?:with|having)?\s*(\d+(?:\.\d+)?)\s*years?\s*(?:experience|exp)?", q)
+            if exp_match:
+                min_exp = float(exp_match.group(1))
 
     for key, tokens in _SEARCH_SKILL_GROUPS.items():
         matched = [t for t in tokens if t in q]
@@ -2202,21 +2274,23 @@ def _extract_search_intent(question: str) -> tuple[list[str], float]:
             if any(tech in w or w in tech for tech in [".net", "python", "react", "java", "node", "sql", "vue", "angular"]):
                 search_terms.append(w)
     search_terms = list(dict.fromkeys(search_terms))[:15]  # dedupe, cap
-    return search_terms, min_exp
-
+    return search_terms, min_exp, max_exp
 
 def _db_search_candidates(
     db: Session,
     skill_terms: list[str],
     min_experience: float,
+    max_experience: float | None = None,
     limit: int = 50,
 ) -> list:
-    """Return resume ORM objects matching any of the skill terms and optional min experience."""
-    if not skill_terms and min_experience <= 0:
+    """Return resume ORM objects matching any of the skill terms and optional experience range."""
+    if not skill_terms and min_experience <= 0 and max_experience is None:
         return []
     q = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
     if min_experience > 0:
         q = q.filter(ResumeDB.experience_years >= min_experience)
+    if max_experience is not None:
+        q = q.filter(ResumeDB.experience_years <= max_experience)
     rows = q.order_by(ResumeDB.created_at.desc()).limit(limit * 2).all()  # fetch extra then filter
     if not skill_terms:
         return rows[:limit]
@@ -2261,7 +2335,7 @@ def _apply_skill_filter(question: str, resumes: list) -> list:
     return filtered if filtered else resumes
 
 
-def _resume_row_for_chat(r: ResumeDB) -> dict:
+def _resume_row_for_chat(r: ResumeDB, *, match_score: float | None = None) -> dict:
     """One row for global chat best_matches table (same shape as resume table for consistent UI)."""
     primary = [
         s.strip() for s in (_safe_get(r, "primary_skills") or "").split(",") if s.strip()
@@ -2281,6 +2355,7 @@ def _resume_row_for_chat(r: ResumeDB) -> dict:
         "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
         "skills": r.skills,
+        "match_score": match_score,
     }
 
 
@@ -2324,8 +2399,8 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
         return {"answer": "Please ask a question."}
 
     # Detect candidate-search intent and run DB search for multiple matches
-    skill_terms, min_exp = _extract_search_intent(question)
-    is_search_like = bool(skill_terms or min_exp > 0) or any(
+    skill_terms, min_exp, max_exp = _extract_search_intent(question)
+    is_search_like = bool(skill_terms or min_exp > 0 or max_exp is not None) or any(
         x in question.lower() for x in ["show", "find", "list", "candidates", "developers", "who has"]
     )
 
@@ -2336,15 +2411,15 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
     # questions are answered from stored resume rows only.
     seen_ids = set()
     merged: list = []
-    if is_search_like and (skill_terms or min_exp > 0):
-        db_resumes = _db_search_candidates(db, skill_terms, min_exp, limit=50)
+    if is_search_like and (skill_terms or min_exp > 0 or max_exp is not None):
+        db_resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
         for r in db_resumes:
             if r.id not in seen_ids:
                 seen_ids.add(r.id)
                 merged.append(r)
     resumes = _apply_skill_filter(question, merged) if merged else merged
     if not resumes and is_search_like and skill_terms:
-        resumes = _db_search_candidates(db, skill_terms, min_exp, limit=50)
+        resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
     if not resumes and is_search_like:
         resumes = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).limit(50).all()
 
@@ -2376,15 +2451,25 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
                 y = 0.0
             if min_exp and y >= float(min_exp):
                 score += 8.0
+            if max_exp is not None and y <= float(max_exp):
+                score += 8.0
             # Penalty for tool-dump strings (lots of commas / extremely long skills blobs)
             if len(skills_blob) > 900 or skills_blob.count(",") > 60:
                 score -= 4.0
             return score
 
-        resumes = sorted(resumes, key=_rank_score, reverse=True)
+        scored_resumes = [(r, _rank_score(r)) for r in resumes]
+        scored_resumes.sort(key=lambda item: item[1], reverse=True)
 
-    # Return table-ready rows for all matched candidates (up to 50)
-    best_matches = [_resume_row_for_chat(r) for r in resumes[:50]]
+        # Return table-ready rows for all matched candidates (up to 50)
+        top_scores = [score for _, score in scored_resumes[:50]]
+        max_score = max(top_scores) if top_scores else 0.0
+        best_matches = [
+            _resume_row_for_chat(r, match_score=round((score / max_score) * 100) if max_score > 0 else 0)
+            for r, score in scored_resumes[:50]
+        ]
+    else:
+        best_matches = [_resume_row_for_chat(r) for r in resumes[:50]]
 
     # For search-like questions, deterministic summary; otherwise run LLM in thread pool
     if is_search_like:
@@ -2394,11 +2479,11 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
             nm = (m.get("name") or "").strip() or (m.get("email") or "").strip() or f"Candidate {i}"
             exp = m.get("experience_years")
             try:
-                exp_s = f"{float(exp):g} yr" if exp is not None else "—"
+                exp_s = f"{float(exp):g} yr" if exp is not None else "N/A"
             except Exception:
-                exp_s = "—"
-            skills = (m.get("primary_skills") or "").strip() or "—"
-            lines.append(f"{i}. {nm} • Exp: {exp_s} • Skills: {skills}")
+                exp_s = "N/A"
+            skills = (m.get("primary_skills") or "").strip() or "N/A"
+            lines.append(f"{i}. {nm} | Exp: {exp_s} | Skills: {skills}")
         answer = "\n".join(lines)
     else:
         context = ""
@@ -2850,6 +2935,7 @@ async def secure_endpoints_middleware(request: Request, call_next):
             db.close()
             
     return await call_next(request)
+
 
 
 
