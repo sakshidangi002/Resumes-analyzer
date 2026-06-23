@@ -10,6 +10,7 @@ import EmployeeProfile from "./pages/EmployeeProfile";
 import ManageUsers from "./pages/ManageUsers";
 import DepartmentsDesignations from "./pages/DepartmentsDesignations";
 import Attendance from "./pages/Attendance";
+import FaceDetection from "./pages/FaceDetection";
 import Leave from "./pages/Leave";
 import LeaveApprovals from "./pages/LeaveApprovals";
 import LeaveAllocations from "./pages/LeaveAllocations";
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="departments-designations" element={<DepartmentsDesignations />} />
         <Route path="users" element={<ManageUsers />} />
         <Route path="attendance" element={<Attendance />} />
+        <Route path="face-detection" element={<FaceDetection />} />
         <Route path="leave" element={<Leave />} />
         <Route path="leave-approvals" element={<LeaveApprovals />} />
         <Route path="leave-allocations" element={<LeaveAllocations />} />

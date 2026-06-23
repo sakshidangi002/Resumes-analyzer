@@ -10,6 +10,7 @@ import {
   payroll as payrollApi,
   company as companyApi,
   attendance as attendanceApi,
+  recognition as recognitionApi,
 } from "../api/client";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
@@ -345,6 +346,42 @@ export default function EmployeeProfile() {
     ifsc_code: string;
     account_type: string;
   } | null>(null);
+
+  const [faceImages, setFaceImages] = useState<File[]>([]);
+  const [faceUploadLoading, setFaceUploadLoading] = useState(false);
+  const [faceUploadError, setFaceUploadError] = useState("");
+  const [faceUploadSuccess, setFaceUploadSuccess] = useState("");
+  
+  const handleFaceUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!faceImages.length) return;
+    if (!emp) return;
+    if (faceImages.length > 5) {
+      setFaceUploadError("You can upload a maximum of 5 images.");
+      return;
+    }
+    setFaceUploadLoading(true);
+    setFaceUploadError("");
+    setFaceUploadSuccess("");
+    try {
+      await recognitionApi.registerFace(emp.id, `${emp.first_name} ${emp.last_name}`, deptName, faceImages);
+      setFaceUploadSuccess("Face samples uploaded and registered successfully.");
+      setFaceImages([]);
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      let message = "Face upload failed.";
+      if (typeof detail === "string") {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail.map((d: { msg?: string }) => d.msg || String(d)).join("; ");
+      } else if (!err.response) {
+        message = "Could not reach the HRMS server. Make sure the main backend is running and you are logged in as Admin or HR.";
+      }
+      setFaceUploadError(message);
+    } finally {
+      setFaceUploadLoading(false);
+    }
+  };
 
   const [attMonth, setAttMonth] = useState(() => new Date().getMonth() + 1);
   const [attYear, setAttYear] = useState(() => new Date().getFullYear());
@@ -885,6 +922,36 @@ export default function EmployeeProfile() {
                       <DetailField label="Account number" value={bankForm.account_number || "-"} variant="job" />
                       <DetailField label="IFSC" value={bankForm.ifsc_code || "-"} variant="job" />
                       <DetailField label="Account type" value={bankForm.account_type || "-"} variant="job" />
+                    </div>
+                  </section>
+                )}
+
+                {canEdit && (
+                  <section className="emp-detail-section" aria-labelledby="emp-section-face-title">
+                    <div className="emp-detail-section__head">
+                      <div>
+                        <h4 className="emp-detail-section__title" id="emp-section-face-title">
+                          Face Recognition Data
+                        </h4>
+                        <p className="emp-detail-section__subtitle">Upload 1-5 face samples for attendance detection</p>
+                      </div>
+                    </div>
+                    <div style={{ padding: "1.5rem" }}>
+                      <form onSubmit={handleFaceUpload}>
+                        <div className="form-group">
+                          <input 
+                            type="file" 
+                            multiple 
+                            accept="image/*" 
+                            onChange={(e) => setFaceImages(Array.from(e.target.files || []))} 
+                          />
+                        </div>
+                        {faceUploadError && <p style={{ color: "#ef4444", marginTop: "0.5rem" }}>{faceUploadError}</p>}
+                        {faceUploadSuccess && <p style={{ color: "#22c55e", marginTop: "0.5rem" }}>{faceUploadSuccess}</p>}
+                        <button type="submit" className="btn btn-primary" disabled={faceUploadLoading || faceImages.length === 0} style={{ marginTop: "1rem" }}>
+                          {faceUploadLoading ? "Uploading..." : "Upload & Register Face"}
+                        </button>
+                      </form>
                     </div>
                   </section>
                 )}

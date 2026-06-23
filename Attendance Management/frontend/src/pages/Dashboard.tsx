@@ -406,6 +406,17 @@ export default function Dashboard() {
         <GlobalHeaderControls />
       </div>
 
+      {/* <section className="card" style={{ padding: "1rem 1.1rem", marginBottom: "1rem", background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(51,65,85,0.94))", color: "#fff", border: "none" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div className="eyebrow" style={{ background: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.16)", color: "#fff", marginBottom: "0.6rem" }}>Face Detection</div>
+            <div style={{ fontSize: "1.15rem", fontWeight: 800 }}>Open the dedicated face detection section</div>
+            <div style={{ color: "rgba(255,255,255,0.78)", marginTop: "0.25rem" }}>A separate workflow for employee enrollment, recognition, and attendance review.</div>
+          </div>
+          <NavLink to="/face-detection" className="btn btn-primary" style={{ textDecoration: "none" }}>Open Face Detection Section</NavLink>
+        </div>
+      </section> */}
+
       <div className="dash-grid">
         {/* Row 1 for Admin: 3 Separate Cards | Row 1 for Others: Clock + Overviews */}
         <div className="dash-card dash-card--clock">

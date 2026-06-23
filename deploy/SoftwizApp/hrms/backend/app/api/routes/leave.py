@@ -20,13 +20,14 @@ from app.services.leave_service import (
     apply_leave_request,
     approve_leave_request,
     ensure_default_allocations_for_employee,
+    count_hr_direct_paid_leave_days,
     _count_leave_days,
 )
 from app.services.notification_service import notify_user_for_employee, notify_users_with_roles
 from app.services.email_service import send_notification
 from app.core.config import get_settings
 from decimal import Decimal
-from datetime import date as _date
+from datetime import date as _date, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -365,39 +366,13 @@ def list_leave_allocations(
                 )
             )
         elif pl_type and a.leave_type_id == pl_type.id and fy:
-            # Count attendance records marked as PAID_LEAVE or HALF_DAY directly by HR
-            att_records = db.query(AttendanceRecord).filter(
-                AttendanceRecord.employee_id == a.employee_id,
-                AttendanceRecord.date >= fy.start_date,
-                AttendanceRecord.date <= fy.end_date,
-            ).order_by(AttendanceRecord.date.asc()).all()
-            
-            # To handle the "1 HD = 2 SL" conversion, we need to know the SL status per month
-            # But for simplicity in the yearly PL view, we count all PAID_LEAVE and HALF_DAY.
-            # We will SUBTRACT any HALF_DAY that was already covered by SL buffer in the SL block.
-            
-            unrequested_paid_leaves = Decimal("0")
-            for rec in att_records:
-                if rec.status == "PAID_LEAVE":
-                    unrequested_paid_leaves += Decimal("1.0")
-                elif rec.status == "HALF_DAY":
-                    # Check if this HD was covered by SL buffer (2 SLs available in that month)
-                    # For simplicity, we assume if HR marked it as HD and it's the first HD/SL of the month, 
-                    # it might have been covered. However, to be 100% accurate, we check the month's records.
-                    m_start = _date(rec.date.year, rec.date.month, 1)
-                    m_end = (_date(rec.date.year, rec.date.month + 1, 1) if rec.date.month < 12 else _date(rec.date.year + 1, 1, 1))
-                    
-                    month_atts = [r for r in att_records if m_start <= r.date < m_end and r.date < rec.date]
-                    month_sl_used = sum(1 for r in month_atts if r.status == "SHORT")
-                    month_hd_used = sum(1 for r in month_atts if r.status == "HALF_DAY")
-                    
-                    buffer_left = 2 - (month_sl_used + (month_hd_used * 2))
-                    if buffer_left >= 2:
-                        # Covered by SL, don't deduct from PL
-                        pass
-                    else:
-                        unrequested_paid_leaves += Decimal("0.5")
-            
+            hr_direct = count_hr_direct_paid_leave_days(
+                db,
+                a.employee_id,
+                fy.start_date,
+                fy.end_date,
+                pl_type.id,
+            )
             result.append(
                 LeaveAllocationResponse(
                     id=a.id,
@@ -405,7 +380,7 @@ def list_leave_allocations(
                     financial_year_id=a.financial_year_id,
                     leave_type_id=a.leave_type_id,
                     allocated_days=a.allocated_days,
-                    used_days=a.used_days + unrequested_paid_leaves,
+                    used_days=a.used_days + hr_direct,
                 )
             )
         else:

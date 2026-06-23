@@ -9,6 +9,7 @@ import ToastHost from "../components/ToastHost";
 const Icons = {
   Dashboard: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>,
   Attendance: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M6 20V10M18 20V4"></path></svg>,
+  FaceDetection: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 8c0-2.2 1.8-4 4-4h8c2.2 0 4 1.8 4 4v8c0 2.2-1.8 4-4 4H8c-2.2 0-4-1.8-4-4V8z"></path><path d="M9 10h0"></path><path d="M15 10h0"></path><path d="M9 15c1 .8 2 .8 3 .8s2-.3 3-.8"></path></svg>,
   Profile: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>,
   Employees: () => (
     <svg
@@ -82,6 +83,9 @@ export default function DashboardLayout() {
             <NavLink to="/attendance" onClick={closeSidebar}>
               <Icons.Attendance /> Attendance
             </NavLink>
+            <NavLink to="/face-detection" onClick={closeSidebar}>
+              <Icons.FaceDetection /> Face Detection
+            </NavLink>
             <NavLink to="/calendar" onClick={closeSidebar}>
               <Icons.Calendar /> Calendar
             </NavLink>
@@ -141,9 +145,9 @@ export default function DashboardLayout() {
               <NavLink to="/reports" onClick={closeSidebar}>
                 <Icons.Reports /> Full Reports
               </NavLink>
-              <a 
-                href={`/resume/?token=${token}`} 
-                target="_blank" 
+              <a
+                href={`/resume/?token=${token}`}
+                target="_blank"
                 rel="noopener noreferrer"
                 onClick={closeSidebar}
               >

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { activity, type AppNotificationRow } from "../api/client";
 import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
-import { formatDate } from "../utils/dateFormatter";
+import { formatDate, formatTimeIST } from "../utils/dateFormatter";
 
 function formatKind(kind: string) {
   if (kind === "ONBOARDING" || kind === "TASK_HUB") return "Task";
@@ -127,7 +127,7 @@ export default function Inbox() {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 900, color: n.read_at ? "rgba(255, 255, 255, 0.78)" : "rgba(255, 255, 255, 0.96)" }}>{formatTitle(n)}</div>
                   <div style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.65)", marginTop: 8 }}>
-                    {formatDate(n.created_at)} {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {formatDate(n.created_at)} {formatTimeIST(n.created_at)} IST
                     {n.kind && (
                       <span style={{ marginLeft: 8 }}>
                         · {formatKind(n.kind)}

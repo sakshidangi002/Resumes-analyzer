@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Attendance Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">FA</div>
+        <div>
+          <div class="brand-title">Face Attendance</div>
+          <div class="brand-subtitle">Recognition system</div>
+        </div>
+      </div>
+      <div class="nav-title">Menu</div>
+      <nav class="side-nav">
+        <a class="side-link active" href="/dashboard"><span class="side-icon">D</span>Dashboard</a>
+        <a class="side-link" href="/employees"><span class="side-icon">R</span>Registered Employees</a>
+        <a class="side-link" href="/webcam"><span class="side-icon">W</span>Live Webcam</a>
+
+        <a class="side-link" href="/face-detection"><span class="side-icon">F</span>Face Detection</a>
+        <a class="side-link" href="/cameras"><span class="side-icon">C</span>CCTV Cameras</a>
+        <a class="side-link" href="/attendance"><span class="side-icon">A</span>Attendance</a>
+      </nav>
+      <div class="nav-title">Status</div>
+      <div class="panel-soft p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="small-note">Backend</div>
+          <span id="apiStatus" class="chip">Checking</span>
+        </div>
+        <div class="mt-3">
+          <div class="small-note">Current mode</div>
+          <div class="fw-bold">Overview</div>
+        </div>
+      </div>
+      <div class="sidebar-footer">Use the pages on the left to manage employees, webcam recognition, and attendance.
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="topbar">
+        <div class="topbar-left">
+          <div>
+            <h1 class="topbar-title">Welcome back, Admin! 👋</h1>
+            <p class="topbar-subtitle">Overview of the attendance system.</p>
+          </div>
+        </div>
+        <div class="user-chip">
+          <div class="avatar">A</div>
+          <div class="lh-sm">
+            <div class="fw-bold">Admin</div>
+            <div class="small-note">Supervisor</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="row g-3 mb-4" id="dashboardSummary">
+        <div class="col-md-4">
+          <div class="panel p-4 h-100">
+            <div class="stat-label">Employees</div>
+            <div class="stat-value" id="employeeCount">0</div>
+            <div class="stat-foot">Registered in the system</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="panel p-4 h-100">
+            <div class="stat-label">Today Attendance</div>
+            <div class="stat-value" id="todayAttendanceCount">0</div>
+            <div class="stat-foot">Check-ins marked today</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="panel p-4 h-100">
+            <div class="stat-label">All Attendance</div>
+            <div class="stat-value" id="dashboardAttendanceCount">0</div>
+            <div class="stat-foot">Saved attendance records</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="row g-4">
+        <div class="col-lg-6">
+          <div class="panel p-4 h-100">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Quick Actions</h2>
+                <div class="small-note">Open the dedicated page for each task.</div>
+              </div>
+            </div>
+            <div class="d-grid gap-2">
+              <a class="btn btn-accent btn-md" href="/employees">Manage Registered Employees</a>
+              <a class="btn btn-soft btn-md" href="/webcam">Open Live Webcam</a>
+              <a class="btn btn-soft btn-md" href="/face-detection">Open Face Detection</a>
+              <a class="btn btn-soft btn-md" href="/cameras">Manage CCTV Cameras</a>
+              <a class="btn btn-soft btn-md" href="/attendance">View Attendance Records</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-6">
+          <div class="panel p-4 h-100">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Summary</h2>
+                <div class="small-note">Current system status.</div>
+              </div>
+            </div>
+            <div class="mini-list">
+              <div class="mini-item">
+                <div class="mini-left">
+                  <div class="mini-ico">1</div>
+                  <div>
+                    <div class="fw-semibold">Register employees</div>
+                    <div class="small-note">Upload 3 to 5 face images</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mini-item">
+                <div class="mini-left">
+                  <div class="mini-ico">2</div>
+                  <div>
+                    <div class="fw-semibold">Open face detection</div>
+                    <div class="small-note">Run webcam or CCTV recognition</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mini-item">
+                <div class="mini-left">
+                  <div class="mini-ico">3</div>
+                  <div>
+                    <div class="fw-semibold">Mark attendance</div>
+                    <div class="small-note">Duplicate-safe per day</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=1.3.0"></script>
+</body>
+
+</html>

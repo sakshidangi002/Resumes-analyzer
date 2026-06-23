@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registered Employees</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">FA</div>
+        <div>
+          <div class="brand-title">Face Attendance</div>
+          <div class="brand-subtitle">Recognition system</div>
+        </div>
+      </div>
+      <div class="nav-title">Menu</div>
+      <nav class="side-nav">
+        <a class="side-link" href="/dashboard"><span class="side-icon">D</span>Dashboard</a>
+        <a class="side-link active" href="/employees"><span class="side-icon">R</span>Registered Employees</a>
+        <a class="side-link" href="/webcam"><span class="side-icon">W</span>Live Webcam</a>
+
+        <a class="side-link" href="/face-detection"><span class="side-icon">F</span>Face Detection</a>
+        <a class="side-link" href="/cameras"><span class="side-icon">C</span>CCTV Cameras</a>
+        <a class="side-link" href="/attendance"><span class="side-icon">A</span>Attendance</a>
+      </nav>
+      <div class="nav-title">Status</div>
+      <div class="panel-soft p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="small-note">Backend</div>
+          <span id="apiStatus" class="chip">Checking</span>
+        </div>
+        <div class="mt-3">
+          <div class="small-note">Page</div>
+          <div class="fw-bold">Employees</div>
+        </div>
+      </div>
+      <div class="sidebar-footer">Register new people or delete bad records from this page.</div>
+    </aside>
+
+    <main class="content">
+      <div class="topbar">
+        <div class="topbar-left">
+          <div>
+            <h1 class="topbar-title">Registered Employees</h1>
+            <p class="topbar-subtitle">Add or remove employee records.</p>
+          </div>
+        </div>
+        <div class="user-chip">
+          <div class="avatar">A</div>
+          <div class="lh-sm">
+            <div class="fw-bold">Admin</div>
+            <div class="small-note">Supervisor</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="row g-4">
+        <div class="col-xl-4">
+          <div class="panel p-4 h-100">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Register Employee</h2>
+                <div class="small-note">Upload 3 to 5 images: front, side, and partial-face photos improve CCTV
+                  matching.</div>
+              </div>
+            </div>
+            <form id="registerForm" class="vstack gap-3">
+              <div>
+                <label class="form-label fw-semibold">Employee name</label>
+                <input class="form-control form-control-md" id="employeeName" type="text"
+                  placeholder="Enter employee name" required>
+              </div>
+              <div>
+                <label class="form-label fw-semibold">Department</label>
+                <input class="form-control form-control-md" id="employeeDepartment" type="text"
+                  placeholder="Enter department" required>
+              </div>
+              <div>
+                <label class="form-label fw-semibold">Face images</label>
+                <input class="form-control" id="faceImages" type="file" accept="image/*" multiple required>
+                <div class="form-text">Include varied angles — side profile and partial faces help CCTV recognition.
+                </div>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-accent px-4" type="submit">Register employee</button>
+                <button class="btn btn-soft px-4" type="button" id="resetRegister">Reset</button>
+              </div>
+            </form>
+            <div class="mt-3 panel-soft p-3 status-box" id="registerStatus">Ready.</div>
+
+            <div class="panel-soft p-3 mt-3">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                <div>
+                  <div class="fw-semibold">Camera samples</div>
+                  <div class="small-note">Capture face images directly from the webcam and attach them to the employee record.</div>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                  <button class="btn btn-sm btn-accent" id="startEmployeeCamera" type="button">Start camera</button>
+                  <button class="btn btn-sm btn-soft" id="captureEmployeeSample" type="button">Capture image</button>
+                  <button class="btn btn-sm btn-soft" id="stopEmployeeCamera" type="button">Stop camera</button>
+                </div>
+              </div>
+              <div class="video-wrap" style="aspect-ratio: 16 / 10; min-height: 220px;">
+                <video id="employeeCamera" autoplay playsinline muted></video>
+              </div>
+              <div class="small-note mt-2" id="employeeCameraStatus">Use the camera to capture 3 to 5 images before registration.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-xl-8">
+          <div class="panel p-4 h-100">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Employee List</h2>
+                <div class="small-note">Edit names, view samples, or add more face photos.</div>
+              </div>
+              <button class="btn btn-sm btn-soft" id="refreshEmployees">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table table-clean table-striped align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Photo</th>
+                    <th>Name</th>
+                    <th>Department</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="employeesBody">
+                  <tr>
+                    <td colspan="4" class="muted">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <input type="file" id="addSamplesInput" class="d-none" accept="image/*" multiple>
+      <div id="samplesModal" class="modal-backdrop d-none">
+        <div class="panel p-4" style="max-width: 720px; margin: 4rem auto;">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="section-title mb-0" id="samplesModalTitle">Samples</h2>
+            <button class="btn btn-soft btn-sm" id="closeSamplesModal" type="button">Close</button>
+          </div>
+          <div id="samplesModalBody"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=1.3.0"></script>
+</body>
+
+</html>

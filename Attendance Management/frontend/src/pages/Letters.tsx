@@ -801,7 +801,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                   <tr>
                     <th className="hide-xl" style={{ width: '25%', textAlign: 'center' }}>Generated</th>
                     <th style={{ width: '35%', textAlign: 'center' }}>Subject</th>
-                    <th className="hide-lg" style={{ width: '15%', textAlign: 'center' }}>Email sent</th>
+                    <th className="hide-lg" style={{ width: '15%', textAlign: 'center' }}>Email received</th>
                     <th style={{ width: '25%', textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
@@ -812,7 +812,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                         {formatDate(i.generated_at)} {new Date(i.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </td>
                       <td style={{ textAlign: 'center', fontWeight: 500 }}>{i.subject || "-"}</td>
-                      <td className="hide-lg" style={{ textAlign: 'center' }}>{i.sent_via_email ? "✅" : "No"}</td>
+                      <td className="hide-lg" style={{ textAlign: 'center' }}>{i.sent_via_email ? "✅" : "Not yet"}</td>
                       <td style={{ textAlign: 'center' }}>
                         <div style={{ display: 'inline-flex', gap: '8px', justifyContent: 'center' }}>
                           <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => handleView(i.id)} title="View Document">

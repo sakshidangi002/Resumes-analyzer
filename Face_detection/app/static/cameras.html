@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CCTV Cameras</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">FA</div>
+        <div>
+          <div class="brand-title">Face Attendance</div>
+          <div class="brand-subtitle">Recognition system</div>
+        </div>
+      </div>
+      <div class="nav-title">Menu</div>
+      <nav class="side-nav">
+        <a class="side-link" href="/dashboard"><span class="side-icon">D</span>Dashboard</a>
+        <a class="side-link" href="/employees"><span class="side-icon">R</span>Registered Employees</a>
+        <a class="side-link" href="/webcam"><span class="side-icon">W</span>Live Webcam</a>
+
+        <a class="side-link" href="/face-detection"><span class="side-icon">F</span>Face Detection</a>
+        <a class="side-link active" href="/cameras"><span class="side-icon">C</span>CCTV Cameras</a>
+        <a class="side-link" href="/attendance"><span class="side-icon">A</span>Attendance</a>
+      </nav>
+      <div class="nav-title">Status</div>
+      <div class="panel-soft p-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="small-note">Backend</div>
+          <span id="apiStatus" class="chip">Checking</span>
+        </div>
+        <div class="mt-3">
+          <div class="small-note">Page</div>
+          <div class="fw-bold">CCTV</div>
+        </div>
+      </div>
+      <div class="sidebar-footer">Add RTSP CCTV streams. RetinaFace detects partial and side faces automatically.</div>
+    </aside>
+
+    <main class="content">
+      <div class="topbar">
+        <div class="topbar-left">
+          <div>
+            <h1 class="topbar-title">CCTV Cameras</h1>
+            <p class="topbar-subtitle">Connect IP cameras over RTSP and mark attendance from CCTV feeds.</p>
+          </div>
+        </div>
+        <div class="user-chip">
+          <div class="avatar">A</div>
+          <div class="lh-sm">
+            <div class="fw-bold">Admin</div>
+            <div class="small-note">Supervisor</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="row g-4">
+        <div class="col-xl-4">
+          <div class="panel p-4 h-100">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Add Camera</h2>
+                <div class="small-note">Use RTSP URL from your IP camera or NVR.</div>
+              </div>
+            </div>
+            <form id="cameraForm" class="vstack gap-3">
+              <div>
+                <label class="form-label fw-semibold">Camera name</label>
+                <input class="form-control" id="cameraName" type="text" placeholder="Main gate" required>
+              </div>
+              <div>
+                <label class="form-label fw-semibold">Source type</label>
+                <select class="form-select" id="cameraType">
+                  <option value="rtsp" selected>RTSP (CCTV / IP camera)</option>
+                  <option value="usb">USB index (server-side webcam)</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label fw-semibold">Source URL / index</label>
+                <input class="form-control" id="cameraSource" type="text"
+                  placeholder="rtsp://user:pass@192.168.1.100:554/stream1" required>
+                <div class="form-text">For USB on the server machine, enter 0 or 1.</div>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label fw-semibold">Threshold</label>
+                  <input class="form-control" id="cameraThreshold" type="number" min="0.30" max="0.90" step="0.01"
+                    value="0.45">
+                </div>
+                <div class="col-6">
+                  <label class="form-label fw-semibold">Interval (sec)</label>
+                  <input class="form-control" id="cameraInterval" type="number" min="0.5" max="10" step="0.1"
+                    value="1.5">
+                </div>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-accent" type="submit">Add and start camera</button>
+                <button class="btn btn-soft" type="button" id="testCameraBtn">Test connection</button>
+              </div>
+            </form>
+            <div class="mt-3 panel-soft p-3 status-box" id="cameraFormStatus">Ready.</div>
+          </div>
+        </div>
+
+        <div class="col-xl-8">
+          <div class="panel p-4">
+            <div class="section-head flex-wrap">
+              <div>
+                <h2 class="section-title">Connected Cameras</h2>
+                <div class="small-note">Live recognition runs on the server for each enabled stream.</div>
+              </div>
+              <button class="btn btn-soft" id="refreshCameras">Refresh</button>
+            </div>
+            <div id="cameraCards" class="vstack gap-3">
+              <div class="muted">No CCTV cameras configured yet.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=1.3.0"></script>
+</body>
+
+</html>

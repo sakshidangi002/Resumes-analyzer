@@ -1,4 +1,4 @@
-# Web
+﻿# Web
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 aiofiles>=23.0.0
@@ -39,3 +39,10 @@ tzdata>=2024.1
 # Web Push notifications (5 PM IST DSR reminder OS-level popup)
 pywebpush>=2.0.0
 
+
+# Face recognition
+numpy>=1.24.0
+pillow>=10.0.0
+opencv-python>=4.8.0
+insightface>=0.7.3
+onnxruntime>=1.16.0

@@ -21,6 +21,12 @@ if not exist "frontend\dist\index.html" (
     echo.
 )
 
+:: --- Start Face Detection service (required for employee photo upload) ---
+echo [*] Starting Face Detection service on port 8000...
+start "Face Detection" "%~dp0..\Face_detection\start.bat"
+
+echo.
+
 :: --- Start Backend (serves both API + Frontend) ---
 echo [*] Starting server on port 5001...
 echo.

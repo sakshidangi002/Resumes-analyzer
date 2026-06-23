@@ -9,6 +9,7 @@ from app.schemas.attendance import (
     AttendanceCorrectionRequestCreate,
     AttendanceCorrectionRequestResponse,
     AdminSetAttendance,
+    AutoMarkAttendance,
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.attendance_service import (
@@ -53,6 +54,78 @@ def attendance_sign_out(
     if d == date.today() and sign_out_time > datetime.now().time():
         raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
     rec = sign_out(db, employee_id, d, sign_out_time)
+    return rec
+
+
+@router.post("/auto-mark", response_model=AttendanceRecordResponse)
+def auto_mark_attendance(
+    data: AutoMarkAttendance,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["HR", "Admin"])),
+):
+    """Create or update attendance from camera / face-recognition events."""
+    if data.date > date.today():
+        raise HTTPException(status_code=400, detail="Cannot record attendance for future dates")
+
+    now_time = datetime.now().time()
+    sign_in_time = data.sign_in_time
+    sign_out_time = data.sign_out_time
+
+    if data.date == date.today():
+        if sign_in_time and sign_in_time > now_time:
+            raise HTTPException(status_code=400, detail="Cannot record future Sign-In time for today")
+        if sign_out_time and sign_out_time > now_time:
+            raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
+
+    rec = get_or_create_attendance(db, data.employee_id, data.date)
+
+    if sign_in_time is None and sign_out_time is None:
+        if rec.sign_in_time is not None and rec.sign_out_time is None:
+            sign_out_time = now_time
+        else:
+            sign_in_time = now_time
+
+    if sign_in_time is not None:
+        rec.sign_in_time = sign_in_time
+        rec.is_late = False
+    if sign_out_time is not None:
+        rec.sign_out_time = sign_out_time
+
+    if sign_in_time is not None and sign_out_time is None:
+        rec.total_work_hours = None
+        rec.status = "PRESENT"
+        config = None
+        try:
+            from app.services.attendance_service import get_company_config
+            config = get_company_config(db)
+        except Exception:
+            config = None
+        grace_min = config.grace_time_minutes if config else 15
+        standard_start = time(9, 0)
+        t = datetime.combine(data.date, sign_in_time)
+        s = datetime.combine(data.date, standard_start)
+        rec.is_late = (t - s).total_seconds() > grace_min * 60
+    else:
+        rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
+        apply_status_from_hours(db, rec)
+
+    if rec.sign_in_time is None and rec.sign_out_time is None:
+        if rec.is_weekly_off:
+            rec.status = "WEEKLY_OFF"
+        elif rec.is_holiday:
+            rec.status = "HOLIDAY"
+        else:
+            rec.status = "ABSENT"
+
+    standard_end = time(18, 0)
+    if rec.sign_out_time is not None:
+        t = datetime.combine(data.date, rec.sign_out_time)
+        s = datetime.combine(data.date, standard_end)
+        rec.is_early_exit = t < s
+
+    rec.source = "AUTO"
+    db.commit()
+    db.refresh(rec)
     return rec
 
 

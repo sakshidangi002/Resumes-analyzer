@@ -16,3 +16,23 @@ export function formatDate(date: string | Date | null | undefined): string {
 
   return `${day}-${month}-${year}`;
 }
+
+/** Format a UTC ISO timestamp as IST (independent of browser timezone). */
+export function formatTimeIST(date: string | Date | null | undefined): string {
+  if (!date) return "";
+  let d: Date;
+  if (typeof date === "string") {
+    const raw = date.trim();
+    const iso =
+      raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
+    d = new Date(iso);
+  } else {
+    d = new Date(date);
+  }
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

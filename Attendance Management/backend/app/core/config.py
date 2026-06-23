@@ -1,4 +1,4 @@
-"""
+﻿"""
 Application configuration. Database is PostgreSQL; email uses simple SMTP.
 """
 from pydantic_settings import BaseSettings
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         )
 
     # JWT
-    # SECURITY: no default — must come from environment / .env so that a
+    # SECURITY: no default â€” must come from environment / .env so that a
     # missing config fails fast at startup instead of silently signing tokens
     # with a guessable placeholder. Recommended: `openssl rand -hex 32`.
     secret_key: str
@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_claim_email: str = "mailto:noreply@company.com"
 
+    # Face recognition (webcam / upload)
+    default_threshold: float = 0.45
+    min_match_margin: float = 0.05
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -70,3 +74,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

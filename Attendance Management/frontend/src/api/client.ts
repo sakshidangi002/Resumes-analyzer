@@ -102,11 +102,38 @@ export const attendance = {
     api.post("/attendance/sign-out", null, { params: { d: date, sign_out_time, employee_id } }),
   adminSet: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
     api.put("/attendance/admin-set", data),
+  autoMark: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
+    api.post("/attendance/auto-mark", data),
   correctionRequests: (params?: { employee_id?: number; status?: string }) =>
     api.get("/attendance/correction-requests", { params }),
   createCorrection: (data: object) => api.post("/attendance/correction-requests", data),
   approveCorrection: (id: number, approved: boolean, rejection_reason?: string) =>
     api.patch("/attendance/correction-requests/" + id, null, { params: { approved, rejection_reason } }),
+};
+
+export const recognition = {
+  recognizeFrame: (file: Blob, threshold?: number) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    // Call the main HRMS backend (port 5001/5002) directly
+    return api.post("/recognize-frame", formData, {
+      params: threshold != null ? { threshold } : undefined,
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  registerFace: (employee_id: number, name: string, department: string, images: FileList | File[]) => {
+    const formData = new FormData();
+    formData.append("employee_id", String(employee_id));
+    formData.append("name", name);
+    formData.append("department", department || "");
+    for (let i = 0; i < images.length; i++) {
+      formData.append("images", images[i]);
+    }
+    // Use the headless face registration endpoint via /api/employees/register.
+    return api.post("/employees/register", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
 };
 
 export const leave = {

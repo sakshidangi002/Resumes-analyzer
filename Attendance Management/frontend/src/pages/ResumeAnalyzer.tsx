@@ -22,6 +22,9 @@ const Icons = {
   Delete: () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
   ),
+  Edit: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path></svg>
+  ),
   Star: ({ filled }: { filled?: boolean }) => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={filled ? "var(--brand-400)" : "none"} stroke={filled ? "var(--brand-400)" : "currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
   ),
@@ -69,6 +72,7 @@ interface Resume {
   location: string;
   skills: string[];
   primary_skills: string[];
+  key_skills?: string[];
   other_skills: string[];
   experience_years: number;
   total_experience_years: number;
@@ -82,6 +86,35 @@ interface Resume {
   companies_worked_at: string[];
   role: string;
   created_at: string;
+}
+
+interface ResumeEditForm {
+  name: string;
+  email: string;
+  phone: string;
+  location: string;
+  role: string;
+  experience_years: string;
+  total_experience_years: string;
+  experience_level: string;
+  experience_summary: string;
+  experience_notes: string;
+  summary: string;
+  skills: string;
+  key_skills: string;
+  primary_skills: string;
+  other_skills: string;
+  education: string;
+  projects: string;
+  companies_worked_at: string;
+  important_keywords: string;
+  current_salary: string;
+  expected_salary: string;
+  notice_period: string;
+  availability_ftf: string;
+  current_company: string;
+  ready_to_relocate: string;
+  reason_job_change: string;
 }
 
 interface Note {
@@ -129,6 +162,43 @@ export default function ResumeAnalyzer() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [editResume, setEditResume] = useState<Resume | null>(null);
+  const [editForm, setEditForm] = useState<ResumeEditForm | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editMessage, setEditMessage] = useState("");
+
+  const parseList = useCallback((value?: string[] | string | null) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    return String(value)
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }, []);
+
+  const resolveSkills = useCallback(
+    (resume: Resume & { key_skills?: string[] }) => {
+      const merged = [
+        ...parseList(resume.primary_skills),
+        ...parseList(resume.skills),
+        ...parseList(resume.key_skills),
+        ...parseList(resume.other_skills)
+      ];
+      return Array.from(new Set(merged));
+    },
+    [parseList]
+  );
+
+  const formatAddedDate = useCallback((value?: string | null) => {
+    if (!value) return "N/A";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "N/A";
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }).format(parsed);
+  }, []);
 
   // Load resumes
   const loadResumes = useCallback(async () => {
@@ -276,6 +346,89 @@ export default function ResumeAnalyzer() {
       console.error("Failed to load notes", err);
     } finally {
       setNotesLoading(false);
+    }
+  };
+
+  const openEditResume = (resume: Resume) => {
+    setEditResume(resume);
+    setEditMessage("");
+    setEditForm({
+      name: resume.name || "",
+      email: resume.email || "",
+      phone: resume.phone || "",
+      location: resume.location || "",
+      role: resume.role || "",
+      experience_years: resume.experience_years?.toString() || "",
+      total_experience_years: resume.total_experience_years?.toString() || "",
+      experience_level: resume.experience_level || "",
+      experience_summary: resume.experience_summary || "",
+      experience_notes: "",
+      summary: resume.summary || "",
+      skills: resolveSkills(resume).join(", "),
+      key_skills: (resume.key_skills || []).join(", "),
+      primary_skills: (resume.primary_skills || []).join(", "),
+      other_skills: (resume.other_skills || []).join(", "),
+      education: (resume.education || []).join(", "),
+      projects: (resume.projects || []).join(", "),
+      companies_worked_at: (resume.companies_worked_at || []).join(", "),
+      important_keywords: "",
+      current_salary: "",
+      expected_salary: "",
+      notice_period: "",
+      availability_ftf: "",
+      current_company: "",
+      ready_to_relocate: "",
+      reason_job_change: "",
+    });
+  };
+
+  const saveEditResume = async () => {
+    if (!editResume || !editForm) return;
+    setEditSaving(true);
+    setEditMessage("");
+    try {
+      const payload = {
+        name: editForm.name || "",
+        email: editForm.email || "",
+        phone: editForm.phone || "",
+        location: editForm.location || "",
+        role: editForm.role || "",
+        experience_years: editForm.experience_years ? Number(editForm.experience_years) : null,
+        total_experience_years: editForm.total_experience_years ? Number(editForm.total_experience_years) : null,
+        experience_level: editForm.experience_level || "",
+        experience_summary: editForm.experience_summary || "",
+        experience_notes: editForm.experience_notes || "",
+        summary: editForm.summary || "",
+        skills: parseList(editForm.skills),
+        key_skills: parseList(editForm.key_skills),
+        primary_skills: parseList(editForm.primary_skills),
+        other_skills: parseList(editForm.other_skills),
+        education: parseList(editForm.education),
+        projects: parseList(editForm.projects),
+        companies_worked_at: parseList(editForm.companies_worked_at),
+        important_keywords: parseList(editForm.important_keywords),
+        current_salary: editForm.current_salary || "",
+        expected_salary: editForm.expected_salary || "",
+        notice_period: editForm.notice_period || "",
+        availability_ftf: editForm.availability_ftf || "",
+        current_company: editForm.current_company || "",
+        ready_to_relocate: editForm.ready_to_relocate || "",
+        reason_job_change: editForm.reason_job_change || "",
+      };
+
+      const response = await resClient.put(`/resumes/${editResume.id}/details`, payload);
+      const updated = response.data as Resume;
+      setResumes((prev) => prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)));
+      setFilteredResumes((prev) => prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)));
+      setSelectedResume((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+      setEditMessage("Saved successfully.");
+      setEditResume(null);
+      setEditForm(null);
+    } catch (err) {
+      console.error("Failed to save candidate details", err);
+      setEditMessage("Failed to save candidate details.");
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -599,7 +752,7 @@ export default function ResumeAnalyzer() {
                         </td>
                         <td style={{ padding: "0.75rem 1rem", verticalAlign: "middle" }}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", maxWidth: "300px" }}>
-                            {r.primary_skills.slice(0, 4).map((sk, idx) => (
+                            {resolveSkills(r).slice(0, 4).map((sk, idx) => (
                               <span
                                 key={idx}
                                 style={{
@@ -613,15 +766,15 @@ export default function ResumeAnalyzer() {
                                 {sk}
                               </span>
                             ))}
-                            {r.primary_skills.length > 4 && (
+                            {resolveSkills(r).length > 4 && (
                               <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", alignSelf: "center" }}>
-                                +{r.primary_skills.length - 4}
+                                +{resolveSkills(r).length - 4}
                               </span>
                             )}
                           </div>
                         </td>
                         <td style={{ padding: "0.75rem 1rem", textAlign: "center", verticalAlign: "middle", fontSize: "0.8rem", color: "rgba(255,255,255,0.7)" }}>
-                          {r.created_at ? new Date(r.created_at).toLocaleDateString() : 'N/A'}
+                          {formatAddedDate(r.created_at)}
                         </td>
                         <td style={{ padding: "0.75rem 1rem", textAlign: "right", verticalAlign: "middle" }}>
                           <div style={{ display: "inline-flex", gap: "0.4rem" }}>
@@ -634,6 +787,18 @@ export default function ResumeAnalyzer() {
                             >
                               <Icons.Chat />
                             </button> */}
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-icon btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditResume(r);
+                              }}
+                              title="Edit Candidate profile"
+                              style={{ background: "rgba(255,255,255,0.05)", border: "none", padding: "4px" }}
+                            >
+                              <Icons.Edit />
+                            </button>
                             <button
                               type="button"
                               className="btn btn-secondary btn-icon btn-sm"
@@ -791,7 +956,7 @@ export default function ResumeAnalyzer() {
             <div>
               <div style={{ fontSize: "0.8rem", fontWeight: 800, color: "rgba(255,255,255,0.6)", marginBottom: "0.3rem" }}>Primary Core Skills</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
-                {selectedResume.primary_skills.map((s, idx) => (
+                {resolveSkills(selectedResume).map((s, idx) => (
                   <span key={idx} style={{ fontSize: "0.75rem", padding: "2px 6px", borderRadius: "4px", background: "rgba(21, 50, 115, 0.6)", color: "var(--brand-300)" }}>{s}</span>
                 ))}
               </div>
@@ -821,25 +986,31 @@ export default function ResumeAnalyzer() {
             )}
 
             {/* Actions Panel */}
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "1rem", display: "flex", gap: "0.5rem" }}>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <a
                 href={`${resumeApiUrl}/files/${selectedResume.id}`} // Serve file directly
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-secondary"
-                style={{ flex: 1, textAlign: "center", fontSize: "0.8rem", background: "rgba(255,255,255,0.1)", border: "none" }}
+                style={{ flex: 1, minWidth: "140px", textAlign: "center", fontSize: "0.8rem", background: "rgba(255,255,255,0.1)", border: "none" }}
               >
                 <Icons.FileText /> View PDF Resume
               </a>
               <button
+                onClick={() => openEditResume(selectedResume)}
+                className="btn btn-secondary"
+                style={{ flex: 1, minWidth: "140px", fontSize: "0.8rem", background: "rgba(255,255,255,0.1)", border: "none" }}
+              >
+                <Icons.Sparkles /> Edit Details
+              </button>
+              <button
                 onClick={(e) => handleOpenChat(selectedResume, e)}
                 className="btn btn-secondary"
-                style={{ flex: 1, fontSize: "0.8rem", backgroundColor: "var(--brand-500)", border: "none" }}
+                style={{ flex: 1, minWidth: "140px", fontSize: "0.8rem", backgroundColor: "var(--brand-500)", border: "none" }}
               >
                 <Icons.Chat /> Start AI Chat
               </button>
             </div>
-
             {/* Notes History */}
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "1rem" }}>
               <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "rgba(255,255,255,0.6)", marginBottom: "0.5rem" }}>HR Interview / Candidate Notes</div>
@@ -868,7 +1039,7 @@ export default function ResumeAnalyzer() {
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.8)" }}>{n.note}</div>
                         <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", marginTop: "2px" }}>
-                          {new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {formatAddedDate(n.created_at)} {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </div>
                       <button
@@ -1039,6 +1210,112 @@ export default function ResumeAnalyzer() {
         </div>
       )}
 
+      {/* Review / Edit Details modal */}
+      {editResume && editForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.68)", zIndex: 130, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div className="card" style={{ width: "min(980px, 100%)", maxHeight: "90vh", overflow: "auto", padding: 0, border: "1px solid rgba(255,255,255,0.15)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: "1.05rem" }}>Review extracted details</div>
+                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.55)" }}>Correct the parsed fields before saving them back to the profile.</div>
+              </div>
+              <button onClick={() => { setEditResume(null); setEditForm(null); setEditMessage(""); }} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.6)" }}>
+                <Icons.Close />
+              </button>
+            </div>
+
+            <div style={{ padding: "1rem 1.25rem", display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Name</span>
+                <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Email</span>
+                <input value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Phone</span>
+                <input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Location</span>
+                <input value={editForm.location} onChange={(e) => setEditForm({ ...editForm, location: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Role</span>
+                <input value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Experience years</span>
+                <input value={editForm.experience_years} onChange={(e) => setEditForm({ ...editForm, experience_years: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Total experience years</span>
+                <input value={editForm.total_experience_years} onChange={(e) => setEditForm({ ...editForm, total_experience_years: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Summary</span>
+                <textarea rows={3} value={editForm.summary} onChange={(e) => setEditForm({ ...editForm, summary: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Skills</span>
+                <textarea rows={3} value={editForm.skills} onChange={(e) => setEditForm({ ...editForm, skills: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Primary skills</span>
+                <textarea rows={2} value={editForm.primary_skills} onChange={(e) => setEditForm({ ...editForm, primary_skills: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Other skills</span>
+                <textarea rows={2} value={editForm.other_skills} onChange={(e) => setEditForm({ ...editForm, other_skills: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Education</span>
+                <textarea rows={2} value={editForm.education} onChange={(e) => setEditForm({ ...editForm, education: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Projects</span>
+                <textarea rows={2} value={editForm.projects} onChange={(e) => setEditForm({ ...editForm, projects: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Companies worked at</span>
+                <textarea rows={2} value={editForm.companies_worked_at} onChange={(e) => setEditForm({ ...editForm, companies_worked_at: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Experience summary</span>
+                <textarea rows={2} value={editForm.experience_summary} onChange={(e) => setEditForm({ ...editForm, experience_summary: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Current salary / expected salary / notice period</span>
+                <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                  <input value={editForm.current_salary} onChange={(e) => setEditForm({ ...editForm, current_salary: e.target.value })} placeholder="Current salary" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                  <input value={editForm.expected_salary} onChange={(e) => setEditForm({ ...editForm, expected_salary: e.target.value })} placeholder="Expected salary" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                  <input value={editForm.notice_period} onChange={(e) => setEditForm({ ...editForm, notice_period: e.target.value })} placeholder="Notice period" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                </div>
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Availability / relocation / job change</span>
+                <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                  <input value={editForm.availability_ftf} onChange={(e) => setEditForm({ ...editForm, availability_ftf: e.target.value })} placeholder="Availability FTF" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                  <input value={editForm.current_company} onChange={(e) => setEditForm({ ...editForm, current_company: e.target.value })} placeholder="Current company" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                  <input value={editForm.ready_to_relocate} onChange={(e) => setEditForm({ ...editForm, ready_to_relocate: e.target.value })} placeholder="Ready to relocate" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+                </div>
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", gridColumn: "1 / -1" }}>
+                <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.65)" }}>Reason for job change</span>
+                <textarea rows={2} value={editForm.reason_job_change} onChange={(e) => setEditForm({ ...editForm, reason_job_change: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "0.7rem" }} />
+              </label>
+            </div>
+
+            <div style={{ padding: "0 1.25rem 1rem", color: "var(--brand-300)", fontSize: "0.85rem" }}>{editMessage}</div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", padding: "0 1.25rem 1.25rem" }}>
+              <button className="btn btn-secondary" type="button" onClick={() => { setEditResume(null); setEditForm(null); setEditMessage(""); }} style={{ background: "rgba(255,255,255,0.08)", border: "none" }}>Cancel</button>
+              <button className="btn btn-secondary" type="button" onClick={saveEditResume} disabled={editSaving} style={{ background: "var(--brand-500)", border: "none" }}>{editSaving ? "Saving..." : "Save changes"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Confirm Delete Candidate modal */}
       <ConfirmModal
         isOpen={!!confirmDelete}

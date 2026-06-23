@@ -4298,8 +4298,19 @@ def extract_resume(resume_text: str) -> dict:
     if not primary_skills and skills:
         primary_skills = [s for s in skills if _is_core_tech_label(str(s))][:3]
 
+    name_low_confidence = any(
+        w in set(extraction_warnings)
+        for w in (
+            "name_low_confidence",
+            "name_from_email",
+            "name_from_email_fallback",
+            "name_rejected_label",
+        )
+    )
+    final_name = "" if name_low_confidence else (name if name and name != "Unknown" else "")
+
     return {
-        "name": name if name and name != "Unknown" else "Unknown Candidate",
+        "name": final_name,
         "email": email,
         "phone": phone,
         "location": location,

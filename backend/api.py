@@ -247,8 +247,23 @@ class NoteCreate(BaseModel):
 
 class CandidateDetailsUpdate(BaseModel):
     name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
     role: Optional[str] = None
     experience_years: Optional[float] = None
+    total_experience_years: Optional[float] = None
+    experience_level: Optional[str] = None
+    experience_summary: Optional[str] = None
+    experience_notes: Optional[str] = None
+    summary: Optional[str] = None
+    skills: Optional[list[str]] = None
+    key_skills: Optional[list[str]] = None
+    primary_skills: Optional[list[str]] = None
+    other_skills: Optional[list[str]] = None
+    education: Optional[list[str]] = None
+    projects: Optional[list[str]] = None
+    companies_worked_at: Optional[list[str]] = None
+    important_keywords: Optional[list[str]] = None
     current_salary: Optional[str] = None
     expected_salary: Optional[str] = None
     notice_period: Optional[str] = None
@@ -257,6 +272,18 @@ class CandidateDetailsUpdate(BaseModel):
     location: Optional[str] = None
     ready_to_relocate: Optional[str] = None
     reason_job_change: Optional[str] = None
+
+
+def _csv_join(value):
+    if value is None:
+        return None
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(cleaned) if cleaned else None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return str(value).strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -1992,13 +2019,43 @@ def update_candidate_details(
     r = db.query(ResumeDB).filter(ResumeDB.id == r_id, ResumeDB.deleted_at == None).first()
     if not r:
         raise HTTPException(status_code=404, detail="Candidate not found")
-        
+
     if details.name is not None:
         r.name = details.name
+    if details.email is not None:
+        r.email = details.email
+    if details.phone is not None:
+        r.phone = details.phone
     if details.role is not None:
         r.role = details.role
     if details.experience_years is not None:
         r.experience_years = details.experience_years
+    if details.total_experience_years is not None:
+        r.total_experience_years = details.total_experience_years
+    if details.experience_level is not None:
+        r.experience_level = details.experience_level
+    if details.experience_summary is not None:
+        r.experience_summary = details.experience_summary
+    if details.experience_notes is not None:
+        r.experience_notes = details.experience_notes
+    if details.summary is not None:
+        r.summary = details.summary
+    if details.skills is not None:
+        r.skills = _csv_join(details.skills)
+    if details.key_skills is not None:
+        r.key_skills = _csv_join(details.key_skills)
+    if details.primary_skills is not None:
+        r.primary_skills = _csv_join(details.primary_skills)
+    if details.other_skills is not None:
+        r.other_skills = _csv_join(details.other_skills)
+    if details.education is not None:
+        r.education = _csv_join(details.education)
+    if details.projects is not None:
+        r.projects = _csv_join(details.projects)
+    if details.companies_worked_at is not None:
+        r.companies_worked_at = _csv_join(details.companies_worked_at)
+    if details.important_keywords is not None:
+        r.important_keywords = _csv_join(details.important_keywords)
     if details.current_salary is not None:
         r.current_salary = details.current_salary
     if details.expected_salary is not None:
@@ -2015,8 +2072,9 @@ def update_candidate_details(
         r.ready_to_relocate = details.ready_to_relocate
     if details.reason_job_change is not None:
         r.reason_job_change = details.reason_job_change
-        
+
     db.commit()
+    db.refresh(r)
     return _resume_to_dict(r)
 
 

@@ -90,14 +90,24 @@ def _warn_on_weak_secret_key() -> None:
         )
 
 
-def _dsr_reminder_tick():
-    """Run once per minute: if IST hour:minute matches the HR-configured
-    reminder time on an enabled weekday, fire the reminder job.
+# In-memory guard: the IST date on which the reminder job last ran to
+# completion in THIS process. Combined with the per-day DB de-dupe inside
+# ``send_dsr_reminders`` this guarantees exactly one reminder per user per day
+# even across server restarts.
+_last_dsr_reminder_date = None
 
-    The reminder job is itself idempotent per IST day, so even if the tick
-    runs a second time (misfire / coalesce) only one notification is created
-    per user per day.
+
+def _dsr_reminder_tick():
+    """Run once per minute and fire the DSR reminder as soon as the IST clock
+    is at OR PAST the HR-configured time on an enabled weekday.
+
+    Using "at or after" (rather than an exact-minute match) makes the reminder
+    resilient to the server not being alive at the precise target minute: if
+    the process is started/restarted any time between the target time and IST
+    midnight, that day's reminder still goes out. An in-memory date guard plus
+    the per-day DB de-dupe inside ``send_dsr_reminders`` prevent duplicates.
     """
+    global _last_dsr_reminder_date
     try:
         from datetime import datetime, timedelta
         from app.db.session import SessionLocal
@@ -121,18 +131,30 @@ def _dsr_reminder_tick():
         if not enabled:
             return
         ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
-        if ist_now.hour != target_h or ist_now.minute != target_m:
+        today_ist = ist_now.date()
+
+        # Already completed a run today in this process — nothing to do.
+        if _last_dsr_reminder_date == today_ist:
             return
+
         weekday_token = _WEEKDAY_BY_INDEX[ist_now.weekday()]
         if weekday_token not in weekday_set:
             return
+
+        # Only fire once we're at or past the configured time of day.
+        if (ist_now.hour, ist_now.minute) < (target_h, target_m):
+            return
+
         logger.info(
-            "DSR reminder tick FIRING at IST %02d:%02d (%s)",
+            "DSR reminder tick FIRING at IST %02d:%02d (target %02d:%02d, %s)",
+            ist_now.hour,
+            ist_now.minute,
             target_h,
             target_m,
             weekday_token,
         )
         send_dsr_reminders(db)
+        _last_dsr_reminder_date = today_ist
     except Exception:
         logger.exception("DSR reminder tick: send failed")
     finally:
@@ -452,8 +474,16 @@ if FRONTEND_DIST.exists():
             )
         return FileResponse(str(FRONTEND_DIST / "index.html"))
 
-    # SPA fallback — serve index.html for ALL non-API routes
+    # SPA fallback — serve index.html for ALL non-API routes.
+    #
+    # index.html must NEVER be cached by the browser: it is the only file that
+    # references the hashed JS/CSS bundles (e.g. /assets/index-<hash>.js). If a
+    # browser serves a stale index.html it keeps loading the OLD bundle even
+    # after a fresh deploy, so users see outdated UI until they hard-refresh.
+    # The hashed assets themselves are immutable and safe to cache forever.
+    _NO_STORE_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
         index = FRONTEND_DIST / "index.html"
-        return FileResponse(str(index))
+        return FileResponse(str(index), headers=_NO_STORE_HEADERS)

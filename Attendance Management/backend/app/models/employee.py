@@ -1,6 +1,6 @@
 """Employee master, department, designation, bank details."""
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, Date, ForeignKey, Boolean, DateTime, Enum, Float
+from sqlalchemy import Column, Integer, String, Date, ForeignKey, Boolean, DateTime, Enum, Float, LargeBinary
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 import enum
@@ -70,6 +70,9 @@ class Employee(Base):
     passport_expiry_date = Column(Date, nullable=True)
     driving_license_number = Column(String(50), nullable=True)
     driving_license_expiry_date = Column(Date, nullable=True)
+    photo_path = Column(String(500), nullable=True)
+    embedding = Column(LargeBinary, nullable=True)
+    sample_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

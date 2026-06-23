@@ -1,6 +1,8 @@
-"""Employee master CRUD and bank details."""
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿"""Employee master CRUD and bank details."""
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
+import numpy as np
 from app.db.session import get_db
 from app.api.deps import is_employment_status_blocked
 from app.models import (
@@ -32,6 +34,8 @@ from app.schemas.employee import (
     DesignationResponse,
 )
 from app.api.deps import get_current_user, require_roles
+from app.services.embedding_cache import embedding_to_blob, invalidate_embedding_cache
+from app.services.employee_face_service import process_face_uploads, save_employee_photo
 
 router = APIRouter()
 
@@ -280,7 +284,53 @@ def create_employee(
         db.add(b)
     db.commit()
     db.refresh(emp)
+    invalidate_embedding_cache()
     return emp
+
+
+@router.post("/register")
+async def register_face_data(
+    employee_id: int = Form(...),
+    name: str = Form(...),
+    department: str = Form(""),
+    images: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    clean_name = name.strip()
+    clean_department = department.strip()
+
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Employee name is required")
+    if not 1 <= len(images) <= 5:
+        raise HTTPException(status_code=400, detail="Upload between 1 and 5 face images")
+
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail=f"Employee with ID {employee_id} not found in HRMS database.")
+
+    prepared_images = await process_face_uploads(images)
+    embeddings = [item["embedding"] for item in prepared_images]
+    averaged_embedding = np.mean(np.stack(embeddings), axis=0).astype(np.float32)
+    photo_path = save_employee_photo(employee_id, prepared_images[0]["bytes"], prepared_images[0]["filename"])
+
+    emp.embedding = embedding_to_blob(averaged_embedding)
+    emp.photo_path = photo_path
+    emp.sample_count = len(prepared_images)
+    db.commit()
+    db.refresh(emp)
+    invalidate_embedding_cache()
+
+    return {
+        "message": "Employee registered successfully",
+        "employee": {
+            "id": employee_id,
+            "name": clean_name,
+            "department": clean_department,
+            "photo_path": photo_path,
+            "sample_count": len(prepared_images),
+        },
+    }
 
 
 @router.patch("/{employee_id}", response_model=EmployeeResponse)
@@ -318,6 +368,7 @@ def update_employee(
 
     db.commit()
     db.refresh(emp)
+    invalidate_embedding_cache()
     return emp
 
 
@@ -374,6 +425,7 @@ def delete_employee(
 
     db.delete(emp)
     db.commit()
+    invalidate_embedding_cache()
     return {"message": "Employee deleted"}
 
 
@@ -408,3 +460,9 @@ def update_employee_bank(
     db.commit()
     db.refresh(b)
     return b
+
+
+
+
+
+

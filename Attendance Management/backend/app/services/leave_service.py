@@ -39,6 +39,89 @@ def get_current_financial_year(db: Session) -> FinancialYear | None:
     return fy
 
 
+def _approved_leave_dates(
+    db: Session,
+    employee_id: int,
+    leave_type_id: int,
+    fy_start: date,
+    fy_end: date,
+) -> set[date]:
+    """Calendar dates covered by approved leave requests within the financial year."""
+    from datetime import timedelta
+
+    dates: set[date] = set()
+    rows = (
+        db.query(LeaveRequest)
+        .filter(
+            LeaveRequest.employee_id == employee_id,
+            LeaveRequest.leave_type_id == leave_type_id,
+            LeaveRequest.status == "APPROVED",
+            LeaveRequest.start_date <= fy_end,
+            LeaveRequest.end_date >= fy_start,
+        )
+        .all()
+    )
+    for req in rows:
+        d = max(req.start_date, fy_start)
+        end = min(req.end_date, fy_end)
+        while d <= end:
+            dates.add(d)
+            d += timedelta(days=1)
+    return dates
+
+
+def count_hr_direct_paid_leave_days(
+    db: Session,
+    employee_id: int,
+    fy_start: date,
+    fy_end: date,
+    pl_leave_type_id: int,
+) -> Decimal:
+    """Count PAID_LEAVE / HALF_DAY attendance marked by HR, excluding approved-request dates.
+
+    Approved leave already increments ``used_days`` and sets matching attendance
+    rows — counting those attendance rows again would double the used total.
+    """
+    from app.models.attendance import AttendanceRecord
+
+    approved_dates = _approved_leave_dates(
+        db, employee_id, pl_leave_type_id, fy_start, fy_end
+    )
+    att_records = (
+        db.query(AttendanceRecord)
+        .filter(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.date >= fy_start,
+            AttendanceRecord.date <= fy_end,
+        )
+        .order_by(AttendanceRecord.date.asc())
+        .all()
+    )
+
+    hr_direct = Decimal("0")
+    for rec in att_records:
+        if rec.date in approved_dates:
+            continue
+        if rec.status == "PAID_LEAVE":
+            hr_direct += Decimal("1")
+        elif rec.status == "HALF_DAY":
+            m_start = date(rec.date.year, rec.date.month, 1)
+            m_end = (
+                date(rec.date.year, rec.date.month + 1, 1)
+                if rec.date.month < 12
+                else date(rec.date.year + 1, 1, 1)
+            )
+            month_atts = [
+                r for r in att_records if m_start <= r.date < m_end and r.date < rec.date
+            ]
+            month_sl_used = sum(1 for r in month_atts if r.status == "SHORT")
+            month_hd_used = sum(1 for r in month_atts if r.status == "HALF_DAY")
+            buffer_left = 2 - (month_sl_used + (month_hd_used * 2))
+            if buffer_left < 2:
+                hr_direct += Decimal("0.5")
+    return hr_direct
+
+
 def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: int) -> Decimal:
     alloc = db.query(LeaveAllocation).filter(
         LeaveAllocation.employee_id == employee_id,
@@ -50,17 +133,12 @@ def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: 
     
     lt = db.query(LeaveType).filter(LeaveType.id == leave_type_id).first()
     if lt and lt.code == "PL":
-        from app.models.attendance import AttendanceRecord
         fy = db.query(FinancialYear).filter(FinancialYear.id == fy_id).first()
         if fy:
-            from sqlalchemy import func
-            unrequested_paid_leaves = db.query(func.count(AttendanceRecord.id)).filter(
-                AttendanceRecord.employee_id == employee_id,
-                AttendanceRecord.status == "PAID_LEAVE",
-                AttendanceRecord.date >= fy.start_date,
-                AttendanceRecord.date <= fy.end_date,
-            ).scalar() or 0
-            return alloc.allocated_days - alloc.used_days - Decimal(unrequested_paid_leaves)
+            hr_direct = count_hr_direct_paid_leave_days(
+                db, employee_id, fy.start_date, fy.end_date, leave_type_id
+            )
+            return alloc.allocated_days - alloc.used_days - hr_direct
     elif lt and lt.code == "SL":
         from app.models.attendance import AttendanceRecord
         from sqlalchemy import func

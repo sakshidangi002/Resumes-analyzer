@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -1013,6 +1013,32 @@
             display: flex;
             flex-wrap: wrap;
             gap: 0.45rem;
+        }
+
+        .hrms-skill-chip--editable {
+            padding-right: 0.35rem;
+            gap: 0.35rem;
+        }
+
+        .hrms-skill-chip-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1rem;
+            height: 1rem;
+            border-radius: 999px;
+            border: none;
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.75);
+            cursor: pointer;
+            font-size: 0.65rem;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .hrms-skill-chip-remove:hover {
+            background: rgba(239, 68, 68, 0.35);
+            color: #fecaca;
         }
 
         /* Experience Overview sparkline container */
@@ -2858,8 +2884,13 @@
 
             <!-- Primary Technical Skills -->
             <div>
-                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Core Technical Skills
-                </h4>
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Core Technical Skills</h4>
+                    <button type="button" id="dw-edit-skills-btn" onclick="openDrawerSkillsEditor()"
+                        class="text-[10px] font-semibold text-brand-300 hover:text-brand-200 uppercase tracking-wider">
+                        Edit Skills
+                    </button>
+                </div>
                 <div id="dw-skills" class="flex flex-wrap gap-1.5">
                     <!-- Loaded dynamically -->
                 </div>
@@ -3175,10 +3206,37 @@
 
                 <!-- Skills Section -->
                 <div>
-                    <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Technical Skills &
-                        Expertise</h4>
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Technical Skills &
+                            Expertise</h4>
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="cv-skills-view-btn" onclick="setSkillsModalEditMode(true)"
+                                class="text-[10px] font-semibold text-brand-300 hover:text-brand-200 uppercase tracking-wider">
+                                Edit Skills
+                            </button>
+                            <div id="cv-skills-edit-actions" class="hidden items-center gap-2">
+                                <button type="button" onclick="setSkillsModalEditMode(false)"
+                                    class="text-[10px] font-semibold text-slate-400 hover:text-slate-200 uppercase tracking-wider">
+                                    Cancel
+                                </button>
+                                <button type="button" onclick="saveCandidateSkills()"
+                                    class="hrms-btn hrms-btn-primary text-[10px] py-1 px-2.5">
+                                    Save Skills
+                                </button>
+                            </button>
+                        </div>
+                    </div>
                     <div id="cv-skills" class="flex flex-wrap gap-1.5 p-3 bg-black/15 rounded-xl border border-white/5">
                         <!-- Loaded dynamically -->
+                    </div>
+                    <div id="cv-skills-edit-panel" class="hidden mt-3 space-y-2">
+                        <p class="text-[10px] text-slate-500">Remove incorrect skills or add any the parser missed.</p>
+                        <div class="flex gap-2">
+                            <input type="text" id="cv-new-skill-input" placeholder="Add skill, e.g. React, Python..."
+                                class="hrms-input flex-1" autocomplete="off"
+                                onkeydown="if (event.key === 'Enter') { event.preventDefault(); addSkillFromInput(); }">
+                            <button type="button" onclick="addSkillFromInput()" class="hrms-btn hrms-btn-secondary">Add</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -3805,6 +3863,10 @@
             }
         }
 
+        function findResumeById(id) {
+            return (resumes || []).find(r => String(r.id) === String(id)) || null;
+        }
+
         // Topbar global search — forwards the query into the Global AI Search tab
         // and triggers a real semantic search using the existing pipeline.
         function executeTopbarSearch(ev) {
@@ -3958,7 +4020,7 @@
                     </div>
                 `;
 
-                const dateAdded = r.created_at ? new Date(r.created_at).toLocaleDateString() : 'N/A';
+                const dateAdded = _detailsDate(r.created_at);
 
                 tr.innerHTML = `
                     <td class="p-3.5 pl-5 font-bold text-slate-100 text-[11px] leading-snug">
@@ -3980,7 +4042,7 @@
                             <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details Form" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                             </button>
-                            <button type="button" onclick="openCandidateSkillsModal('${r.id}', event)" title="View Technical Skills" aria-label="View Technical Skills" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
+                            <button type="button" onclick="openCandidateSkillsModal('${r.id}', event)" title="View & Edit Technical Skills" aria-label="View and edit technical skills" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                             </button>
                             <button onclick="openCandidateNotesModal('${r.id}', event)" title="View & Add Interview Notes" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-brand-400 transition-all">
@@ -4033,8 +4095,16 @@
         }
 
         function _detailsDate(iso) {
-            if (!iso) return "—";
-            try { return new Date(iso).toLocaleDateString(); } catch (_) { return "—"; }
+            if (!iso) return "?";
+            try {
+                return new Date(iso).toLocaleDateString("en-GB", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric"
+                });
+            } catch (_) {
+                return "?";
+            }
         }
 
         function _detailsYearOptions() {
@@ -4390,7 +4460,7 @@
 
         function openCandidateDetailsFromTable(id, event) {
             if (event) event.stopPropagation();
-            const candidate = resumes.find(r => r.id === id);
+            const candidate = findResumeById(id);
             if (candidate) openDrawer(candidate);
         }
 
@@ -4573,7 +4643,7 @@
                 }
                 if (!selectedForCompare.includes(id)) {
                     selectedForCompare.push(id);
-                    const cand = resumes.find(r => r.id === id);
+                    const cand = findResumeById(id);
                     selectedNamesMap[id] = cand ? cand.name : id;
                 }
             } else {
@@ -4593,7 +4663,7 @@
                 const id = c.getAttribute("onchange").match(/'([^']+)'/)[1];
                 if (input.checked) {
                     selectedForCompare.push(id);
-                    const cand = resumes.find(r => r.id === id);
+                    const cand = findResumeById(id);
                     selectedNamesMap[id] = cand ? cand.name : id;
                 }
             });
@@ -4604,7 +4674,7 @@
         // Shortlist toggler
         async function toggleShortlist(id, e) {
             if (e) e.stopPropagation();
-            const r = resumes.find(x => x.id === id);
+            const r = findResumeById(id);
             if (!r) return;
 
             const updatedState = !r.is_shortlisted;
@@ -4618,7 +4688,7 @@
                 }
 
                 r.is_shortlisted = updatedState;
-                if (activeResume && activeResume.id === id) {
+                if (activeResume && String(activeResume.id) === String(id)) {
                     activeResume.is_shortlisted = updatedState;
                 }
 
@@ -4643,11 +4713,11 @@
                         body: JSON.stringify({ resume_ids: [id] })
                     });
 
-                    resumes = resumes.filter(x => x.id !== id);
-                    filteredResumes = filteredResumes.filter(x => x.id !== id);
+                    resumes = resumes.filter(x => String(x.id) !== String(id));
+                    filteredResumes = filteredResumes.filter(x => String(x.id) !== String(id));
                     selectedForCompare = selectedForCompare.filter(x => x !== id);
 
-                    if (activeResume && activeResume.id === id) {
+                    if (activeResume && String(activeResume.id) === String(id)) {
                         closeDrawer();
                     }
                     renderDatabaseTable();
@@ -5173,7 +5243,7 @@
 
         // Helper: open drawer from vector matching list
         function openDrawerById(id) {
-            const r = resumes.find(x => x.id === id);
+            const r = findResumeById(id);
             if (r) openDrawer(r);
         }
 
@@ -5381,7 +5451,7 @@
                 return;
             }
 
-            const r = resumes.find(x => x.id === id);
+            const r = findResumeById(id);
             if (!r) {
                 console.warn("Selected candidate not found in current resume list:", id);
                 return;
@@ -5510,16 +5580,7 @@
             document.getElementById("dw-summary-box").className = resume.summary ? "" : "hidden";
 
             // Skills badges
-            const skillBox = document.getElementById("dw-skills");
-            skillBox.innerHTML = "";
-            const skills = getAllSkills(resume);
-            if (skills.length === 0) {
-                skillBox.innerHTML = `<span class="text-xs text-slate-400">None parsed.</span>`;
-            } else {
-                skills.forEach(s => {
-                    skillBox.innerHTML += `<span class="px-2.5 py-1 rounded bg-brand-900 border border-brand-300/15 text-brand-300 text-[11px] font-medium">${s}</span>`;
-                });
-            }
+            renderDrawerSkills(resume);
 
             // Education background
             const eduBox = document.getElementById("dw-education");
@@ -5662,11 +5723,168 @@
             if (confirmAction) confirmAction();
         };
 
-        async function openCandidateSkillsModal(id, event) {
+        let activeSkillsResumeId = null;
+        let skillsEditMode = false;
+        let editableSkillsList = [];
+
+        function renderDrawerSkills(resume) {
+            const skillBox = document.getElementById("dw-skills");
+            if (!skillBox) return;
+            skillBox.innerHTML = "";
+            const skills = getAllSkills(resume);
+            if (skills.length === 0) {
+                skillBox.innerHTML = `<span class="text-xs text-slate-400">None parsed. <button type="button" onclick="openDrawerSkillsEditor()" class="text-brand-300 hover:text-brand-200 underline ml-1">Add skills</button></span>`;
+            } else {
+                skills.forEach(s => {
+                    skillBox.innerHTML += `<span class="px-2.5 py-1 rounded bg-brand-900 border border-brand-300/15 text-brand-300 text-[11px] font-medium">${escapeHtml(s)}</span>`;
+                });
+            }
+        }
+
+        function buildSkillsPayload(skills) {
+            const cleaned = [];
+            const seen = new Set();
+            for (const s of skills || []) {
+                const t = String(s || "").trim();
+                if (!t) continue;
+                const key = t.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                cleaned.push(t);
+            }
+            return {
+                skills: cleaned,
+                primary_skills: cleaned.slice(0, 3),
+                key_skills: cleaned.slice(0, 15),
+                other_skills: cleaned.slice(3),
+            };
+        }
+
+        function renderSkillsModalContent(editing) {
+            const skillBox = document.getElementById("cv-skills");
+            const editPanel = document.getElementById("cv-skills-edit-panel");
+            const viewBtn = document.getElementById("cv-skills-view-btn");
+            const editActions = document.getElementById("cv-skills-edit-actions");
+            if (!skillBox) return;
+
+            skillBox.innerHTML = "";
+            if (editableSkillsList.length === 0) {
+                skillBox.innerHTML = editing
+                    ? `<span class="text-xs text-slate-500 italic">No skills yet — add them below.</span>`
+                    : `<span class="text-xs text-slate-500 italic">No skills extracted. Click Edit Skills to add them.</span>`;
+            } else if (editing) {
+                editableSkillsList.forEach((s, idx) => {
+                    skillBox.innerHTML += `
+                        <span class="hrms-skill-chip hrms-skill-chip--editable">
+                            ${escapeHtml(s)}
+                            <button type="button" class="hrms-skill-chip-remove" title="Remove skill" aria-label="Remove ${escapeHtml(s)}"
+                                onclick="removeSkillAtIndex(${idx})">&times;</button>
+                        </span>`;
+                });
+            } else {
+                editableSkillsList.forEach(s => {
+                    skillBox.innerHTML += `<span class="px-2 py-1 rounded bg-brand-900 border border-brand-300/10 text-brand-300 text-[10px] font-semibold">${escapeHtml(s)}</span>`;
+                });
+                skillBox.innerHTML += `<span class="text-[10px] text-slate-500 self-center ml-1">(${editableSkillsList.length} skills)</span>`;
+            }
+
+            if (editPanel) editPanel.classList.toggle("hidden", !editing);
+            if (viewBtn) viewBtn.classList.toggle("hidden", editing);
+            if (editActions) {
+                editActions.classList.toggle("hidden", !editing);
+                editActions.classList.toggle("flex", editing);
+            }
+        }
+
+        function setSkillsModalEditMode(editing) {
+            skillsEditMode = editing;
+            const candidate = resumes.find(r => r.id === activeSkillsResumeId);
+            editableSkillsList = candidate ? getAllSkills(candidate).slice() : editableSkillsList.slice();
+            if (editing) {
+                const input = document.getElementById("cv-new-skill-input");
+                if (input) input.value = "";
+            }
+            renderSkillsModalContent(editing);
+        }
+
+        function openDrawerSkillsEditor() {
+            if (!activeResume) return;
+            openCandidateSkillsModal(activeResume.id, null, true);
+        }
+
+        function addSkillFromInput() {
+            const input = document.getElementById("cv-new-skill-input");
+            if (!input) return;
+            const raw = input.value.trim();
+            if (!raw) return;
+
+            const parts = raw.split(",").map(s => s.trim()).filter(Boolean);
+            const seen = new Set(editableSkillsList.map(s => s.toLowerCase()));
+            let added = false;
+            for (const part of parts) {
+                const key = part.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                editableSkillsList.push(part);
+                added = true;
+            }
+            if (!added) {
+                input.focus();
+                return;
+            }
+            input.value = "";
+            renderSkillsModalContent(true);
+            input.focus();
+        }
+
+        function removeSkillAtIndex(index) {
+            editableSkillsList.splice(index, 1);
+            renderSkillsModalContent(true);
+        }
+
+        async function saveCandidateSkills() {
+            if (!activeSkillsResumeId) return;
+
+            const payload = buildSkillsPayload(editableSkillsList);
+            try {
+                const response = await fetch(`${resumeApiUrl}/resumes/${activeSkillsResumeId}/details`, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${jwtToken}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to save skills");
+                }
+
+                const updated = await response.json();
+                resumes = resumes.map(r => r.id === activeSkillsResumeId ? { ...r, ...updated } : r);
+                filteredResumes = filteredResumes.map(r => r.id === activeSkillsResumeId ? { ...r, ...updated } : r);
+                if (activeResume && activeResume.id === activeSkillsResumeId) {
+                    activeResume = { ...activeResume, ...updated };
+                    renderDrawerSkills(activeResume);
+                }
+                editableSkillsList = getAllSkills(updated);
+                setSkillsModalEditMode(false);
+                renderDatabaseTable();
+            } catch (err) {
+                console.error("Save skills error:", err);
+                alert("Error saving skills: " + err.message);
+            }
+        }
+
+        async function openCandidateSkillsModal(id, event, startInEditMode = false) {
             if (event) event.stopPropagation();
 
-            const candidate = resumes.find(r => r.id === id);
+            const candidate = findResumeById(id);
             if (!candidate) return;
+
+            activeSkillsResumeId = id;
+            editableSkillsList = getAllSkills(candidate).slice();
+            skillsEditMode = false;
 
             document.getElementById("cv-name").innerText = candidate.name || "Candidate Profile";
             const roleEl = document.getElementById("cv-role");
@@ -5678,25 +5896,15 @@
             document.getElementById("cv-experience").innerText = `${parseFloat(candidate.experience_years || 0).toFixed(1)} yr (${candidate.experience_level || 'Mid'} level)`;
             document.getElementById("cv-location").innerText = candidate.location || "No location provided";
 
-            // Skills tags
-            const skillBox = document.getElementById("cv-skills");
-            skillBox.innerHTML = "";
-            const skills = getAllSkills(candidate);
-            if (skills.length === 0) {
-                skillBox.innerHTML = `<span class="text-xs text-slate-500 italic">No skills extracted</span>`;
-            } else {
-                skills.forEach(s => {
-                    skillBox.innerHTML += `<span class="px-2 py-1 rounded bg-brand-900 border border-brand-300/10 text-brand-300 text-[10px] font-semibold">${escapeHtml(s)}</span>`;
-                });
-                skillBox.innerHTML += `<span class="text-[10px] text-slate-500 self-center ml-1">(${skills.length} skills)</span>`;
-            }
-
-            // Open modal
+            setSkillsModalEditMode(!!startInEditMode);
             document.getElementById("candidateSkillsModal").classList.remove("hidden");
         }
 
         function closeCandidateSkillsModal() {
             document.getElementById("candidateSkillsModal").classList.add("hidden");
+            activeSkillsResumeId = null;
+            skillsEditMode = false;
+            editableSkillsList = [];
         }
 
         function getStatusBadge(status) {
@@ -5735,7 +5943,7 @@
             if (event) event.stopPropagation();
             activeDetailsResumeId = id;
 
-            const candidate = resumes.find(r => r.id === id);
+            const candidate = findResumeById(id);
             if (!candidate) return;
 
             document.getElementById("detailsModalCandidate").innerText = `Details for ${candidate.name}`;
@@ -5826,7 +6034,7 @@
             if (event) event.stopPropagation();
             activeNotesResumeId = id;
 
-            const candidate = resumes.find(r => r.id === id);
+            const candidate = findResumeById(id);
             document.getElementById("notesModalCandidate").innerText = candidate ? `Notes for ${candidate.name}` : "Recruiter Notes";
 
             document.getElementById("notesModal").classList.remove("hidden");

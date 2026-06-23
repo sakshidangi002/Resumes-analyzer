@@ -238,20 +238,24 @@ def send_dsr_reminders(db: Session | None = None) -> dict:
                 counters["skipped_submitted"] += 1
                 continue
 
+            # Already reminded today (e.g. an earlier run before a restart):
+            # skip ALL channels so the user never gets a duplicate in-app row,
+            # email, or push for the same day.
             if u.id in already_notified:
                 counters["in_app_skipped_already"] += 1
-            else:
-                row = AppNotification(
-                    user_id=u.id,
-                    title="Submit your DSR before leaving",
-                    body=body_text,
-                    kind="DSR_REMINDER",
-                    link_path="/dsr",
-                )
-                db.add(row)
-                # Track for live WS publish after commit.
-                new_rows.append(row)
-                counters["in_app_created"] += 1
+                continue
+
+            row = AppNotification(
+                user_id=u.id,
+                title="Submit your DSR before leaving",
+                body=body_text,
+                kind="DSR_REMINDER",
+                link_path="/dsr",
+            )
+            db.add(row)
+            # Track for live WS publish after commit.
+            new_rows.append(row)
+            counters["in_app_created"] += 1
 
             email_outcome = _safe_send_email(db, u, today)
             if email_outcome == "sent":

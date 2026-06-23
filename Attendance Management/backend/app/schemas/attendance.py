@@ -39,6 +39,15 @@ class AdminSetAttendance(BaseModel):
     status: Optional[str] = None
 
 
+class AutoMarkAttendance(BaseModel):
+    """Used by camera / face recognition to mark a candidate automatically."""
+    employee_id: int
+    date: date
+    sign_in_time: Optional[time] = None
+    sign_out_time: Optional[time] = None
+    status: Optional[str] = None
+
+
 class AttendanceCorrectionRequestCreate(BaseModel):
     attendance_date: date
     requested_sign_in_time: Optional[time] = None
