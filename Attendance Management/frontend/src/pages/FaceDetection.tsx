@@ -17,20 +17,37 @@ type FacePayload = {
   pose?: { yaw?: number; pitch?: number; roll?: number };
 };
 
+type AttendanceSummary = {
+  employee_id: number;
+  employee_code?: string | null;
+  employee_name: string;
+  date: string;
+  sign_in_time: string | null;
+  sign_out_time: string | null;
+  total_work_hours?: number | null;
+  total_break_hours?: number | null;
+  status: string;
+  event_type?: string | null;
+};
+
 type RecognitionResult = {
   status: boolean;
   message: string;
   source: string;
   faces: FacePayload[];
-  attendance?: {
-    employee_id: number;
-    employee_code?: string | null;
-    employee_name: string;
-    date: string;
-    sign_in_time: string | null;
-    sign_out_time: string | null;
-    status: string;
-  } | null;
+  attendance?: AttendanceSummary | null;
+};
+
+// Per-employee attendance summary kept in-memory for the session.
+// Mirrors what the backend returns but ensures First In is never overwritten.
+type EmployeeAttendanceCache = {
+  firstIn: string | null;    // earliest IN time seen today – NEVER overwritten
+  lastOut: string | null;    // latest OUT time – always updated on new OUT
+  workHours: number | null;
+  breakHours: number | null;
+  status: string;
+  lastEventType: string | null;
+  lastEventTime: number;     // ms timestamp of last event (for 60s UI dedup)
 };
 
 const cards = [
@@ -55,7 +72,6 @@ const cards = [
 ];
 
 const SCAN_INTERVAL_MS = 1200;
-const ATTENDANCE_COOLDOWN_MS = 8000;
 
 function formatEmployeeLabel(face: FacePayload): string {
   if (!face.matched) return "Unknown Person";
@@ -74,6 +90,41 @@ function rgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function formatTime(timeStr: string | null): string {
+  if (!timeStr) return "–";
+  // Handle "HH:MM:SS" format from backend
+  const parts = timeStr.split(":");
+  if (parts.length >= 2) {
+    const h = parseInt(parts[0], 10);
+    const m = parts[1];
+    const ampm = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 || 12;
+    return `${h12}:${m} ${ampm}`;
+  }
+  return timeStr;
+}
+
+function formatHours(hours: number | null | undefined): string {
+  if (hours == null) return "–";
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+function statusColor(status: string): string {
+  switch (status.toUpperCase()) {
+    case "PRESENT": return "#22c55e";
+    case "HALF_DAY": return "#f59e0b";
+    case "SHORT": return "#f59e0b";
+    case "ABSENT": return "#ef4444";
+    case "WEEKLY_OFF": return "#6366f1";
+    case "HOLIDAY": return "#06b6d4";
+    default: return "#94a3b8";
+  }
+}
+
 export default function FaceDetection() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -82,7 +133,10 @@ export default function FaceDetection() {
   const scanTimerRef = useRef<number | null>(null);
   const busyRef = useRef(false);
   const lastFacesRef = useRef<FacePayload[]>([]);
-  const lastAttendanceAnnounceRef = useRef<Map<number, number>>(new Map());
+
+  // Per-employee attendance cache: employee_id → EmployeeAttendanceCache
+  // This ensures First In is preserved across multiple detections.
+  const attendanceCacheRef = useRef<Map<number, EmployeeAttendanceCache>>(new Map());
 
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -90,10 +144,31 @@ export default function FaceDetection() {
   const [attendanceStatus, setAttendanceStatus] = useState("Recognized employees are sent to the HR attendance API automatically.");
   const [threshold, setThreshold] = useState("0.45");
   const [latestFaces, setLatestFaces] = useState<FacePayload[]>([]);
-  const [lastRecognizedName, setLastRecognizedName] = useState<string>("");
-  const [lastRecognizedId, setLastRecognizedId] = useState<number | null>(null);
-  const [lastRecognizedCode, setLastRecognizedCode] = useState<string>("");
-  const [lastMarkedAt, setLastMarkedAt] = useState<string>("");
+
+  // Last recognized employee summary for display
+  const [lastEmployee, setLastEmployee] = useState<{
+    name: string;
+    id: number | null;
+    code: string;
+    firstIn: string | null;
+    lastOut: string | null;
+    workHours: number | null;
+    breakHours: number | null;
+    status: string;
+    lastEventType: string | null;
+    lastEventTime: string;
+  }>({
+    name: "",
+    id: null,
+    code: "",
+    firstIn: null,
+    lastOut: null,
+    workHours: null,
+    breakHours: null,
+    status: "",
+    lastEventType: null,
+    lastEventTime: "",
+  });
 
   const stopRecognitionLoop = () => {
     if (scanTimerRef.current != null) {
@@ -220,9 +295,13 @@ export default function FaceDetection() {
     clearOverlay();
     setLatestFaces([]);
     lastFacesRef.current = [];
-    setLastRecognizedName("");
-    setLastRecognizedId(null);
-    setLastMarkedAt("");
+    attendanceCacheRef.current.clear();
+    setLastEmployee({
+      name: "", id: null, code: "",
+      firstIn: null, lastOut: null,
+      workHours: null, breakHours: null,
+      status: "", lastEventType: null, lastEventTime: "",
+    });
     setScanStatus("Camera stopped.");
     setAttendanceStatus("Recognition paused.");
   };
@@ -253,33 +332,80 @@ export default function FaceDetection() {
     return blob;
   };
 
-  const announceAttendance = (face: FacePayload, result: RecognitionResult) => {
+  /**
+   * Merge the backend attendance response into the local per-employee cache.
+   *
+   * Rules:
+   *  - First In is set once (when cache entry is new or firstIn is null) and NEVER overwritten.
+   *  - Last Out is always updated when the backend reports a sign_out_time.
+   *  - work_hours and break_hours are always taken from the latest backend response.
+   */
+  const mergeAttendanceCache = (
+    employeeId: number,
+    att: AttendanceSummary,
+  ): EmployeeAttendanceCache => {
     const now = Date.now();
-    if (face.employee_id != null) {
-      const last = lastAttendanceAnnounceRef.current.get(face.employee_id);
-      if (last && now - last < ATTENDANCE_COOLDOWN_MS && face.state !== "marked_in") {
-        return;
-      }
-      lastAttendanceAnnounceRef.current.set(face.employee_id, now);
+    const existing = attendanceCacheRef.current.get(employeeId);
+
+    // Determine First In: once set, never overwrite.
+    let firstIn: string | null;
+    if (existing?.firstIn) {
+      // Keep the original first-in time always
+      firstIn = existing.firstIn;
+    } else {
+      // First time seeing this employee today
+      firstIn = att.sign_in_time ?? null;
     }
 
-    if (result.attendance?.employee_id != null && result.attendance.employee_name) {
-      setLastRecognizedName(result.attendance.employee_name);
-      setLastRecognizedId(result.attendance.employee_id);
-      setLastRecognizedCode(result.attendance.employee_code || String(result.attendance.employee_id));
-      setLastMarkedAt(result.attendance.date + " " + (result.attendance.sign_in_time || ""));
-      setAttendanceStatus(`Attendance marked for ${result.attendance.employee_name}.`);
-      return;
-    }
+    // Determine Last Out: always take the latest value from backend.
+    // The backend recalculates this from all events so it's always correct.
+    const lastOut = att.sign_out_time ?? (existing?.lastOut ?? null);
 
-    if (face.state === "already_marked") {
-      setAttendanceStatus(`${face.employee_name} is already recorded for today.`);
-      return;
-    }
+    const updated: EmployeeAttendanceCache = {
+      firstIn,
+      lastOut,
+      workHours: att.total_work_hours ?? existing?.workHours ?? null,
+      breakHours: att.total_break_hours ?? existing?.breakHours ?? null,
+      status: att.status ?? existing?.status ?? "",
+      lastEventType: att.event_type ?? existing?.lastEventType ?? null,
+      lastEventTime: now,
+    };
 
-    if (face.state === "cooldown") {
-      setAttendanceStatus(`${face.employee_name} is in the cooldown window. Attendance not re-triggered.`);
-    }
+    attendanceCacheRef.current.set(employeeId, updated);
+    return updated;
+  };
+
+  const handleAttendanceResult = (_face: FacePayload, result: RecognitionResult) => {
+    const att = result.attendance;
+    if (!att || att.employee_id == null) return;
+
+    const empId = att.employee_id;
+
+    // Merge into cache (preserves First In, updates Last Out)
+    const cached = mergeAttendanceCache(empId, att);
+
+    // Determine human-readable event label
+    const eventLabel =
+      att.event_type === "OUT" || att.event_type === "CHECK_OUT" ? "✓ Check-Out"
+      : att.event_type === "IN" || att.event_type === "CHECK_IN" ? "✓ Check-In"
+      : "Attendance recorded";
+
+    setAttendanceStatus(`${eventLabel} recorded for ${att.employee_name}.`);
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    setLastEmployee({
+      name: att.employee_name,
+      id: empId,
+      code: att.employee_code || String(empId),
+      firstIn: cached.firstIn,
+      lastOut: cached.lastOut,
+      workHours: cached.workHours,
+      breakHours: cached.breakHours,
+      status: cached.status,
+      lastEventType: cached.lastEventType,
+      lastEventTime: timeStr,
+    });
   };
 
   const runRecognition = async () => {
@@ -299,8 +425,6 @@ export default function FaceDetection() {
 
       const recognizedFaces = faces.filter((face) => face.matched);
       const unknownFaces = faces.length - recognizedFaces.length;
-      const markedFace = faces.find((face) => face.state === "marked_in");
-      const alreadyMarkedFace = faces.find((face) => face.state === "already_marked");
 
       if (!faces.length) {
         setScanStatus(data.message || "No face detected.");
@@ -308,17 +432,49 @@ export default function FaceDetection() {
         return;
       }
 
+      // Update recognized-name display for first matched face
       if (recognizedFaces.length) {
-        const firstRecognized = recognizedFaces[0];
-        setLastRecognizedName(firstRecognized.employee_name);
-        setLastRecognizedId(firstRecognized.employee_id);
-        setLastRecognizedCode(firstRecognized.employee_code || String(firstRecognized.employee_id));
+        const first = recognizedFaces[0];
+        // Update lastEmployee name/id/code without overwriting attendance summary
+        // (full update happens in handleAttendanceResult when attendance is returned)
+        if (first.employee_id != null && !attendanceCacheRef.current.has(first.employee_id)) {
+          // Show name even before first attendance event
+          setLastEmployee((prev) => ({
+            ...prev,
+            name: first.employee_name,
+            id: first.employee_id,
+            code: first.employee_code || String(first.employee_id ?? ""),
+          }));
+        }
       }
 
-      if (markedFace) {
-        announceAttendance(markedFace, data);
-      } else if (alreadyMarkedFace) {
-        announceAttendance(alreadyMarkedFace, data);
+      // The face state from backend determines what happened:
+      // "in" / "out"        → attendance event recorded (IN or OUT)
+      // "cooldown"          → duplicate ignored by backend (60 s)
+      // "already_marked"    → same as cooldown
+      // "marked_in"         → legacy: first mark of the day
+      // "recognized"        → photo/non-webcam source, no attendance
+      const markedFace = faces.find((f) =>
+        f.state === "in" || f.state === "out" || f.state === "marked_in" || f.state === "check_in" || f.state === "check_out"
+      );
+      const cooldownFace = faces.find((f) =>
+        f.state === "cooldown" || f.state === "already_marked"
+      );
+
+      if (data.attendance?.employee_id != null) {
+        // A real attendance event was recorded
+        const actingFace = markedFace ?? recognizedFaces[0];
+        if (actingFace) {
+          handleAttendanceResult(actingFace, data);
+        }
+      } else if (cooldownFace) {
+        // Backend rejected — within 60 s cooldown
+        setAttendanceStatus(
+          `${cooldownFace.employee_name} – duplicate scan ignored (within 60 s cooldown).`
+        );
+      } else if (recognizedFaces.length && !data.attendance) {
+        // Recognized but no attendance action taken (e.g. non-webcam source)
+        setAttendanceStatus(`${recognizedFaces[0].employee_name} recognized. Attendance tracked.`);
       } else if (unknownFaces > 0 && recognizedFaces.length === 0) {
         setAttendanceStatus("Unknown person detected. No attendance action taken.");
       }
@@ -418,7 +574,11 @@ export default function FaceDetection() {
 
   const knownCount = latestFaces.filter((face) => face.matched).length;
   const unknownCount = latestFaces.length - knownCount;
-  const markedCount = latestFaces.filter((face) => face.state === "marked_in").length;
+  const markedCount = latestFaces.filter((face) =>
+    face.state === "in" || face.state === "out" || face.state === "marked_in"
+  ).length;
+
+  const hasAttendanceSummary = lastEmployee.name && (lastEmployee.firstIn || lastEmployee.lastOut);
 
   return (
     <div className="page-stack">
@@ -436,10 +596,8 @@ export default function FaceDetection() {
             <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.22)", color: "#d3f9d8", fontSize: "0.82rem", fontWeight: 700 }}>Real-time scanner</span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.22)", color: "#dbeafe", fontSize: "0.82rem", fontWeight: 700 }}>Attendance API linked</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.22)", color: "#fef3c7", fontSize: "0.82rem", fontWeight: 700 }}>60 s duplicate guard</span>
             </div>
-            {/* <h2 style={{ margin: "0.9rem 0 0", fontSize: "2rem", lineHeight: 1.1 }}>Live webcam feed with automatic HRM recognition</h2> */}
-
-
 
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "1.2rem" }}>
               <button className="btn btn-primary" type="button" onClick={startCamera}>Start Live Webcam</button>
@@ -467,8 +625,6 @@ export default function FaceDetection() {
               </div>
             </div>
           </div>
-
-
         </div>
       </section>
 
@@ -523,7 +679,7 @@ export default function FaceDetection() {
             {!cameraActive ? (
               <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", textAlign: "center", padding: "1rem", background: "linear-gradient(180deg, rgba(3,7,18,0.15), rgba(3,7,18,0.55))" }}>
                 <div>
-                  <div style={{ fontSize: "3rem", lineHeight: 1 }}>?</div>
+                  <div style={{ fontSize: "3rem", lineHeight: 1 }}>📷</div>
                   <div style={{ marginTop: "0.75rem", fontSize: "1.1rem", fontWeight: 800 }}>Webcam preview</div>
                   <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.68)", lineHeight: 1.6 }}>Click Start Camera to show the live feed and begin recognition.</div>
                 </div>
@@ -532,21 +688,108 @@ export default function FaceDetection() {
           </div>
 
           <div style={{ display: "grid", gap: "0.9rem" }}>
+            {/* Scan status */}
             <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Scan status</div>
               <div style={{ fontWeight: 800, color: "#fff", lineHeight: 1.5 }}>{scanStatus}</div>
             </div>
+
+            {/* Attendance status */}
             <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Attendance status</div>
               <div style={{ color: "rgba(255,255,255,0.78)", lineHeight: 1.6 }}>{attendanceStatus}</div>
             </div>
-            <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
-              <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Last recognized employee</div>
-              <div style={{ fontWeight: 800, color: "#fff" }}>{lastRecognizedName || "None yet"}</div>
-              <div style={{ color: "rgba(255,255,255,0.72)", marginTop: 6 }}>ID: {lastRecognizedCode || (lastRecognizedId ?? "-")}</div>
-              <div style={{ color: "rgba(255,255,255,0.5)", marginTop: 4, fontSize: "0.82rem" }}>Database row: {lastRecognizedId ?? "-"}</div>
-              <div style={{ color: "rgba(255,255,255,0.72)", marginTop: 6 }}>Last mark: {lastMarkedAt || "-"}</div>
-            </div>
+
+            {/* Attendance summary card — shown once an employee is recognized */}
+            {hasAttendanceSummary ? (
+              <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
+                  <div>
+                    <div style={{ fontWeight: 800, color: "#fff", fontSize: "1rem" }}>{lastEmployee.name}</div>
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", marginTop: 2 }}>
+                      ID: {lastEmployee.code || (lastEmployee.id ?? "–")}
+                    </div>
+                  </div>
+                  {lastEmployee.status && (
+                    <div style={{
+                      padding: "0.25rem 0.65rem",
+                      borderRadius: 999,
+                      fontSize: "0.72rem",
+                      fontWeight: 800,
+                      background: rgba(statusColor(lastEmployee.status), 0.18),
+                      border: `1px solid ${rgba(statusColor(lastEmployee.status), 0.4)}`,
+                      color: statusColor(lastEmployee.status),
+                    }}>
+                      {lastEmployee.status}
+                    </div>
+                  )}
+                </div>
+
+                {/* Last event badge */}
+                {lastEmployee.lastEventType && (
+                  <div style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    padding: "0.3rem 0.7rem",
+                    borderRadius: 999,
+                    marginBottom: "0.85rem",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    background: lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT"
+                      ? "rgba(239,68,68,0.15)"
+                      : "rgba(34,197,94,0.15)",
+                    border: `1px solid ${lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"}`,
+                    color: lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "#fca5a5" : "#86efac",
+                  }}>
+                    {lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "⬆ Checked Out" : "⬇ Checked In"}
+                    {lastEmployee.lastEventTime ? ` at ${lastEmployee.lastEventTime}` : ""}
+                  </div>
+                )}
+
+                {/* Time summary grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
+                  <div style={{ padding: "0.6rem 0.75rem", borderRadius: 12, background: "rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>First In</div>
+                    <div style={{ fontWeight: 800, color: "#22c55e", fontSize: "1rem" }}>
+                      {formatTime(lastEmployee.firstIn)}
+                    </div>
+                  </div>
+                  <div style={{ padding: "0.6rem 0.75rem", borderRadius: 12, background: "rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>Last Out</div>
+                    <div style={{ fontWeight: 800, color: lastEmployee.lastOut ? "#f87171" : "rgba(255,255,255,0.35)", fontSize: "1rem" }}>
+                      {formatTime(lastEmployee.lastOut)}
+                    </div>
+                  </div>
+                  <div style={{ padding: "0.6rem 0.75rem", borderRadius: 12, background: "rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>Working Hours</div>
+                    <div style={{ fontWeight: 800, color: "#60a5fa", fontSize: "1rem" }}>
+                      {formatHours(lastEmployee.workHours)}
+                    </div>
+                  </div>
+                  <div style={{ padding: "0.6rem 0.75rem", borderRadius: 12, background: "rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>Break Time</div>
+                    <div style={{ fontWeight: 800, color: "#a78bfa", fontSize: "1rem" }}>
+                      {formatHours(lastEmployee.breakHours)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Placeholder when no employee is recognized yet */
+              <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Last recognized employee</div>
+                <div style={{ fontWeight: 800, color: "#fff" }}>{lastEmployee.name || "None yet"}</div>
+                {lastEmployee.id && (
+                  <>
+                    <div style={{ color: "rgba(255,255,255,0.72)", marginTop: 6 }}>ID: {lastEmployee.code || (lastEmployee.id ?? "-")}</div>
+                    <div style={{ color: "rgba(255,255,255,0.5)", marginTop: 4, fontSize: "0.82rem" }}>Database row: {lastEmployee.id ?? "-"}</div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Recognition result panel */}
             <div style={{ padding: "1rem", borderRadius: 18, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Recognition result</div>
               {latestFaces.length ? (

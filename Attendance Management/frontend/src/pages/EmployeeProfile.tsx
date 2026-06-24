@@ -20,6 +20,7 @@ import MonthlyAttendanceGrid from "../components/MonthlyAttendanceGrid";
 type TabKey =
   | "about"
   | "attendance"
+  | "attendance_details"
   | "leaves"
   | "salary"
   | "payslips";
@@ -203,7 +204,8 @@ interface Payslip {
 
 const tabLabel: Record<TabKey, string> = {
   about: "About",
-  attendance: "Attendance",
+  attendance: "Attendance Grid",
+  attendance_details: "Attendance Details",
   leaves: "Leaves",
   salary: "Salary",
   payslips: "Payslips",
@@ -223,6 +225,30 @@ function formatNiceDate(dateStr?: string | null) {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = d.getFullYear();
   return `${day}/${month}/${year}`;
+}
+
+function formatCompactDuration(hours: number | null | undefined) {
+  if (hours == null) return "—";
+  const totalSeconds = Math.round(Number(hours) * 3600);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h <= 0 && m <= 0) return `${s}s`;
+  if (h <= 0) return `${m}m ${s}s`;
+  if (m <= 0 && s <= 0) return `${h}h`;
+  if (s <= 0) return `${h}h ${m}m`;
+  return `${h}h ${m}m ${s}s`;
+}
+
+function formatTime12h(timeStr: string | null | undefined) {
+  if (!timeStr) return "—";
+  const parts = timeStr.split(":");
+  if (parts.length < 2) return timeStr;
+  const hh = Number(parts[0]);
+  const mm = Number(parts[1]);
+  const period = hh >= 12 ? "PM" : "AM";
+  const hour12 = hh % 12 || 12;
+  return `${hour12.toString().padStart(2, "0")}:${String(mm).padStart(2, "0")} ${period}`;
 }
 
 /** Compact label/value for the profile hero strip only */
@@ -396,6 +422,61 @@ export default function EmployeeProfile() {
   >([]);
   const [attLoading, setAttLoading] = useState(false);
 
+  const [selectedDetailDate, setSelectedDetailDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  });
+  const [timelineData, setTimelineData] = useState<{
+    first_check_in: string | null;
+    last_check_out: string | null;
+    total_work_hours: number | null;
+    total_break_hours: number | null;
+    status: string;
+  } | null>(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [eventHistory, setEventHistory] = useState<
+    Array<{
+      id: number;
+      event_time: string;
+      event_type: string;
+      source: string;
+      attendance_date: string;
+    }>
+  >([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+
+  const handleDeleteEvent = (eventId: number) => {
+    if (!confirm("Are you sure you want to delete this attendance event? This will recalculate break time and working hours.")) return;
+    attendanceApi.deleteEvent(eventId)
+      .then(() => {
+        // Refresh timeline and events after deletion
+        if (employeeId && selectedDetailDate) {
+          attendanceApi.details(employeeId, selectedDetailDate)
+            .then((res) => {
+              setTimelineData({
+                first_check_in: res.data.first_check_in || res.data.sign_in_time || null,
+                last_check_out: res.data.last_check_out || res.data.sign_out_time || null,
+                total_work_hours: res.data.total_work_hours,
+                total_break_hours: res.data.total_break_hours,
+                status: res.data.status,
+              });
+              setEventHistory(res.data.events || []);
+            })
+            .catch(() => {
+              setTimelineData(null);
+              setEventHistory([]);
+            });
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to delete event:", err);
+        alert("Failed to delete event. Please try again.");
+      });
+  };
+
   const deptName = useMemo(() => {
     if (!emp?.department_id) return "-";
     return depts.find((d) => d.id === emp.department_id)?.name || "-";
@@ -567,6 +648,36 @@ export default function EmployeeProfile() {
       .catch(() => setAttRecords([]))
       .finally(() => setAttLoading(false));
   }, [tab, attMonth, attYear, employeeId, canViewProfile]);
+
+  useEffect(() => {
+    if (!canViewProfile || !employeeId || tab !== "attendance_details" || !selectedDetailDate) return;
+    setTimelineLoading(true);
+    attendanceApi
+      .details(employeeId, selectedDetailDate)
+      .then((res) => {
+        setTimelineData({
+          first_check_in: res.data.first_check_in || res.data.sign_in_time || null,
+          last_check_out: res.data.last_check_out || res.data.sign_out_time || null,
+          total_work_hours: res.data.total_work_hours,
+          total_break_hours: res.data.total_break_hours,
+          status: res.data.status || "ABSENT",
+        });
+      })
+      .catch(() => setTimelineData(null))
+      .finally(() => setTimelineLoading(false));
+  }, [tab, selectedDetailDate, employeeId, canViewProfile]);
+
+  useEffect(() => {
+    if (!canViewProfile || !employeeId || tab !== "attendance_details") return;
+    setEventsLoading(true);
+    attendanceApi
+      .listEvents(employeeId)
+      .then((res) => {
+        setEventHistory(res.data || []);
+      })
+      .catch(() => setEventHistory([]))
+      .finally(() => setEventsLoading(false));
+  }, [tab, employeeId, canViewProfile]);
 
 
 
@@ -1318,6 +1429,152 @@ export default function EmployeeProfile() {
               records={attRecords}
               loading={attLoading}
             />
+          </>
+        )}
+
+        {tab === "attendance_details" && (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <h3 style={{ marginTop: 0, marginBottom: 4 }}>Attendance Details</h3>
+                <p className="text-muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+                  Daily timeline and complete check-in/check-out event history.
+                </p>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Select Date</label>
+                <input
+                  type="date"
+                  value={selectedDetailDate}
+                  onChange={(e) => setSelectedDetailDate(e.target.value)}
+                  style={{
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: "8px",
+                    padding: "0 12px",
+                    color: "#fff",
+                    fontSize: "0.85rem",
+                    width: "180px",
+                    height: "42px",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ marginTop: "1.5rem" }}>
+              {/* Attendance Timeline Card */}
+              <div style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: "12px",
+                padding: "1.25rem",
+                marginBottom: "1.5rem",
+              }}>
+                <h4 style={{ marginTop: 0, marginBottom: "1rem", fontSize: "1rem" }}>Attendance Timeline</h4>
+                {timelineLoading ? (
+                  <SectionLoader size="sm" />
+                ) : timelineData ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "1rem" }}>
+                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>First Check-In</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#22c55e" }}>{formatTime12h(timelineData.first_check_in)}</div>
+                    </div>
+                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Last Check-Out</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#ef4444" }}>{formatTime12h(timelineData.last_check_out)}</div>
+                    </div>
+                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Working Hours</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#3b82f6" }}>{formatCompactDuration(timelineData.total_work_hours)}</div>
+                    </div>
+                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.15)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Break Time</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#a855f7" }}>{formatCompactDuration(timelineData.total_break_hours)}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ opacity: 0.65, textAlign: "center", padding: "1rem" }}>No attendance data for this date.</div>
+                )}
+              </div>
+
+              {/* Event History Table */}
+              <div>
+                <h4 style={{ marginTop: 0, marginBottom: "1rem", fontSize: "1rem" }}>Event History</h4>
+                {eventsLoading ? (
+                  <SectionLoader size="sm" />
+                ) : eventHistory.length === 0 ? (
+                  <div style={{ opacity: 0.65, textAlign: "center", padding: "1rem" }}>No attendance events recorded.</div>
+                ) : (
+                  <div className="table-wrap table-wrap--dark" style={{ maxHeight: "400px", overflowY: "auto" }}>
+                    <table className="table-modern table-modern--dark">
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left", paddingLeft: "1.5rem", width: "22%" }}>Date</th>
+                          <th style={{ width: "22%" }}>Event Time</th>
+                          <th style={{ width: "22%" }}>Event Type</th>
+                          <th style={{ width: "22%" }}>Source</th>
+                          {canEdit && <th style={{ paddingRight: "1.5rem", width: "12%" }}>Actions</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {eventHistory.map((evt) => {
+                          const eventDate = new Date(evt.event_time).toLocaleDateString("en-IN", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric"
+                          });
+                          const eventTime = new Date(evt.event_time).toLocaleTimeString("en-IN", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: true
+                          });
+                          const isCheckIn = evt.event_type === "CHECK_IN" || evt.event_type === "IN";
+                          return (
+                            <tr key={evt.id}>
+                              <td style={{ textAlign: "left", paddingLeft: "1.5rem" }}>{eventDate}</td>
+                              <td>{eventTime}</td>
+                              <td>
+                                <span style={{
+                                  fontWeight: 700,
+                                  color: isCheckIn ? "#22c55e" : "#f59e0b",
+                                }}>
+                                  {evt.event_type}
+                                </span>
+                              </td>
+                              <td>{evt.source}</td>
+                              {canEdit && (
+                                <td style={{ paddingRight: "1.5rem", textAlign: "center" }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => handleDeleteEvent(evt.id)}
+                                    style={{
+                                      padding: "0.35rem 0.75rem",
+                                      fontSize: "0.75rem",
+                                      backgroundColor: "rgba(239, 68, 68, 0.15)",
+                                      color: "#ef4444",
+                                      border: "1px solid rgba(239, 68, 68, 0.3)",
+                                    }}
+                                    onMouseOver={(e) => {
+                                      e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.25)";
+                                    }}
+                                    onMouseOut={(e) => {
+                                      e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.15)";
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           </>
         )}
 

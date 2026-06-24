@@ -15,6 +15,28 @@ interface AttendanceRow {
   sign_in_time: string | null;
   sign_out_time: string | null;
   total_work_hours: number | null;
+  total_break_hours?: number | null;
+}
+
+interface AttendanceEventRow {
+  id: number;
+  event_time: string;
+  event_type: string;
+  source: string;
+}
+
+interface AttendanceDetails {
+  employee_id: number;
+  employee_name: string;
+  date: string;
+  events: AttendanceEventRow[];
+  sign_in_time: string | null;
+  sign_out_time: string | null;
+  total_work_hours: number | null;
+  total_break_hours: number | null;
+  status: string;
+  is_late: boolean;
+  is_early_exit: boolean;
 }
 
 interface EmployeeInfo {
@@ -39,10 +61,10 @@ const Icons = {
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
     </svg>
   ),
-  Eye: () => (
+  Clock: () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-      <circle cx="12" cy="12" r="3"></circle>
+      <circle cx="12" cy="12" r="10"></circle>
+      <polyline points="12 6 12 12 16 14"></polyline>
     </svg>
   ),
   Calendar: () => (
@@ -83,23 +105,40 @@ export default function Attendance() {
   } | null>(null);
 
   const [attendanceDialogEmployee, setAttendanceDialogEmployee] = useState<EmployeeInfo | null>(null);
+  const [detailsEmployee, setDetailsEmployee] = useState<EmployeeInfo | null>(null);
+  const [detailsData, setDetailsData] = useState<AttendanceDetails | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [dialogMonth, setDialogMonth] = useState(now.getMonth() + 1);
   const [dialogYear, setDialogYear] = useState(now.getFullYear());
   const [dialogRecords, setDialogRecords] = useState<AttendanceRow[]>([]);
   const [dialogLoading, setDialogLoading] = useState(false);
 
 
-  const formatActualTime = (hours: number | null | undefined, showSeconds = false) => {
-    if (!hours && hours !== 0) return "-";
+
+  const formatCompactDuration = (hours: number | null | undefined) => {
+    if (hours == null) return "-";
     const totalSeconds = Math.round(Number(hours) * 3600);
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
     const s = totalSeconds % 60;
+    if (h <= 0 && m <= 0) return `${s}s`;
+    if (h <= 0) return `${m}m ${s}s`;
+    if (m <= 0 && s <= 0) return `${h}h`;
+    if (s <= 0) return `${h}h ${m}m`;
+    return `${h}h ${m}m ${s}s`;
+  };
 
-    if (showSeconds) {
-      return `${h}h ${m}m ${s}s`;
-    }
-    return `${h} Hours ${m.toString().padStart(2, "0")} Minutes`;
+  const formatTime12h = (timeStr: string | null | undefined) => {
+    if (!timeStr) return "-";
+    const [hh, mm] = timeStr.split(":").map(Number);
+    const period = hh >= 12 ? "PM" : "AM";
+    const hour12 = hh % 12 || 12;
+    return `${hour12.toString().padStart(2, "0")}:${String(mm).padStart(2, "0")} ${period}`;
+  };
+
+  const formatEventTime12h = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
   };
 
   const formatStatusLabel = (status: string, totalWorkHours?: number | null) => {
@@ -170,6 +209,18 @@ export default function Attendance() {
       .then((res) => setDialogRecords(res.data || []))
       .finally(() => setDialogLoading(false));
   }, [attendanceDialogEmployee, dialogMonth, dialogYear]);
+
+  useEffect(() => {
+    if (!detailsEmployee) {
+      setDetailsData(null);
+      return;
+    }
+    setDetailsLoading(true);
+    api.details(detailsEmployee.id, selectedDate)
+      .then((res) => setDetailsData(res.data))
+      .catch(() => setDetailsData(null))
+      .finally(() => setDetailsLoading(false));
+  }, [detailsEmployee, selectedDate]);
 
   const openEdit = (employee_id: number, date: string, dialogOverride?: boolean) => {
     let rec = records.find((r) => r.employee_id === employee_id && r.date === date);
@@ -305,8 +356,8 @@ export default function Attendance() {
       member: (r) => `${r.info.first_name} ${r.info.last_name}`,
       sign_in_time: (r) => r.rec?.sign_in_time || "",
       sign_out_time: (r) => r.rec?.sign_out_time || "",
-      required: (r) => r.info.expected_working_hours || 9,
       working_hours: (r) => Number(r.rec?.total_work_hours ?? 0),
+      break_time: (r) => Number(r.rec?.total_break_hours ?? 0),
       status: (r) => effectiveStatus(r),
     },
     searchableText: (r) =>
@@ -405,10 +456,10 @@ export default function Attendance() {
             <thead>
               <tr>
                 <SortableHeader label="Member" columnKey="member" sort={attendanceSort} onToggle={toggleAttendanceSort} style={{ paddingLeft: '1.5rem' }} />
-                <SortableHeader label="Time In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Time Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Required Time" columnKey="required" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="First Check-In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Last Check-Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Working Hours" columnKey="working_hours" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Break Time" columnKey="break_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Status" columnKey="status" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Actions" columnKey="__actions" sort={attendanceSort} onToggle={toggleAttendanceSort} notSortable align="center" />
               </tr>
@@ -430,10 +481,21 @@ export default function Attendance() {
                 displayedEmployeeRows.map(({ info, rec }) => {
                   const rawStatus = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
 
-                  // If DB says ABSENT but employee has actual working hours recorded,
-                  // derive the real status from total_work_hours vs expected
+                  // Status logic:
+                  // - For today, if checked in but not checked out: show "Present"
+                  // - If checked out: calculate final status based on working hours
                   let s = rawStatus;
-                  if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
+                  if (selectedDate === todayIso && rec?.sign_in_time && !rec?.sign_out_time) {
+                    // Currently checked in - show Present
+                    s = "PRESENT";
+                  } else if (rec?.sign_out_time && rec?.total_work_hours != null && rec.total_work_hours > 0) {
+                    // Checked out - calculate final status based on working hours
+                    const expected = info.expected_working_hours || 9;
+                    if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
+                    else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
+                    else s = "SHORT";
+                  } else if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
+                    // Fallback for past dates with working hours but no sign_out_time
                     const expected = info.expected_working_hours || 9;
                     if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
                     else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
@@ -446,37 +508,39 @@ export default function Attendance() {
                         <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>{info.first_name} {info.last_name}</div>
                       </td>
                       <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center' }}>{rec?.sign_in_time || "-"}</div>
+                        {formatTime12h(rec?.sign_in_time)}
                       </td>
                       <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center' }}>{(rec?.sign_out_time && rec.sign_out_time !== "00:00:00") ? rec.sign_out_time : "-"}</div>
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'center' }}>{s === "WEEKLY_OFF" || s === "HOLIDAY" ? "-" : `${info.expected_working_hours || 9} Hours`}</div>
+                        {(rec?.sign_out_time && rec.sign_out_time !== "00:00:00") ? formatTime12h(rec.sign_out_time) : "-"}
                       </td>
                       <td style={{ opacity: 0.9, textAlign: 'center' }}>
                         {(() => {
-                          if (rec?.total_work_hours != null && rec.sign_out_time && rec.sign_out_time !== "00:00:00") {
-                            return <div style={{ display: 'flex', justifyContent: 'center' }}>{formatActualTime(rec.total_work_hours)}</div>;
-                          }
+                          // For today, if employee has sign_in_time, calculate running time from first check-in
+                          // Subtract break time to get actual working hours
                           if (rec?.sign_in_time && selectedDate === todayIso) {
-                            const [h, m, s] = rec.sign_in_time.split(':').map(Number);
+                            const [h, m, sec] = rec.sign_in_time.split(':').map(Number);
                             const start = new Date();
-                            start.setHours(h, m, s, 0);
-
+                            start.setHours(h, m, sec, 0);
                             if (nowTick > start) {
                               const diffHours = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
+                              const breakHours = rec?.total_break_hours || 0;
+                              const workHours = Math.max(0, diffHours - breakHours);
                               return (
-                                <div style={{ display: 'flex', justifyContent: 'center' }}>
-                                  <span style={{ color: "rgb(34, 192, 93)", fontWeight: 600, fontSize: "0.95rem" }}>
-                                    {formatActualTime(diffHours, true)}
-                                  </span>
-                                </div>
+                                <span style={{ color: "rgb(34, 192, 93)", fontWeight: 600, fontSize: "0.95rem" }}>
+                                  {formatCompactDuration(workHours)}
+                                </span>
                               );
                             }
                           }
-                          return <div style={{ display: 'flex', justifyContent: 'center' }}>-</div>;
+                          // For past dates, show static total_work_hours
+                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
+                            return formatCompactDuration(rec.total_work_hours);
+                          }
+                          return "-";
                         })()}
+                      </td>
+                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
+                        {formatCompactDuration(rec?.total_break_hours)}
                       </td>
                       <td style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: 'center' }}>
                         <span style={{
@@ -490,9 +554,12 @@ export default function Attendance() {
                         </span>
                       </td>
                       <td style={{ textAlign: 'center' }}>
-                        <div className="actions-stack" style={{ justifyContent: 'center', display: 'flex' }}>
+                        <div className="actions-stack" style={{ justifyContent: 'center', display: 'flex', gap: '0.35rem' }}>
+                          <button className="btn-icon-circle" onClick={() => setDetailsEmployee(info)} title="View Attendance Details">
+                            <Icons.Clock />
+                          </button>
                           <button className="btn-icon-circle" onClick={() => { setAttendanceDialogEmployee(info); setDialogMonth(month); setDialogYear(year); }} title="View Monthly Attendance History">
-                            <Icons.Eye />
+                            <Icons.Calendar />
                           </button>
                           {isHR && (
                             <button className="btn-icon-circle" onClick={() => openEdit(info.id, selectedDate)} title="Edit Attendance for this Day">
@@ -609,6 +676,63 @@ export default function Attendance() {
                   </div>
                 </div>
               </form>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        detailsEmployee && (
+          <div className="modal-backdrop" onClick={() => setDetailsEmployee(null)} style={{ zIndex: 1100 }}>
+            <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 560, width: "95%" }}>
+              <h3>Attendance Details</h3>
+              <div style={{ marginBottom: "1rem", opacity: 0.85 }}>
+                Employee: <strong>{detailsEmployee.first_name} {detailsEmployee.last_name}</strong>
+                <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "4px" }}>{dayLabelFull}</div>
+              </div>
+              {detailsLoading ? (
+                <SectionLoader size="sm" />
+              ) : (
+                <>
+                  <div style={{
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "10px",
+                    padding: "1rem",
+                    marginBottom: "1rem",
+                    maxHeight: "240px",
+                    overflowY: "auto",
+                  }}>
+                    {(detailsData?.events?.length || 0) === 0 ? (
+                      <div style={{ opacity: 0.65, textAlign: "center" }}>No attendance events recorded for this date.</div>
+                    ) : (
+                      detailsData?.events.map((evt) => (
+                        <div key={evt.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                          <span>{formatEventTime12h(evt.event_time)}</span>
+                          <span style={{
+                            fontWeight: 700,
+                            color: evt.event_type === "IN" ? "#22c55e" : "#f59e0b",
+                          }}>
+                            {evt.event_type}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", fontSize: "0.9rem" }}>
+                    <div>First Check-In: <strong>{formatTime12h(detailsData?.sign_in_time)}</strong></div>
+                    <div>Last Check-Out: <strong>{formatTime12h(detailsData?.sign_out_time)}</strong></div>
+                    <div>Total Working Hours: <strong>{formatCompactDuration(detailsData?.total_work_hours)}</strong></div>
+                    <div>Total Break Time: <strong>{formatCompactDuration(detailsData?.total_break_hours)}</strong></div>
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      Status: <strong>{formatStatusLabel(detailsData?.status || "ABSENT", detailsData?.total_work_hours)}</strong>
+                    </div>
+                  </div>
+                </>
+              )}
+              <div className="modal-actions" style={{ marginTop: "1.25rem", justifyContent: "flex-end" }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setDetailsEmployee(null)}>Close</button>
+              </div>
             </div>
           </div>
         )

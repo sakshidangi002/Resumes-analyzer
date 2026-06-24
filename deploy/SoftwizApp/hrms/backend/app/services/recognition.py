@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import threading
-from datetime import datetime, time, timedelta
 
 import numpy as np
 from PIL import Image
@@ -11,15 +9,10 @@ from app.core.config import get_settings
 from app.core.datetime_utils import get_ist_now
 from app.db.session import SessionLocal
 from app.models.employee import Employee, EmploymentStatus
-from app.services.attendance_service import (
-    apply_status_from_hours,
-    calculate_work_hours,
-    get_company_config,
-    get_or_create_attendance,
-)
 from app.services.embedding_cache import get_employee_candidates
 from app.services.face_service import extract_face_embeddings, extract_faces_from_rgb
 from app.services.match import find_best_match
+from app.services.attendance_event_service import record_face_attendance
 
 
 logger = logging.getLogger(__name__)
@@ -27,22 +20,24 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 DEFAULT_THRESHOLD = settings.default_threshold
 MIN_MATCH_MARGIN = settings.min_match_margin
-WEBCAM_ATTENDANCE_COOLDOWN_SECONDS = 8
-
-_webcam_attendance_lock = threading.Lock()
-_webcam_last_marked_at: dict[int, datetime] = {}
 
 
-def _is_within_webcam_cooldown(employee_id: int, now_dt: datetime) -> bool:
-    with _webcam_attendance_lock:
-        last_marked_at = _webcam_last_marked_at.get(employee_id)
-        if last_marked_at is not None and now_dt - last_marked_at < timedelta(seconds=WEBCAM_ATTENDANCE_COOLDOWN_SECONDS):
-            return True
-        _webcam_last_marked_at[employee_id] = now_dt
-        return False
+def _attendance_payload(rec, employee, event_type: str | None = None) -> dict:
+    return {
+        "employee_id": employee.id,
+        "employee_code": employee.employee_code,
+        "employee_name": employee.full_name,
+        "date": rec.date.isoformat(),
+        "sign_in_time": rec.sign_in_time.isoformat() if rec.sign_in_time else None,
+        "sign_out_time": rec.sign_out_time.isoformat() if rec.sign_out_time else None,
+        "total_work_hours": float(rec.total_work_hours) if rec.total_work_hours is not None else None,
+        "total_break_hours": float(rec.total_break_hours) if rec.total_break_hours is not None else None,
+        "status": rec.status,
+        "event_type": event_type,
+    }
 
 
-def _mark_attendance(employee_id: int, now_dt: datetime) -> tuple[dict | None, str]:
+def _mark_attendance(employee_id: int, now_dt=None) -> tuple[dict | None, str]:
     with SessionLocal() as db:
         employee = (
             db.query(Employee)
@@ -56,68 +51,36 @@ def _mark_attendance(employee_id: int, now_dt: datetime) -> tuple[dict | None, s
             logger.info("face-match employee_id=%s action=unknown_employee", employee_id)
             return None, "unknown"
 
-        today = now_dt.date()
-        now_time = now_dt.time().replace(microsecond=0)
-        rec = get_or_create_attendance(db, employee_id, today)
-
-        if rec.sign_in_time is not None:
+        try:
+            event, rec, action = record_face_attendance(db, employee_id, now_dt=now_dt)
+        except ValueError as exc:
             logger.info(
-                "face-match employee=%s employee_id=%s action=already_marked attendance_date=%s",
+                "face-match employee=%s employee_id=%s action=validation_failed detail=%s",
                 employee.full_name,
                 employee.id,
-                rec.date.isoformat(),
+                exc,
             )
-            return {
-                "employee_id": employee.id,
-                "employee_code": employee.employee_code,
-                "employee_name": employee.full_name,
-                "date": rec.date.isoformat(),
-                "sign_in_time": rec.sign_in_time.isoformat() if rec.sign_in_time else None,
-                "sign_out_time": rec.sign_out_time.isoformat() if rec.sign_out_time else None,
-                "status": rec.status,
-            }, "already_marked"
+            return None, "validation_failed"
 
-        if _is_within_webcam_cooldown(employee_id, now_dt):
+        if action == "cooldown":
             logger.info(
                 "face-match employee=%s employee_id=%s action=cooldown attendance_date=%s",
                 employee.full_name,
                 employee.id,
-                today.isoformat(),
+                rec.date.isoformat(),
             )
-            return None, "cooldown"
+            return _attendance_payload(rec, employee), "cooldown"
 
-        rec.sign_in_time = now_time
-        rec.sign_out_time = None
-        rec.total_work_hours = None
-        rec.status = "PRESENT"
-        config = get_company_config(db)
-        grace_min = config.grace_time_minutes if config else 15
-        standard_start = time(9, 0)
-        t = datetime.combine(today, now_time)
-        s = datetime.combine(today, standard_start)
-        rec.is_late = (t - s).total_seconds() > grace_min * 60
-        rec.is_early_exit = False
-        rec.source = "AUTO"
-        db.commit()
-        db.refresh(rec)
-
+        event_type = event.event_type if event else action
         logger.info(
-            "face-match employee=%s employee_id=%s action=marked_in attendance_date=%s sign_in=%s",
+            "face-match employee=%s employee_id=%s action=%s attendance_date=%s event_time=%s",
             employee.full_name,
             employee.id,
+            event_type,
             rec.date.isoformat(),
-            rec.sign_in_time.isoformat() if rec.sign_in_time else None,
+            event.event_time.isoformat() if event else None,
         )
-
-        return {
-            "employee_id": employee.id,
-            "employee_code": employee.employee_code,
-            "employee_name": employee.full_name,
-            "date": rec.date.isoformat(),
-            "sign_in_time": rec.sign_in_time.isoformat() if rec.sign_in_time else None,
-            "sign_out_time": rec.sign_out_time.isoformat() if rec.sign_out_time else None,
-            "status": rec.status,
-        }, "marked_in"
+        return _attendance_payload(rec, employee, event_type=event_type), event_type.lower()
 
 
 def _build_face_result(

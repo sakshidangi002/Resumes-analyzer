@@ -104,6 +104,18 @@ export const attendance = {
     api.put("/attendance/admin-set", data),
   autoMark: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
     api.post("/attendance/auto-mark", data),
+  addEvent: (data: { employee_id: number; event_time?: string | null; event_type?: string | null; source?: string; camera_id?: string | null }) =>
+    api.post("/attendance/events", data),
+  listEvents: (employee_id: number, date?: string) =>
+    api.get("/attendance/events", { params: { employee_id, date } }),
+  deleteEvent: (event_id: number) =>
+    api.delete("/attendance/events/" + event_id),
+  details: (employee_id: number, date: string) =>
+    api.get("/attendance/details", { params: { employee_id, date } }),
+  recalculate: (employee_id: number, date: string) =>
+    api.post("/attendance/recalculate", null, { params: { employee_id, date } }),
+  dailyReport: (date: string, department_id?: number) =>
+    api.get("/attendance/daily-report", { params: { date, department_id } }),
   correctionRequests: (params?: { employee_id?: number; status?: string }) =>
     api.get("/attendance/correction-requests", { params }),
   createCorrection: (data: object) => api.post("/attendance/correction-requests", data),

@@ -3,7 +3,7 @@ from app.db.base_class import Base
 from app.models.employee import Employee, EmployeeBankDetail, Department, Designation
 from app.models.user import User, Role, user_roles
 from app.models.company import CompanyConfig, FinancialYear, Holiday
-from app.models.attendance import AttendanceRecord, AttendanceCorrectionRequest
+from app.models.attendance import AttendanceRecord, AttendanceCorrectionRequest, AttendanceEvent
 from app.models.leave import LeaveType, LeaveAllocation, LeaveRequest
 from app.models.payroll import SalaryStructure, PayrollPeriod, Payslip
 from app.models.audit import AuditLog
@@ -29,6 +29,7 @@ __all__ = [
     "Holiday",
     "AttendanceRecord",
     "AttendanceCorrectionRequest",
+    "AttendanceEvent",
     "LeaveType",
     "LeaveAllocation",
     "LeaveRequest",

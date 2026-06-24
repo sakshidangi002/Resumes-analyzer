@@ -1,15 +1,21 @@
-"""Attendance: HR-managed grid, sign-out helpers, correction requests."""
+"""Attendance: HR-managed grid, sign-out helpers, correction requests, biometric events."""
 from datetime import date, time, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+
 from app.db.session import get_db
-from app.models import User, AttendanceRecord, AttendanceCorrectionRequest
+from app.models import User, AttendanceRecord, AttendanceCorrectionRequest, Employee, AttendanceEvent
 from app.schemas.attendance import (
     AttendanceRecordResponse,
     AttendanceCorrectionRequestCreate,
     AttendanceCorrectionRequestResponse,
     AdminSetAttendance,
     AutoMarkAttendance,
+    AttendanceEventCreate,
+    AttendanceEventResponse,
+    AttendanceDetailsResponse,
+    DailyAttendanceReportRow,
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.attendance_service import (
@@ -18,6 +24,12 @@ from app.services.attendance_service import (
     get_or_create_attendance,
     calculate_work_hours,
     apply_status_from_hours,
+)
+from app.services.attendance_event_service import (
+    add_attendance_event,
+    get_events_for_day,
+    recalculate_attendance_summary,
+    delete_attendance_event,
 )
 
 router = APIRouter()
@@ -77,13 +89,25 @@ def auto_mark_attendance(
         if sign_out_time and sign_out_time > now_time:
             raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
 
-    rec = get_or_create_attendance(db, data.employee_id, data.date)
-
+    # Prefer event-based flow when no explicit times are supplied
     if sign_in_time is None and sign_out_time is None:
-        if rec.sign_in_time is not None and rec.sign_out_time is None:
-            sign_out_time = now_time
-        else:
-            sign_in_time = now_time
+        event_time = datetime.combine(data.date, now_time)
+        try:
+            event, rec, action = add_attendance_event(
+                db,
+                data.employee_id,
+                event_time=event_time,
+                source="AUTO",
+            )
+            if action == "cooldown":
+                rec = get_or_create_attendance(db, data.employee_id, data.date)
+                db.refresh(rec)
+                return rec
+            return rec
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rec = get_or_create_attendance(db, data.employee_id, data.date)
 
     if sign_in_time is not None:
         rec.sign_in_time = sign_in_time
@@ -129,6 +153,175 @@ def auto_mark_attendance(
     return rec
 
 
+@router.post("/events", response_model=AttendanceEventResponse)
+def create_attendance_event(
+    data: AttendanceEventCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Add a biometric-style IN/OUT attendance event."""
+    try:
+        event, _rec, action = add_attendance_event(
+            db,
+            data.employee_id,
+            event_time=data.event_time,
+            event_type=data.event_type,
+            source=data.source or "MANUAL",
+            camera_id=data.camera_id,
+        )
+        if action == "cooldown":
+            raise HTTPException(
+                status_code=409,
+                detail="Duplicate detection ignored (60 second cooldown active)",
+            )
+        return event
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/events", response_model=list[AttendanceEventResponse])
+def list_attendance_events(
+    employee_id: int = Query(...),
+    event_date: date | None = Query(None, alias="date"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
+):
+    role_names = [r.name for r in current_user.roles]
+    if (
+        "Employee" in role_names
+        and "Manager" not in role_names
+        and "HR" not in role_names
+        and "Admin" not in role_names
+    ):
+        if current_user.employee_id != employee_id:
+            raise HTTPException(status_code=403, detail="Not allowed to view other employees' events")
+    
+    if event_date:
+        return get_events_for_day(db, employee_id, event_date)
+    else:
+        return (
+            db.query(AttendanceEvent)
+            .filter(AttendanceEvent.employee_id == employee_id)
+            .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
+            .all()
+        )
+
+
+@router.get("/details", response_model=AttendanceDetailsResponse)
+def get_attendance_details(
+    employee_id: int = Query(...),
+    event_date: date = Query(..., alias="date"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
+):
+    role_names = [r.name for r in current_user.roles]
+    if (
+        "Employee" in role_names
+        and "Manager" not in role_names
+        and "HR" not in role_names
+        and "Admin" not in role_names
+    ):
+        if current_user.employee_id != employee_id:
+            raise HTTPException(status_code=403, detail="Not allowed to view other employees' details")
+
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    rec = recalculate_attendance_summary(db, employee_id, event_date)
+    db.commit()
+    db.refresh(rec)
+    events = get_events_for_day(db, employee_id, event_date)
+
+    return AttendanceDetailsResponse(
+        employee_id=employee_id,
+        employee_name=employee.full_name,
+        date=event_date,
+        events=events,
+        sign_in_time=rec.sign_in_time,
+        sign_out_time=rec.sign_out_time,
+        total_work_hours=float(rec.total_work_hours) if rec.total_work_hours is not None else None,
+        total_break_hours=float(rec.total_break_hours) if rec.total_break_hours is not None else None,
+        status=rec.status,
+        is_late=rec.is_late,
+        is_early_exit=rec.is_early_exit,
+    )
+
+
+@router.delete("/events/{event_id}", response_model=AttendanceRecordResponse)
+def delete_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Delete an attendance event and recalculate the daily summary."""
+    try:
+        rec = delete_attendance_event(db, event_id)
+        return rec
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/recalculate", response_model=AttendanceRecordResponse)
+def recalculate_attendance(
+    employee_id: int = Query(...),
+    event_date: date = Query(..., alias="date"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    rec = recalculate_attendance_summary(db, employee_id, event_date)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
+@router.get("/daily-report", response_model=list[DailyAttendanceReportRow])
+def daily_attendance_report(
+    report_date: date = Query(..., alias="date"),
+    department_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
+):
+    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    if department_id is not None:
+        q = q.filter(Employee.department_id == department_id)
+    employees = q.order_by(Employee.employee_code.asc()).all()
+
+    rows: list[DailyAttendanceReportRow] = []
+    for emp in employees:
+        rec = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.employee_id == emp.id,
+                AttendanceRecord.date == report_date,
+            )
+            .first()
+        )
+        events = get_events_for_day(db, emp.id, report_date)
+        if events and rec:
+            rec = recalculate_attendance_summary(db, emp.id, report_date)
+
+        rows.append(
+            DailyAttendanceReportRow(
+                employee_id=emp.id,
+                employee_code=emp.employee_code or "",
+                employee_name=emp.full_name,
+                date=report_date,
+                sign_in_time=rec.sign_in_time if rec else None,
+                sign_out_time=rec.sign_out_time if rec else None,
+                total_work_hours=float(rec.total_work_hours) if rec and rec.total_work_hours is not None else None,
+                total_break_hours=float(rec.total_break_hours) if rec and rec.total_break_hours is not None else None,
+                expected_working_hours=float(emp.expected_working_hours or 9.0),
+                status=rec.status if rec else "ABSENT",
+                is_late=rec.is_late if rec else False,
+                is_early_exit=rec.is_early_exit if rec else False,
+                event_count=len(events),
+            )
+        )
+    db.commit()
+    return rows
+
+
 @router.get("", response_model=list[AttendanceRecordResponse])
 def list_attendance(
     from_date: date = Query(...),
@@ -166,29 +359,24 @@ def admin_set_attendance(
         raise HTTPException(status_code=400, detail="Cannot record attendance for future dates")
     if data.date == date.today():
         now_t = datetime.now().time()
-        
-        # Check Sign-In
+
         if data.sign_in_time and data.sign_in_time > now_t:
             raise HTTPException(status_code=400, detail="Cannot record future Sign-In time for today")
-            
-        # Check Sign-Out (with AM/PM logic)
+
         if data.sign_out_time:
             actual_out = data.sign_out_time
-            # If out is before in, we treat it as PM internally
             if data.sign_in_time and actual_out <= data.sign_in_time:
                 if actual_out.hour < 12:
                     actual_out = time(actual_out.hour + 12, actual_out.minute, actual_out.second)
-            
+
             if actual_out > now_t:
                 raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
     rec = get_or_create_attendance(db, data.employee_id, data.date)
     rec.sign_in_time = data.sign_in_time
     rec.sign_out_time = data.sign_out_time
     rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
-    # 1. System calculates automatic status based on times
     apply_status_from_hours(db, rec)
-    
-    # 2. Handle cases where no times are entered (WO/Holiday/Absent)
+
     if rec.sign_in_time is None and rec.sign_out_time is None:
         if rec.is_weekly_off:
             rec.status = "WEEKLY_OFF"
@@ -196,9 +384,7 @@ def admin_set_attendance(
             rec.status = "HOLIDAY"
         else:
             rec.status = "ABSENT"
-    
-    # 3. Final Override: If HR explicitly provided a status in the request, use it.
-    # This ensures that if HR selects "Present", it STAYS as "Present".
+
     if data.status:
         rec.status = data.status
     rec.source = "ADMIN"
@@ -253,8 +439,8 @@ def approve_correction_request(
     request_id: int,
     approved: bool,
     rejection_reason: str | None = None,
-  db: Session = Depends(get_db),
-  current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
 ):
     req = db.query(AttendanceCorrectionRequest).filter(AttendanceCorrectionRequest.id == request_id).first()
     if not req:

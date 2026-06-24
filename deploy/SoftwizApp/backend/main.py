@@ -3818,7 +3818,7 @@ def extract_resume(resume_text: str) -> dict:
         
         # 1. Override name only when V3 agrees with email or header evidence
         v3_name = (v3_results.get("name") or "").strip()
-        if v3_results.get("name_conf", 0) > 0.8 and v3_name:
+        if v3_results.get("name_conf", 0) > 0.6 and v3_name:
             if _name_overlaps_email(v3_name, email) or _name_has_header_support(v3_name, base_text, email):
                 name = v3_name
 
@@ -3828,9 +3828,13 @@ def extract_resume(resume_text: str) -> dict:
             if w not in extraction_warnings:
                 extraction_warnings.append(w)
 
-        # 2. Merge V3 skills only when no explicit skills section was parsed
-        if v3_results["skills"] and not section_skills:
-            skills = list(v3_results["skills"])
+        # 2. Merge V3 skills - use them even when explicit skills section was parsed
+        # This captures skills not in hardcoded vocabulary
+        if v3_results["skills"]:
+            # Combine V3 skills with existing skills, deduplicate
+            v3_skills = list(v3_results["skills"])
+            combined_skills = list(dict.fromkeys(skills + v3_skills))
+            skills = combined_skills
         elif skills:
             llm_clean = []
             for s in skills:
@@ -3912,7 +3916,7 @@ def extract_resume(resume_text: str) -> dict:
     # --- Skills consolidation (broad, deduped, normalized) ---
     # Merge all sources: model output, section parser, and full-text candidate scan.
     skill_sources: list[str] = []
-    for src in (skills, key_skills, primary_skills, other_skills, important_keywords, section_skills):
+    for src in (skills, key_skills, important_keywords, section_skills):
         if isinstance(src, list):
             skill_sources.extend(str(x).strip() for x in src if str(x).strip())
         elif isinstance(src, str) and src.strip():

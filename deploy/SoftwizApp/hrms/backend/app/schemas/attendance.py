@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date, time, datetime
 
@@ -17,7 +17,10 @@ class AttendanceRecordResponse(BaseModel):
     date: date
     sign_in_time: Optional[time] = None
     sign_out_time: Optional[time] = None
+    first_check_in: Optional[time] = None
+    last_check_out: Optional[time] = None
     total_work_hours: Optional[float] = None
+    total_break_hours: Optional[float] = None
     status: str
     is_late: bool
     is_early_exit: bool
@@ -72,3 +75,60 @@ class AttendanceCorrectionRequestResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AttendanceEventCreate(BaseModel):
+    employee_id: int
+    event_time: Optional[datetime] = None
+    event_type: Optional[str] = Field(None, description="IN or OUT; auto-toggled when omitted")
+    source: str = "MANUAL"
+    camera_id: Optional[str] = None
+
+
+class AttendanceEventResponse(BaseModel):
+    id: int
+    employee_id: int
+    attendance_record_id: Optional[int] = None
+    attendance_date: date
+    event_time: datetime
+    event_type: str
+    source: str
+    camera_id: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AttendanceDetailsResponse(BaseModel):
+    employee_id: int
+    employee_name: str
+    date: date
+    events: list[AttendanceEventResponse]
+    sign_in_time: Optional[time] = None
+    sign_out_time: Optional[time] = None
+    first_check_in: Optional[time] = None
+    last_check_out: Optional[time] = None
+    total_work_hours: Optional[float] = None
+    total_break_hours: Optional[float] = None
+    status: str
+    is_late: bool
+    is_early_exit: bool
+
+
+class DailyAttendanceReportRow(BaseModel):
+    employee_id: int
+    employee_code: str
+    employee_name: str
+    date: date
+    sign_in_time: Optional[time] = None
+    sign_out_time: Optional[time] = None
+    first_check_in: Optional[time] = None
+    last_check_out: Optional[time] = None
+    total_work_hours: Optional[float] = None
+    total_break_hours: Optional[float] = None
+    expected_working_hours: Optional[float] = None
+    status: str
+    is_late: bool
+    is_early_exit: bool
+    event_count: int = 0

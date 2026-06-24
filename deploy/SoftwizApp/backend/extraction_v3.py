@@ -131,11 +131,15 @@ def split_resume_sections(text: str) -> dict:
             "skills summary", "key competencies", "technical competencies",
             "relevant skills", "professional expertise", "hr skills", "key hr skills",
             "management skills", "core technical skills",
+            # Additional variations
+            "technical", "soft skills", "hard skills", "key technical skills",
+            "software skills", "computer skills", "it proficiency",
+            "technical abilities", "core skills", "main skills",
         }
         if norm in known:
             return True
         if "skills" in norm or "competencies" in norm or "proficiencies" in norm or "technologies" in norm:
-            if not any(bad in norm for bad in ("experience", "education", "history", "objective", "summary", "profile", "projects")):
+            if not any(bad in norm for bad in ("experience", "education", "history", "objective", "summary", "profile", "projects", "work", "employment")):
                 return True
         return False
 
@@ -227,25 +231,37 @@ def extract_experience_years(experience_text: str) -> float:
 # ---------------------------------------------------------------------------
 def extract_deterministic_name(text: str) -> str:
     """
-    Priority-based extraction:
+    Priority-based extraction with improved edge case handling:
     1. First 3-5 lines
-    2. Regex for names
-    3. Reject emails, company names, titles
+    2. Regex for names (expanded patterns with special characters)
+    3. Reject emails, company names, titles, phone numbers
+    4. Handle hyphens, apostrophes, and mixed case
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     top_lines = lines[:5]
     
     reject_patterns = [
         r"@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", # Email
-        r"(?i)\b(?:pvt|ltd|limited|inc|llc|corporation|technologies|solutions|technology|informatics)\b", # Companies
+        r"(?i)\b(?:pvt|ltd|limited|inc|llc|corporation|technologies|solutions|technology|informatics|systems|services|group|consulting|labs|global|international|india|pvt\.ltd)\b", # Companies
         r"\d{4,}", # Phone/Numbers
-        r"(?i)\b(developer|engineer|manager|curriculum vitae|resume|profile|summary|analyst|executive)\b" # Roles/Headings
+        r"(?i)\b(developer|engineer|manager|curriculum vitae|resume|profile|summary|analyst|executive|architect|consultant|specialist|lead|director|officer|coordinator|administrator|senior|junior|assistant)\b", # Roles/Headings
+        r"(?i)\b(objective|career goal|professional summary|about me|contact|phone|email|address|portfolio|github|linkedin)\b", # Section headers
+        r"https?://[^\s]+", # URLs
+        r"(?i)\b(page|cv|vitae)\b", # Document type
     ]
     
-    name_regex = r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$"
+    # Expanded name regex patterns with support for special characters
+    name_patterns = [
+        r"^[A-Z][a-z]+(?:[-'\s][A-Z][a-z]+){1,2}$",  # Standard with hyphens/apostrophes: John Doe, Mary-Jane Smith, O'Connor
+        r"^[A-Z][a-z]+(?:[-'\s][A-Z]\.?\s*){1,2}[A-Z][a-z]+$",  # With initials: J. A. Doe, J. A Doe
+        r"^[A-Z]\.?\s+[A-Z][a-z]+(?:[-'\s][A-Z]\.?\s*)?[A-Z][a-z]+$",  # Initial first: J. John Doe
+        r"^[A-Z][a-z]+(?:[-'\s][A-Z][a-z]+){1,3}$",  # Longer names (up to 4 words): Mary Jane Smith Johnson
+        r"^[A-Z][a-z]+(?:[-'\s][A-Z][a-z]+){0,1}$",  # Single or double word: John, John Doe
+    ]
     
     for line in top_lines:
-        line_clean = re.sub(r"[^a-zA-Z\s]+", "", line).strip()
+        # Preserve hyphens and apostrophes in names
+        line_clean = re.sub(r"[^a-zA-Z\s\-']", "", line).strip()
         
         rejected = False
         for pattern in reject_patterns:
@@ -256,13 +272,33 @@ def extract_deterministic_name(text: str) -> str:
         if rejected:
             continue
             
-        if re.match(name_regex, line_clean):
-            return line_clean
-            
-        words = line_clean.split()
-        if line_clean.isupper() and 2 <= len(words) <= 3:
+        # Try all name patterns
+        for name_regex in name_patterns:
+            if re.match(name_regex, line_clean):
+                # Additional validation: must have at least 2 parts or be a valid single name
+                words = [w for w in re.split(r"[-'\s]+", line_clean) if w]
+                if len(words) >= 2:
+                    return line_clean
+                elif len(words) == 1 and len(words[0]) >= 2:
+                    # Single word name - validate it's not a common word
+                    if words[0].lower() not in {"the", "and", "for", "with", "from", "name"}:
+                        return line_clean
+        
+        # Handle ALL CAPS names
+        words = [w for w in re.split(r"[-'\s]+", line_clean) if w]
+        if line_clean.isupper() and 2 <= len(words) <= 4:
             return line_clean.title()
-            
+        
+        # Handle Title Case names with special characters
+        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w):
+            return line_clean
+        
+        # Handle names with mixed case (e.g., "McDonald", "MacDonald")
+        if 2 <= len(words) <= 4:
+            # Check if it looks like a name (starts with capital, contains letters)
+            if all(re.match(r"^[A-Z][a-z]*$", w) for w in words):
+                return line_clean
+    
     return ""
 
 
@@ -331,13 +367,59 @@ def _looks_like_prose_token(cleaned: str, tech_vocab_lower: set) -> bool:
 
 def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab: set) -> list[str]:
     """
-    Section-first skill extraction. 
+    Section-first skill extraction with flexible pattern matching.
     If a dedicated skills section is found, explicitly extracts everything listed in it.
     Otherwise, falls back to vocabulary-matching tech keywords in the full text.
+    Also uses pattern-based extraction to capture skills not in vocabulary.
     """
     extracted_skills = []
     weak_phrases = {"familiar with", "basic knowledge", "exposure to", "worked on", "understanding of"}
     tech_vocab_lower = {v.lower() for v in (tech_vocab or set())}
+    
+    def extract_by_patterns(text: str) -> list[str]:
+        """Extract skills using common patterns even if not in vocabulary."""
+        skills = []
+        lines = text.splitlines()
+        
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 2:
+                continue
+            
+            # Skip section headers
+            line_low = line.lower()
+            if any(h in line_low for h in ("skills", "technologies", "tools", "experience", "education", "projects", "summary", "objective")):
+                if len(line) < 40:
+                    continue
+            
+            # Pattern 1: Comma-separated list
+            if "," in line:
+                for part in line.split(","):
+                    part = part.strip()
+                    if 2 <= len(part) <= 60 and not any(phrase in part.lower() for phrase in weak_phrases):
+                        # Check if it looks like a skill (starts with capital, contains letters)
+                        if part[0].isupper() and re.search(r"[a-zA-Z]{2,}", part):
+                            skills.append(part)
+            
+            # Pattern 2: Bullet points
+            elif line.startswith(("-", "•", "*", "+")) or re.match(r"^\d+\.", line):
+                skill = re.sub(r"^[-•*+\d.\s]+", "", line).strip()
+                if 2 <= len(skill) <= 60 and not any(phrase in skill.lower() for phrase in weak_phrases):
+                    if skill[0].isupper() and re.search(r"[a-zA-Z]{2,}", skill):
+                        skills.append(skill)
+            
+            # Pattern 3: Colon-separated (Category: skill1, skill2)
+            elif ":" in line:
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    skills_part = parts[1].strip()
+                    for skill in re.split(r",\s*", skills_part):
+                        skill = skill.strip()
+                        if 2 <= len(skill) <= 60 and not any(phrase in skill.lower() for phrase in weak_phrases):
+                            if skill[0].isupper() and re.search(r"[a-zA-Z]{2,}", skill):
+                                skills.append(skill)
+        
+        return skills
     
     def process_text_vocab(text):
         words = re.split(r"[,\n|•\u2022;]+", text.lower())
@@ -441,17 +523,27 @@ def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab
         else:
             # Fallback to vocab matching inside section only (never full document)
             extracted_skills.extend(process_text_vocab(skills_section))
+            # Also try pattern-based extraction for skills not in vocabulary
+            extracted_skills.extend(extract_by_patterns(skills_section))
+    else:
+        # No dedicated skills section found - fallback to vocab matching in full text
+        # and pattern-based extraction
+        extracted_skills.extend(process_text_vocab(full_text))
+        extracted_skills.extend(extract_by_patterns(full_text))
         
-    # Format & Deduplicate
+    # Format & Deduplicate with spelling normalization
     final_skills = []
     seen = set()
     for s in extracted_skills:
+        # Normalize spelling first
+        normalized = _normalize_skill_spelling(s)
+        
         # If it's a short technical acronym, uppercase it; otherwise, title-case or preserve case
-        if len(s) <= 3:
-            norm = s.upper()
+        if len(normalized) <= 3:
+            norm = normalized.upper()
         else:
             # Title case if it doesn't already contain camelCase or mixed case
-            norm = s.title() if s.islower() or s.isupper() else s
+            norm = normalized.title() if normalized.islower() or normalized.isupper() else normalized
             
         if norm.lower() not in seen:
             seen.add(norm.lower())
@@ -462,38 +554,186 @@ def extract_skills_deterministic(skills_section: str, full_text: str, tech_vocab
 
 def _build_creative_skill_vocab() -> set[str]:
     """
-    Small add-on vocabulary for design / 3D / media resumes.
+    Expanded vocabulary for design / 3D / media resumes.
     This keeps deterministic extraction useful on non-software resumes
     without depending on an LLM.
     """
     return {
-        "autodesk maya",
-        "maya",
-        "substance painter",
-        "substance 3d painter",
-        "arnold renderer",
-        "arnold",
-        "rizom uv",
-        "adobe photoshop",
-        "photoshop",
-        "blender",
-        "3ds max",
-        "cinema 4d",
-        "zbrush",
-        "after effects",
-        "premiere pro",
-        "figma",
-        "illustrator",
-        "indesign",
-        "corel draw",
-        "photoshop",
-        "rendering",
-        "product visualization",
-        "hard surface modeling",
-        "3d modeling",
-        "texturing",
-        "uv unwrapping",
+        # 3D & Animation
+        "autodesk maya", "maya", "substance painter", "substance 3d painter",
+        "arnold renderer", "arnold", "rizom uv", "blender", "3ds max",
+        "cinema 4d", "zbrush", "houdini", "unreal engine", "unity 3d",
+        # Adobe Creative Suite
+        "adobe photoshop", "photoshop", "after effects", "premiere pro",
+        "illustrator", "indesign", "adobe xd", "lightroom", "bridge",
+        # Design Tools
+        "figma", "sketch", "invision", "corel draw", "affinity designer",
+        "affinity photo", "procreate", "canva",
+        # 3D Skills
+        "rendering", "product visualization", "hard surface modeling",
+        "3d modeling", "texturing", "uv unwrapping", "rigging", "animation",
+        "character modeling", "environment art", "lighting",
+        # Video & Motion
+        "video editing", "motion graphics", "vfx", "compositing",
+        "color grading", "final cut pro", "da vinci resolve",
+        # Additional Creative
+        "graphic design", "ui design", "ux design", "web design",
+        "branding", "typography", "layout design", "digital art",
     }
+
+
+def _normalize_skill_spelling(skill: str) -> str:
+    """
+    Normalize skill spelling by fixing common misspellings and variations.
+    Returns the corrected skill name.
+    """
+    skill_lower = skill.lower().strip()
+    
+    # Common misspellings and variations mapping
+    corrections = {
+        # Programming Languages
+        "javascipt": "JavaScript",
+        "javascript": "JavaScript",
+        "javascrip": "JavaScript",
+        "java script": "JavaScript",
+        "typescript": "TypeScript",
+        "type script": "TypeScript",
+        "phyton": "Python",
+        "pyton": "Python",
+        "python": "Python",
+        "csharp": "C#",
+        "c sharp": "C#",
+        "c++": "C++",
+        "cpp": "C++",
+        "c plus plus": "C++",
+        # Frameworks & Libraries
+        "reactjs": "React",
+        "react js": "React",
+        "react.js": "React",
+        "react": "React",
+        "vuejs": "Vue",
+        "vue js": "Vue",
+        "vue.js": "Vue",
+        "vue": "Vue",
+        "angularjs": "Angular",
+        "angular js": "Angular",
+        "angular.js": "Angular",
+        "angular": "Angular",
+        "nodejs": "Node.js",
+        "node js": "Node.js",
+        "node.js": "Node.js",
+        "node": "Node.js",
+        "expressjs": "Express",
+        "express js": "Express",
+        "express.js": "Express",
+        "express": "Express",
+        "django": "Django",
+        "flask": "Flask",
+        "springboot": "Spring Boot",
+        "spring boot": "Spring Boot",
+        "springboot": "Spring Boot",
+        "laravel": "Laravel",
+        "rails": "Rails",
+        "ruby on rails": "Rails",
+        # Databases
+        "mysql": "MySQL",
+        "postgresql": "PostgreSQL",
+        "postgres": "PostgreSQL",
+        "mongodb": "MongoDB",
+        "mongo": "MongoDB",
+        "mssql": "SQL Server",
+        "sql server": "SQL Server",
+        "sqlite": "SQLite",
+        "redis": "Redis",
+        # Cloud & DevOps
+        "aws": "AWS",
+        "amazon web services": "AWS",
+        "azure": "Azure",
+        "microsoft azure": "Azure",
+        "gcp": "GCP",
+        "google cloud": "GCP",
+        "docker": "Docker",
+        "kubernetes": "Kubernetes",
+        "k8s": "Kubernetes",
+        "jenkins": "Jenkins",
+        "terraform": "Terraform",
+        "ansible": "Ansible",
+        "git": "Git",
+        "github": "GitHub",
+        "gitlab": "GitLab",
+        # Frontend
+        "html": "HTML",
+        "css": "CSS",
+        "bootstrap": "Bootstrap",
+        "tailwind": "Tailwind CSS",
+        "tailwind css": "Tailwind CSS",
+        "jquery": "jQuery",
+        "sass": "SASS",
+        "scss": "SCSS",
+        # Tools & Software
+        "photoshop": "Photoshop",
+        "adobe photoshop": "Photoshop",
+        "illustrator": "Illustrator",
+        "figma": "Figma",
+        "sketch": "Sketch",
+        "blender": "Blender",
+        "maya": "Maya",
+        "autodesk maya": "Maya",
+        "unity": "Unity",
+        "unity 3d": "Unity",
+        "unreal": "Unreal Engine",
+        "unreal engine": "Unreal Engine",
+        # Data Science
+        "tensorflow": "TensorFlow",
+        "pytorch": "PyTorch",
+        "pandas": "Pandas",
+        "numpy": "NumPy",
+        "scikit learn": "Scikit-learn",
+        "scikit-learn": "Scikit-learn",
+        "sklearn": "Scikit-learn",
+        "matplotlib": "Matplotlib",
+        "seaborn": "Seaborn",
+        # Other
+        "excel": "Excel",
+        "microsoft excel": "Excel",
+        "word": "Word",
+        "microsoft word": "Word",
+        "powerpoint": "PowerPoint",
+        "microsoft powerpoint": "PowerPoint",
+        "outlook": "Outlook",
+        "tableau": "Tableau",
+        "power bi": "Power BI",
+        "powerbi": "Power BI",
+        "sap": "SAP",
+        "tally": "Tally",
+        "salesforce": "Salesforce",
+        "jira": "Jira",
+        "confluence": "Confluence",
+        "slack": "Slack",
+        "zoom": "Zoom",
+        "teams": "Microsoft Teams",
+        "microsoft teams": "Microsoft Teams",
+    }
+    
+    # Check for exact match first
+    if skill_lower in corrections:
+        return corrections[skill_lower]
+    
+    # Check for partial match (case-insensitive)
+    for misspelling, correct in corrections.items():
+        if skill_lower == misspelling:
+            return correct
+    
+    # If no correction found, return original with proper casing
+    # Title case for multi-word, uppercase for short acronyms
+    if len(skill) <= 3:
+        return skill.upper()
+    elif skill.isupper():
+        return skill.title()
+    elif skill.islower():
+        return skill.title()
+    else:
+        return skill
 
 
 def _is_valid_person_name(name: str) -> bool:
