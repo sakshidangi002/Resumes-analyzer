@@ -81,22 +81,22 @@ def is_within_event_cooldown(
 
 def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
     if last_event is None:
-        return "CHECK_IN"
-    if last_event.event_type in {"CHECK_IN", "IN"}:
-        return "CHECK_OUT"
-    return "CHECK_IN"
+        return "IN"
+    if last_event.event_type == "IN":
+        return "OUT"
+    return "IN"
 
 
 def calculate_intervals_from_events(
     events: list[AttendanceEvent],
 ) -> tuple[Decimal | None, Decimal | None, time | None, time | None]:
-    """Return total work hours, break hours, first CHECK_IN time, last CHECK_OUT time."""
+    """Return total work hours, break hours, first IN time, last OUT time."""
     if not events:
         return None, None, None, None
 
     sorted_events = sorted(events, key=lambda e: (e.event_time, e.id))
-    in_events = [e for e in sorted_events if e.event_type in {"CHECK_IN", "IN"}]
-    out_events = [e for e in sorted_events if e.event_type in {"CHECK_OUT", "OUT"}]
+    in_events = [e for e in sorted_events if e.event_type == "IN"]
+    out_events = [e for e in sorted_events if e.event_type == "OUT"]
 
     first_in = in_events[0].event_time.time() if in_events else None
     last_out = out_events[-1].event_time.time() if out_events else None
@@ -109,9 +109,9 @@ def calculate_intervals_from_events(
         delta = int((nxt.event_time - cur.event_time).total_seconds())
         if delta <= 0:
             continue
-        if cur.event_type in {"CHECK_IN", "IN"} and nxt.event_type in {"CHECK_OUT", "OUT"}:
+        if cur.event_type == "IN" and nxt.event_type == "OUT":
             total_work_seconds += delta
-        elif cur.event_type in {"CHECK_OUT", "OUT"} and nxt.event_type in {"CHECK_IN", "IN"}:
+        elif cur.event_type == "OUT" and nxt.event_type == "IN":
             total_break_seconds += delta
 
     work_hours = Decimal(round(total_work_seconds / 3600, 2)) if total_work_seconds else Decimal("0")
@@ -218,19 +218,13 @@ def add_attendance_event(
         event_type = determine_next_event_type(last_event)
 
     event_type = event_type.upper()
-    if event_type == "IN":
-        event_type = "CHECK_IN"
-    elif event_type == "OUT":
-        event_type = "CHECK_OUT"
-
-    if event_type not in {"CHECK_IN", "CHECK_OUT"}:
-        raise ValueError("event_type must be CHECK_IN or CHECK_OUT")
+    if event_type not in {"IN", "OUT"}:
+        raise ValueError("event_type must be IN or OUT")
 
     rec = get_or_create_attendance(db, employee_id, d)
     event = AttendanceEvent(
         employee_id=employee_id,
         attendance_record_id=rec.id,
-        attendance_date=d,
         event_time=now_dt,
         event_type=event_type,
         source=source,
@@ -244,25 +238,6 @@ def add_attendance_event(
     db.refresh(event)
     db.refresh(updated)
     return event, updated, event_type
-
-
-def delete_attendance_event(db: Session, event_id: int) -> AttendanceRecord:
-    """Delete an attendance event and recalculate the daily summary."""
-    event = db.query(AttendanceEvent).filter(AttendanceEvent.id == event_id).first()
-    if not event:
-        raise ValueError("Attendance event not found")
-    
-    employee_id = event.employee_id
-    event_date = event.attendance_date or event.event_time.date()
-    
-    db.delete(event)
-    db.flush()
-    
-    # Recalculate summary after deletion
-    rec = recalculate_attendance_summary(db, employee_id, event_date)
-    db.commit()
-    db.refresh(rec)
-    return rec
 
 
 def record_face_attendance(

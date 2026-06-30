@@ -800,7 +800,7 @@
               <div>
                 <div class="fw-bold">${escapeHtml(camera.name)}</div>
                 <div class="small-note">${escapeHtml(camera.source_type.toUpperCase())}: ${escapeHtml(camera.source_url)}</div>
-                <div class="small-note">Threshold ${camera.threshold} · every ${camera.interval_sec}s</div>
+                <div class="small-note">Type: ${escapeHtml(camera.camera_type)} · Threshold ${camera.threshold} · every ${camera.interval_sec}s</div>
               </div>
               <span class="chip ${badge.kind === "success" ? "good" : badge.kind === "danger" ? "bad" : ""}">${badge.text}</span>
             </div>
@@ -816,7 +816,7 @@
                 <div class="d-flex gap-2 flex-wrap mt-3">
                   <button class="btn btn-sm btn-accent start-camera-btn" data-camera-id="${camera.id}">Start</button>
                   <button class="btn btn-sm btn-soft stop-camera-btn" data-camera-id="${camera.id}">Stop</button>
-                  <button class="btn btn-sm btn-soft edit-camera-btn" data-camera-id="${camera.id}" data-camera-name="${escapeHtml(camera.name)}" data-camera-source="${escapeHtml(camera.source_url)}" data-camera-type="${camera.source_type}" data-camera-threshold="${camera.threshold}" data-camera-interval="${camera.interval_sec}">Edit</button>
+                  <button class="btn btn-sm btn-soft edit-camera-btn" data-camera-id="${camera.id}" data-camera-name="${escapeHtml(camera.name)}" data-camera-source="${escapeHtml(camera.source_url)}" data-camera-type="${camera.source_type}" data-camera-purposetype="${escapeHtml(camera.camera_type)}" data-camera-threshold="${camera.threshold}" data-camera-interval="${camera.interval_sec}">Edit</button>
                   <button class="btn btn-sm btn-danger-soft delete-camera-btn" data-camera-id="${camera.id}" data-camera-name="${escapeHtml(camera.name)}">Delete</button>
                 </div>
               </div>
@@ -834,7 +834,7 @@
     testCameraBtn?.addEventListener("click", async () => {
       const formData = new FormData();
       formData.append("source_url", $("cameraSource").value.trim());
-      formData.append("source_type", $("cameraType").value);
+      formData.append("source_type", $("cameraSourceType").value);
       try {
         const data = await apiJson(`${API}/api/cameras/test`, { method: "POST", body: formData });
         setStatus(cameraFormStatus, data.message, data.ok ? "success" : "danger");
@@ -849,7 +849,8 @@
         const formData = new FormData();
         formData.append("name", $("cameraName").value.trim());
         formData.append("source_url", $("cameraSource").value.trim());
-        formData.append("source_type", $("cameraType").value);
+        formData.append("source_type", $("cameraSourceType").value);
+        formData.append("camera_type", $("cameraType").value);
         formData.append("threshold", $("cameraThreshold").value || String(appConfig.default_threshold));
         formData.append("interval_sec", $("cameraInterval").value || "1.5");
         formData.append("enabled", "true");
@@ -888,6 +889,11 @@
           const cameraId = editBtn.dataset.cameraId;
           const name = window.prompt("Camera name", editBtn.dataset.cameraName);
           if (!name) return;
+          const cameraType = window.prompt("Camera purpose (IN or OUT)", editBtn.dataset.cameraPurposetype);
+          if (cameraType && cameraType !== "IN" && cameraType !== "OUT") {
+            setStatus(cameraFormStatus, "Camera purpose must be IN or OUT", "danger");
+            return;
+          }
           const threshold = window.prompt("Threshold (0.30 - 0.90)", editBtn.dataset.cameraThreshold);
           const interval = window.prompt("Interval seconds", editBtn.dataset.cameraInterval);
           await apiJson(`${API}/api/cameras/${cameraId}`, {
@@ -895,6 +901,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: name.trim(),
+              camera_type: cameraType || undefined,
               threshold: threshold ? Number(threshold) : undefined,
               interval_sec: interval ? Number(interval) : undefined,
             }),

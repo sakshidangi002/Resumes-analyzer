@@ -11,6 +11,9 @@ import ManageUsers from "./pages/ManageUsers";
 import DepartmentsDesignations from "./pages/DepartmentsDesignations";
 import Attendance from "./pages/Attendance";
 import FaceDetection from "./pages/FaceDetection";
+import CctvAttendance from "./pages/CctvAttendance";
+import CctvCameraManager from "./pages/CctvCameraManager";
+import DvrCameraDashboard from "./pages/DvrCameraDashboard";
 import Leave from "./pages/Leave";
 import LeaveApprovals from "./pages/LeaveApprovals";
 import LeaveAllocations from "./pages/LeaveAllocations";
@@ -54,6 +57,9 @@ export default function App() {
         <Route path="users" element={<ManageUsers />} />
         <Route path="attendance" element={<Attendance />} />
         <Route path="face-detection" element={<FaceDetection />} />
+        <Route path="cctv-attendance" element={<CctvAttendance />} />
+        <Route path="cctv-cameras" element={<CctvCameraManager />} />
+        <Route path="dvr-cameras" element={<DvrCameraDashboard />} />
         <Route path="leave" element={<Leave />} />
         <Route path="leave-approvals" element={<LeaveApprovals />} />
         <Route path="leave-allocations" element={<LeaveAllocations />} />

@@ -1003,6 +1003,12 @@
             border-color: rgba(56, 189, 248, 0.30);
         }
 
+        .hrms-status-pill--rejected {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.30);
+        }
+
         /* Insights side card */
         .hrms-insights-stack {
             display: flex;
@@ -2343,47 +2349,78 @@
                         </div>
                     </div>
 
-                    <!-- Filter row -->
-                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-3 items-end">
-                        <div class="space-y-1 xl:col-span-4 min-w-0">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Search</label>
-                            <div class="relative">
-                                <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                        stroke-linejoin="round">
-                                        <circle cx="11" cy="11" r="8" />
-                                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                                    </svg>
-                                </span>
-                                <input type="text" id="details-search" oninput="detailsPage=1; renderDetailsTable();"
-                                    placeholder="Search by name, email, location or skill..."
-                                    class="hrms-input hrms-input--with-leading-icon !text-xs">
+                    <!-- Advanced Filter Button -->
+                    <button type="button" onclick="toggleDetailsFilterPanel()" 
+                        class="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                        <div class="flex items-center gap-3">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" class="text-brand-300">
+                                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                            </svg>
+                            <h3 class="font-outfit font-extrabold text-base text-white">Advanced Filters</h3>
+                            <span class="text-[10px] text-slate-500 hidden sm:inline">Click to expand</span>
+                        </div>
+                        <svg id="detailsFilterChevron" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            class="text-slate-300 transition-transform duration-300">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </button>
+
+                    <!-- Advanced Filter Panel -->
+                    <div id="detailsFilterPanel" class="hidden px-5 pb-5 pt-1 border-t border-white/5">
+                        <form onsubmit="applyDetailsFilters(event)"
+                            class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-4 pt-4">
+                            <div>
+                                <label class="hrms-form-eyebrow">Name Contains</label>
+                                <input type="text" id="details-filter-name" placeholder="Candidate name..." class="hrms-input">
                             </div>
-                        </div>
-                        <div class="space-y-1 xl:col-span-2 min-w-0">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">From date</label>
-                            <input type="date" id="details-date-from" oninput="detailsPage=1; renderDetailsTable();"
-                                class="hrms-input !text-xs">
-                        </div>
-                        <div class="space-y-1 xl:col-span-2 min-w-0">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">To date</label>
-                            <input type="date" id="details-date-to" oninput="detailsPage=1; renderDetailsTable();"
-                                class="hrms-input !text-xs">
-                        </div>
-                        <div class="space-y-1 xl:col-span-2 min-w-0">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Technology</label>
-                            <input type="text" id="details-tech-filter" oninput="detailsPage=1; renderDetailsTable();"
-                                placeholder="e.g. React, AWS"
-                                class="hrms-input !text-xs">
-                        </div>
-                        <div class="space-y-1 xl:col-span-2 min-w-0">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Year</label>
-                            <select id="details-year-filter" onchange="detailsPage=1; renderDetailsTable();"
-                                class="hrms-input !text-xs">
-                                <option value="">All years</option>
-                            </select>
-                        </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Email Contains</label>
+                                <input type="text" id="details-filter-email" placeholder="Email contains..." class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Core Skills (AND)</label>
+                                <input type="text" id="details-filter-skills" placeholder="React, Docker, SQL..." class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Shortlisted State</label>
+                                <select id="details-filter-shortlisted" class="hrms-select">
+                                    <option value="All">All Profiles</option>
+                                    <option value="Shortlisted">Shortlisted Only</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Min Exp (Yr)</label>
+                                <input type="number" id="details-filter-min-exp" min="0" value="0" class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Max Exp (Yr)</label>
+                                <input type="number" id="details-filter-max-exp" min="0" value="0" class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">From Date</label>
+                                <input type="date" id="details-filter-from-date" class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">To Date</label>
+                                <input type="date" id="details-filter-to-date" class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Location</label>
+                                <input type="text" id="details-filter-location" placeholder="City, State..." class="hrms-input">
+                            </div>
+                            <div>
+                                <label class="hrms-form-eyebrow">Education</label>
+                                <input type="text" id="details-filter-education" placeholder="Degree, University..." class="hrms-input">
+                            </div>
+                            <div class="lg:col-span-2 flex items-end gap-2">
+                                <button type="submit" class="hrms-btn hrms-btn--primary flex-1">Apply Filters</button>
+                                <button type="button" onclick="resetDetailsFilters()" class="hrms-btn hrms-btn--secondary">Reset</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
 
@@ -3268,6 +3305,14 @@
                     </div>
                 </div>
 
+                <!-- Raw Skills Section (from resume) -->
+                <div id="cv-raw-skills-section" class="hidden">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Raw Skills Section (from Resume)</h4>
+                    </div>
+                    <div id="cv-raw-skills-text" class="p-3 bg-black/25 rounded-xl border border-white/5 text-xs text-slate-300 whitespace-pre-wrap font-mono"></div>
+                </div>
+
                 <!-- Skills Section -->
                 <div>
                     <div class="flex items-center justify-between gap-2 mb-2">
@@ -3521,6 +3566,45 @@
                 if (chevron) chevron.style.transform = 'rotate(0deg)';
                 if (btn) btn.setAttribute('aria-expanded', 'false');
             }
+        }
+
+        // Toggle the collapsible Details Filter panel
+        function toggleDetailsFilterPanel() {
+            const panel = document.getElementById('detailsFilterPanel');
+            const chevron = document.getElementById('detailsFilterChevron');
+            if (!panel) return;
+            const isHidden = panel.classList.contains('hidden');
+            if (isHidden) {
+                panel.classList.remove('hidden');
+                if (chevron) chevron.style.transform = 'rotate(180deg)';
+            } else {
+                panel.classList.add('hidden');
+                if (chevron) chevron.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // Apply filters for Candidate Overview
+        function applyDetailsFilters(event) {
+            event.preventDefault();
+            detailsPage = 1;
+            renderDetailsTable();
+            toggleDetailsFilterPanel();
+        }
+
+        // Reset filters for Candidate Overview
+        function resetDetailsFilters() {
+            document.getElementById('details-filter-name').value = '';
+            document.getElementById('details-filter-email').value = '';
+            document.getElementById('details-filter-skills').value = '';
+            document.getElementById('details-filter-shortlisted').value = 'All';
+            document.getElementById('details-filter-min-exp').value = '0';
+            document.getElementById('details-filter-max-exp').value = '0';
+            document.getElementById('details-filter-from-date').value = '';
+            document.getElementById('details-filter-to-date').value = '';
+            document.getElementById('details-filter-location').value = '';
+            document.getElementById('details-filter-education').value = '';
+            detailsPage = 1;
+            renderDetailsTable();
         }
 
         // ============================================================
@@ -3932,6 +4016,8 @@
                             : '<span style="color: rgba(255,255,255,0.35); font-size: 0.72rem;">—</span>';
                         const status = r.is_shortlisted
                             ? '<span class="hrms-status-pill hrms-status-pill--shortlisted">Shortlisted</span>'
+                            : r.is_rejected
+                            ? '<span class="hrms-status-pill hrms-status-pill--rejected">Rejected</span>'
                             : '<span class="hrms-status-pill hrms-status-pill--new">New</span>';
                         const initials = _dashInitials(name);
                         const color = _dashColor(idx);
@@ -3942,6 +4028,7 @@
                                         <span class="hrms-avatar" style="background: ${color}33; color: ${color}; border-color: ${color}55;">${escapeHtml(initials)}</span>
                                         <span style="min-width: 0;">
                                             <span class="hrms-candidate-name">${escapeHtml(name)}</span>
+                                            ${status}
                                             <span class="hrms-candidate-role">${escapeHtml(role)}</span>
                                         </span>
                                     </div>
@@ -4125,9 +4212,11 @@
 
                 // Skills badges
                 const primary = getAllSkills(r);
-                const pills = primary.slice(0, 3).map(s =>
-                    `<span class="px-2 py-0.5 rounded bg-brand-900/50 border border-brand-300/10 text-brand-300 text-[9px] leading-none cursor-pointer hover:bg-brand-500/20 hover:border-brand-400/40 transition-colors">${s}</span>`
-                ).join(" ");
+                const pills = primary.length > 0 
+                    ? primary.slice(0, 3).map(s =>
+                        `<span class="px-2 py-0.5 rounded bg-brand-900/50 border border-brand-300/10 text-brand-300 text-[9px] leading-none cursor-pointer hover:bg-brand-500/20 hover:border-brand-400/40 transition-colors">${s}</span>`
+                    ).join(" ")
+                    : '<span class="text-slate-500 italic text-[9px]">—</span>';
                 const countBadge = primary.length > 3 ? `<span class="text-[9px] text-slate-500 font-medium cursor-pointer">+${primary.length - 3}</span>` : "";
 
                 // Contact block
@@ -4244,61 +4333,61 @@
         }
 
         function _detailsFilteredRows() {
-            const search = (document.getElementById("details-search")?.value || "").trim().toLowerCase();
-            const techFilter = (document.getElementById("details-tech-filter")?.value || "").trim().toLowerCase();
-            const designationFilter = (document.getElementById("details-designation-filter")?.value || "").trim().toLowerCase();
-            const dateFrom = (document.getElementById("details-date-from")?.value || "").trim();
-            const dateTo = (document.getElementById("details-date-to")?.value || "").trim();
-            const yearFilter = (document.getElementById("details-year-filter")?.value || "").trim();
+            const nameFilter = (document.getElementById("details-filter-name")?.value || "").trim().toLowerCase();
+            const emailFilter = (document.getElementById("details-filter-email")?.value || "").trim().toLowerCase();
+            const skillsFilter = (document.getElementById("details-filter-skills")?.value || "").trim().toLowerCase();
+            const shortlistedFilter = (document.getElementById("details-filter-shortlisted")?.value || "All");
+            const minExpFilter = parseFloat(document.getElementById("details-filter-min-exp")?.value || "0");
+            const maxExpFilter = parseFloat(document.getElementById("details-filter-max-exp")?.value || "0");
+            const dateFrom = (document.getElementById("details-filter-from-date")?.value || "").trim();
+            const dateTo = (document.getElementById("details-filter-to-date")?.value || "").trim();
+            const locationFilter = (document.getElementById("details-filter-location")?.value || "").trim().toLowerCase();
+            const educationFilter = (document.getElementById("details-filter-education")?.value || "").trim().toLowerCase();
 
             let result = resumes.slice();
 
-            if (search) {
+            if (nameFilter) {
                 result = result.filter(r => {
-                    const blob = [
-                        r.name, r.email, r.phone, r.role, r.location, r.current_company,
-                        Array.isArray(r.primary_skills) ? r.primary_skills.join(" ") : r.primary_skills,
-                        Array.isArray(r.other_skills) ? r.other_skills.join(" ") : r.other_skills,
-                        Array.isArray(r.skills) ? r.skills.join(" ") : r.skills,
-                        Array.isArray(r.companies_worked_at) ? r.companies_worked_at.join(" ") : r.companies_worked_at,
-                        Array.isArray(r.education) ? r.education.join(" ") : r.education,
-                        Array.isArray(r.projects) ? r.projects.join(" ") : r.projects,
-                        r.summary, r.experience_summary
-                    ].map(v => (v == null ? "" : String(v).toLowerCase())).join(" ");
-                    return blob.includes(search);
+                    const name = (r.name || "").toLowerCase();
+                    return name.includes(nameFilter);
                 });
             }
 
-            if (techFilter) {
+            if (emailFilter) {
                 result = result.filter(r => {
-                    const techBlob = [
+                    const email = (r.email || "").toLowerCase();
+                    return email.includes(emailFilter);
+                });
+            }
+
+            if (skillsFilter) {
+                const skillTerms = skillsFilter.split(',').map(s => s.trim().toLowerCase()).filter(s => s);
+                result = result.filter(r => {
+                    const skillsBlob = [
                         r.primary_skills,
                         r.other_skills,
                         r.skills,
                         r.key_skills
                     ].map(v => Array.isArray(v) ? v.join(" ") : (v == null ? "" : String(v))).join(" ").toLowerCase();
-                    return techBlob.includes(techFilter);
+                    return skillTerms.every(term => skillsBlob.includes(term));
                 });
             }
 
-            if (designationFilter) {
+            if (shortlistedFilter === "Shortlisted") {
+                result = result.filter(r => r.is_shortlisted);
+            }
+
+            if (minExpFilter > 0) {
                 result = result.filter(r => {
-                    const designationBlob = [
-                        r.role,
-                        r.current_company
-                    ].map(v => (v == null ? "" : String(v))).join(" ").toLowerCase();
-                    return designationBlob.includes(designationFilter);
+                    const exp = parseFloat(r.experience_years) || 0;
+                    return exp >= minExpFilter;
                 });
             }
 
-            if (yearFilter) {
+            if (maxExpFilter > 0) {
                 result = result.filter(r => {
-                    if (!r.created_at) return false;
-                    try {
-                        return new Date(r.created_at).getFullYear() === Number(yearFilter);
-                    } catch (_) {
-                        return false;
-                    }
+                    const exp = parseFloat(r.experience_years) || 0;
+                    return exp <= maxExpFilter;
                 });
             }
 
@@ -4313,6 +4402,20 @@
                 result = result.filter(r => {
                     if (!r.created_at) return false;
                     return new Date(r.created_at) <= new Date(`${dateTo}T23:59:59`);
+                });
+            }
+
+            if (locationFilter) {
+                result = result.filter(r => {
+                    const location = (r.location || "").toLowerCase();
+                    return location.includes(locationFilter);
+                });
+            }
+
+            if (educationFilter) {
+                result = result.filter(r => {
+                    const educationBlob = Array.isArray(r.education) ? r.education.join(" ") : (r.education || "");
+                    return educationBlob.toLowerCase().includes(educationFilter);
                 });
             }
 
@@ -5379,9 +5482,11 @@
                 resultsBox.innerHTML = "";
                 results.forEach(r => {
                     const primary = getAllSkills(r);
-                    const pills = primary.slice(0, 3).map(s =>
-                        `<span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px]">${s}</span>`
-                    ).join(" ");
+                    const pills = primary.length > 0
+                        ? primary.slice(0, 3).map(s =>
+                            `<span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px]">${s}</span>`
+                        ).join(" ")
+                        : '<span class="text-slate-500 italic text-[10px]">—</span>';
 
                     resultsBox.innerHTML += `
                         <div class="flex-1 bg-white/[0.02] border border-white/5 hover:border-white/15 p-5 rounded-2xl flex flex-col gap-4 min-w-0 transition-all shadow-lg">
@@ -6142,6 +6247,16 @@
             document.getElementById("cv-phone").innerText = candidate.phone || "No phone provided";
             document.getElementById("cv-experience").innerText = `${parseFloat(candidate.experience_years || 0).toFixed(1)} yr (${candidate.experience_level || 'Mid'} level)`;
             document.getElementById("cv-location").innerText = candidate.location || "No location provided";
+
+            // Display raw skills text if available
+            const rawSkillsSection = document.getElementById("cv-raw-skills-section");
+            const rawSkillsText = document.getElementById("cv-raw-skills-text");
+            if (candidate.raw_skills_text && candidate.raw_skills_text.trim()) {
+                rawSkillsSection.classList.remove("hidden");
+                rawSkillsText.innerText = candidate.raw_skills_text.trim();
+            } else {
+                rawSkillsSection.classList.add("hidden");
+            }
 
             setSkillsModalEditMode(!!startInEditMode);
             document.getElementById("candidateSkillsModal").classList.remove("hidden");

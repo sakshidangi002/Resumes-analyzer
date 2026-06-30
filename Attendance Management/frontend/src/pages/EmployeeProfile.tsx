@@ -471,7 +471,7 @@ export default function EmployeeProfile() {
             });
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.error("Failed to delete event:", err);
         alert("Failed to delete event. Please try again.");
       });
@@ -671,13 +671,13 @@ export default function EmployeeProfile() {
     if (!canViewProfile || !employeeId || tab !== "attendance_details") return;
     setEventsLoading(true);
     attendanceApi
-      .listEvents(employeeId)
+      .listEvents(employeeId, selectedDetailDate || new Date().toISOString().split('T')[0])
       .then((res) => {
         setEventHistory(res.data || []);
       })
       .catch(() => setEventHistory([]))
       .finally(() => setEventsLoading(false));
-  }, [tab, employeeId, canViewProfile]);
+  }, [tab, employeeId, canViewProfile, selectedDetailDate]);
 
 
 

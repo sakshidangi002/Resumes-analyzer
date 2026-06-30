@@ -1,7 +1,7 @@
 """Attendance records and correction requests."""
 from datetime import datetime, date, time
 from sqlalchemy import Column, Integer, Date, Time, ForeignKey, Boolean, DateTime, String, Numeric
-from sqlalchemy.orm import relationship, synonym
+from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
 from app.core.datetime_utils import get_ist_now
@@ -25,9 +25,6 @@ class AttendanceRecord(Base):
     source = Column(String(20), default="SELF")  # SELF, AUTO, CORRECTION
     created_at = Column(DateTime, default=get_ist_now)
     updated_at = Column(DateTime, default=get_ist_now, onupdate=get_ist_now)
-
-    first_check_in = synonym("sign_in_time")
-    last_check_out = synonym("sign_out_time")
 
     employee = relationship("Employee", backref="attendance_records")
 
@@ -57,9 +54,9 @@ class AttendanceEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
     attendance_record_id = Column(Integer, ForeignKey("attendance_records.id"), nullable=True, index=True)
-    attendance_date = Column(Date, nullable=False, index=True)
+    attendance_date = Column(Date, nullable=False, index=True)  # required NOT NULL column in DB
     event_time = Column(DateTime, nullable=False, index=True)
-    event_type = Column(String(10), nullable=False)  # CHECK_IN / CHECK_OUT
+    event_type = Column(String(10), nullable=False)  # IN / OUT / BREAK_IN / BREAK_OUT
     source = Column(String(20), nullable=False, default="AUTO")  # AUTO / MANUAL
     camera_id = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=get_ist_now)

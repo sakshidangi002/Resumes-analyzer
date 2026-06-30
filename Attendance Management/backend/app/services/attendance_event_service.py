@@ -1,7 +1,8 @@
 """Biometric attendance events: IN/OUT toggling, cooldown, daily summary recalculation."""
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+import logging
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -15,7 +16,43 @@ from app.services.attendance_service import (
     get_or_create_attendance,
 )
 
-EVENT_COOLDOWN_SECONDS = 60
+logger = logging.getLogger(__name__)
+
+EVENT_COOLDOWN_SECONDS = 25
+
+def to_naive_ist(dt: datetime) -> datetime:
+    """Normalise any datetime (aware or naive) to timezone-naive local IST datetime.
+
+    This ensures that it is stored exactly as-is without database-side offset conversions.
+    """
+    if dt.tzinfo is not None:
+        try:
+            import zoneinfo
+            IST = zoneinfo.ZoneInfo("Asia/Kolkata")
+        except Exception:
+            IST = timezone(timedelta(hours=5, minutes=30))
+        return dt.astimezone(IST).replace(tzinfo=None)
+    return dt
+
+_WORK_START_EVENTS = {"IN", "BREAK_IN"}
+_WORK_END_EVENTS = {"OUT", "BREAK_OUT"}
+
+
+def _normalize_event_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip().upper().replace("-", "_").replace(" ", "_")
+    if cleaned in {"CHECK_IN", "ENTRY", "ARRIVAL"}:
+        return "IN"
+    if cleaned in {"CHECK_OUT", "EXIT", "DEPARTURE"}:
+        return "OUT"
+    if cleaned in {"BREAKIN", "BREAK_IN"}:
+        return "BREAK_IN"
+    if cleaned in {"BREAKOUT", "BREAK_OUT"}:
+        return "BREAK_OUT"
+    if cleaned in {"IN", "OUT"}:
+        return cleaned
+    return cleaned or None
 
 
 def _day_bounds(d: date) -> tuple[datetime, datetime]:
@@ -25,13 +62,11 @@ def _day_bounds(d: date) -> tuple[datetime, datetime]:
 
 
 def get_events_for_day(db: Session, employee_id: int, d: date) -> list[AttendanceEvent]:
-    start, end = _day_bounds(d)
     return (
         db.query(AttendanceEvent)
         .filter(
             AttendanceEvent.employee_id == employee_id,
-            AttendanceEvent.event_time >= start,
-            AttendanceEvent.event_time <= end,
+            AttendanceEvent.attendance_date == d,
         )
         .order_by(AttendanceEvent.event_time.asc(), AttendanceEvent.id.asc())
         .all()
@@ -39,13 +74,11 @@ def get_events_for_day(db: Session, employee_id: int, d: date) -> list[Attendanc
 
 
 def get_latest_event_for_day(db: Session, employee_id: int, d: date) -> AttendanceEvent | None:
-    start, end = _day_bounds(d)
     return (
         db.query(AttendanceEvent)
         .filter(
             AttendanceEvent.employee_id == employee_id,
-            AttendanceEvent.event_time >= start,
-            AttendanceEvent.event_time <= end,
+            AttendanceEvent.attendance_date == d,
         )
         .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
         .first()
@@ -63,55 +96,61 @@ def is_within_event_cooldown(
     Scoping to the current day prevents a late-night event from blocking
     the employee's first check-in of the following morning.
     """
-    day_start, day_end = _day_bounds(now_dt.date())
+    now_naive = to_naive_ist(now_dt)
+    today = now_naive.date()
     latest = (
         db.query(AttendanceEvent)
         .filter(
             AttendanceEvent.employee_id == employee_id,
-            AttendanceEvent.event_time >= day_start,
-            AttendanceEvent.event_time <= day_end,
+            AttendanceEvent.attendance_date == today,
         )
         .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
         .first()
     )
     if latest is None:
         return False
-    return (now_dt - latest.event_time).total_seconds() < cooldown_seconds
+    latest_naive = to_naive_ist(latest.event_time)
+    return (now_naive - latest_naive).total_seconds() < cooldown_seconds
 
 
 def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
     if last_event is None:
-        return "CHECK_IN"
-    if last_event.event_type in {"CHECK_IN", "IN"}:
-        return "CHECK_OUT"
-    return "CHECK_IN"
+        return "IN"
+    last_type = _normalize_event_type(last_event.event_type) or last_event.event_type
+    if last_type in _WORK_START_EVENTS:
+        return "OUT"
+    return "IN"
 
 
 def calculate_intervals_from_events(
     events: list[AttendanceEvent],
 ) -> tuple[Decimal | None, Decimal | None, time | None, time | None]:
-    """Return total work hours, break hours, first CHECK_IN time, last CHECK_OUT time."""
+    """Return total work hours, break hours, first IN time, last OUT time."""
     if not events:
         return None, None, None, None
 
-    sorted_events = sorted(events, key=lambda e: (e.event_time, e.id))
-    in_events = [e for e in sorted_events if e.event_type in {"CHECK_IN", "IN"}]
-    out_events = [e for e in sorted_events if e.event_type in {"CHECK_OUT", "OUT"}]
+    sorted_events = sorted(events, key=lambda e: (to_naive_ist(e.event_time), e.id))
+    in_events = [e for e in sorted_events if _normalize_event_type(e.event_type) in _WORK_START_EVENTS]
+    out_events = [e for e in sorted_events if _normalize_event_type(e.event_type) in _WORK_END_EVENTS]
 
-    first_in = in_events[0].event_time.time() if in_events else None
-    last_out = out_events[-1].event_time.time() if out_events else None
+    first_in = to_naive_ist(in_events[0].event_time).time() if in_events else None
+    last_out = to_naive_ist(out_events[-1].event_time).time() if out_events else None
 
     total_work_seconds = 0
     total_break_seconds = 0
     for i in range(len(sorted_events) - 1):
         cur = sorted_events[i]
         nxt = sorted_events[i + 1]
-        delta = int((nxt.event_time - cur.event_time).total_seconds())
+        cur_t = to_naive_ist(cur.event_time)
+        nxt_t = to_naive_ist(nxt.event_time)
+        delta = int((nxt_t - cur_t).total_seconds())
         if delta <= 0:
             continue
-        if cur.event_type in {"CHECK_IN", "IN"} and nxt.event_type in {"CHECK_OUT", "OUT"}:
+        cur_type = _normalize_event_type(cur.event_type)
+        nxt_type = _normalize_event_type(nxt.event_type)
+        if cur_type in _WORK_START_EVENTS and nxt_type in _WORK_END_EVENTS:
             total_work_seconds += delta
-        elif cur.event_type in {"CHECK_OUT", "OUT"} and nxt.event_type in {"CHECK_IN", "IN"}:
+        elif cur_type in _WORK_END_EVENTS and nxt_type in _WORK_START_EVENTS:
             total_break_seconds += delta
 
     work_hours = Decimal(round(total_work_seconds / 3600, 2)) if total_work_seconds else Decimal("0")
@@ -180,11 +219,20 @@ def recalculate_attendance_summary(db: Session, employee_id: int, d: date) -> At
 
 
 def validate_event_time(event_time: datetime) -> None:
-    now = get_ist_now()
-    if event_time.date() > date.today():
+    """Validate that event_time is not in the future.
+
+    Handles both timezone-aware and timezone-naive event_time values safely
+    by converting everything to naive local IST datetimes.
+    """
+    now = get_ist_now()  # naive IST
+    event_time_naive = to_naive_ist(event_time)
+
+    if event_time_naive.date() > date.today():
         raise ValueError("Cannot record attendance for future dates")
-    if event_time > now + timedelta(seconds=5):
-        raise ValueError("Cannot record future event time")
+    if event_time_naive > now + timedelta(seconds=5):
+        raise ValueError(
+            f"Cannot record future event time: event={event_time_naive.isoformat()} now={now.isoformat()}"
+        )
 
 
 def add_attendance_event(
@@ -195,74 +243,80 @@ def add_attendance_event(
     *,
     source: str = "AUTO",
     camera_id: str | None = None,
+    camera_purpose: str | None = None,  # "IN" | "OUT" – forces event_type when set
     skip_cooldown: bool = False,
     cooldown_seconds: int = EVENT_COOLDOWN_SECONDS,
 ) -> tuple[AttendanceEvent | None, AttendanceRecord, str]:
     """
     Create an attendance event and refresh the daily summary.
 
-    Returns (event, attendance_record, action) where action is the event_type created
-    or 'cooldown' when ignored.
+    When camera_purpose is "IN" or "OUT" it OVERRIDES the auto-toggle logic,
+    ensuring a Check-In camera always records IN and a Check-Out camera OUT.
+
+    Returns (event, attendance_record, action) where action is the event_type
+    created or 'cooldown' when ignored.
     """
-    now_dt = (event_time or get_ist_now()).replace(microsecond=0)
+    now_dt = to_naive_ist(event_time or get_ist_now()).replace(microsecond=0)
     validate_event_time(now_dt)
 
     if not skip_cooldown and is_within_event_cooldown(db, employee_id, now_dt, cooldown_seconds):
         rec = get_or_create_attendance(db, employee_id, now_dt.date())
         db.refresh(rec)
+        logger.info(
+            "attendance_event COOLDOWN employee_id=%s within_%ds_window attendance_date=%s",
+            employee_id, cooldown_seconds, now_dt.date(),
+        )
         return None, rec, "cooldown"
 
     d = now_dt.date()
-    if event_type is None:
+
+    # Resolve event_type priority:
+    #   1. Explicit caller override  (event_type param)
+    #   2. Camera purpose            (camera_purpose param)
+    #   3. Auto-toggle from last event
+    if event_type is not None:
+        resolved_type = event_type
+    else:
+        resolved_type = camera_purpose
+
+    resolved_type = _normalize_event_type(resolved_type)
+    if resolved_type is None:
         last_event = get_latest_event_for_day(db, employee_id, d)
-        event_type = determine_next_event_type(last_event)
+        resolved_type = determine_next_event_type(last_event)
 
-    event_type = event_type.upper()
-    if event_type == "IN":
-        event_type = "CHECK_IN"
-    elif event_type == "OUT":
-        event_type = "CHECK_OUT"
-
-    if event_type not in {"CHECK_IN", "CHECK_OUT"}:
-        raise ValueError("event_type must be CHECK_IN or CHECK_OUT")
+    resolved_type = _normalize_event_type(resolved_type) or ""
+    if resolved_type not in {"IN", "OUT", "BREAK_IN", "BREAK_OUT"}:
+        raise ValueError("event_type must be IN, OUT, BREAK_IN, or BREAK_OUT")
 
     rec = get_or_create_attendance(db, employee_id, d)
     event = AttendanceEvent(
         employee_id=employee_id,
         attendance_record_id=rec.id,
-        attendance_date=d,
+        attendance_date=d,          # NOT NULL column — must be set explicitly
         event_time=now_dt,
-        event_type=event_type,
+        event_type=resolved_type,
         source=source,
         camera_id=camera_id,
     )
     db.add(event)
     db.flush()
+    logger.info(
+        "attendance_event INSERT employee_id=%s event_type=%s event_time=%s camera_id=%s",
+        employee_id, resolved_type, now_dt.isoformat(), camera_id,
+    )
 
     updated = recalculate_attendance_summary(db, employee_id, d)
     db.commit()
     db.refresh(event)
     db.refresh(updated)
-    return event, updated, event_type
-
-
-def delete_attendance_event(db: Session, event_id: int) -> AttendanceRecord:
-    """Delete an attendance event and recalculate the daily summary."""
-    event = db.query(AttendanceEvent).filter(AttendanceEvent.id == event_id).first()
-    if not event:
-        raise ValueError("Attendance event not found")
-    
-    employee_id = event.employee_id
-    event_date = event.attendance_date or event.event_time.date()
-    
-    db.delete(event)
-    db.flush()
-    
-    # Recalculate summary after deletion
-    rec = recalculate_attendance_summary(db, employee_id, event_date)
-    db.commit()
-    db.refresh(rec)
-    return rec
+    logger.info(
+        "attendance_event COMMITTED employee_id=%s event_id=%s sign_in=%s sign_out=%s "
+        "work_hours=%s status=%s",
+        employee_id, event.id,
+        updated.sign_in_time, updated.sign_out_time,
+        updated.total_work_hours, updated.status,
+    )
+    return event, updated, resolved_type
 
 
 def record_face_attendance(
@@ -270,16 +324,24 @@ def record_face_attendance(
     employee_id: int,
     now_dt: datetime | None = None,
     camera_id: str | None = None,
+    camera_purpose: str | None = None,
+    event_type: str | None = None,
 ) -> tuple[AttendanceEvent | None, AttendanceRecord, str]:
-    """Face recognition entry point with 60s duplicate protection."""
+    """Face recognition entry point with 60s duplicate protection.
+
+    camera_purpose ("IN"|"OUT") forces the event direction when provided,
+    overriding the normal auto-toggle behaviour.
+    """
     now_dt = (now_dt or get_ist_now()).replace(microsecond=0)
     try:
         result = add_attendance_event(
             db,
             employee_id,
             event_time=now_dt,
+            event_type=event_type,
             source="AUTO",
             camera_id=camera_id,
+            camera_purpose=camera_purpose,
         )
         event, rec, action = result
         if action == "cooldown":

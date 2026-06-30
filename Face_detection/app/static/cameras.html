@@ -76,9 +76,16 @@
               </div>
               <div>
                 <label class="form-label fw-semibold">Source type</label>
-                <select class="form-select" id="cameraType">
+                <select class="form-select" id="cameraSourceType">
                   <option value="rtsp" selected>RTSP (CCTV / IP camera)</option>
                   <option value="usb">USB index (server-side webcam)</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label fw-semibold">Camera purpose</label>
+                <select class="form-select" id="cameraType">
+                  <option value="IN" selected>Check-in (IN)</option>
+                  <option value="OUT">Check-out (OUT)</option>
                 </select>
               </div>
               <div>

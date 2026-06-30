@@ -375,6 +375,13 @@ export default function FaceDetection() {
     return updated;
   };
 
+  /**
+   * Check whether a detection for this employee should be skipped because
+   * the last event was less than DETECTION_COOLDOWN_MS ago.
+   *
+   * This is a client-side guard; the backend has its own 60-second cooldown
+   * that is the authoritative source.
+   */
   const handleAttendanceResult = (_face: FacePayload, result: RecognitionResult) => {
     const att = result.attendance;
     if (!att || att.employee_id == null) return;
@@ -385,10 +392,15 @@ export default function FaceDetection() {
     const cached = mergeAttendanceCache(empId, att);
 
     // Determine human-readable event label
+    const evtType = (att.event_type || "").toUpperCase();
     const eventLabel =
-      att.event_type === "OUT" || att.event_type === "CHECK_OUT" ? "✓ Check-Out"
-      : att.event_type === "IN" || att.event_type === "CHECK_IN" ? "✓ Check-In"
-      : "Attendance recorded";
+      evtType === "OUT"       ? "✓ Check-Out"
+      : evtType === "IN"      ? "✓ Check-In"
+      : evtType === "BREAK_OUT" ? "✓ Break Out"
+      : evtType === "BREAK_IN"  ? "✓ Break In"
+      : att.event_type
+        ? `✓ ${att.event_type}`
+        : "Attendance recorded";
 
     setAttendanceStatus(`${eventLabel} recorded for ${att.employee_name}.`);
 
@@ -435,10 +447,7 @@ export default function FaceDetection() {
       // Update recognized-name display for first matched face
       if (recognizedFaces.length) {
         const first = recognizedFaces[0];
-        // Update lastEmployee name/id/code without overwriting attendance summary
-        // (full update happens in handleAttendanceResult when attendance is returned)
         if (first.employee_id != null && !attendanceCacheRef.current.has(first.employee_id)) {
-          // Show name even before first attendance event
           setLastEmployee((prev) => ({
             ...prev,
             name: first.employee_name,
@@ -448,33 +457,74 @@ export default function FaceDetection() {
         }
       }
 
-      // The face state from backend determines what happened:
-      // "in" / "out"        → attendance event recorded (IN or OUT)
-      // "cooldown"          → duplicate ignored by backend (60 s)
-      // "already_marked"    → same as cooldown
-      // "marked_in"         → legacy: first mark of the day
-      // "recognized"        → photo/non-webcam source, no attendance
+      // Face states returned by the backend:
+      // "in"                → IN event recorded (Check-In or Break-In)
+      // "out"               → OUT event recorded (Check-Out or Break-Out)
+      // "break_in"          → BREAK_IN event recorded
+      // "break_out"         → BREAK_OUT event recorded
+      // "cooldown"          → Duplicate scan within 60 s — ignored
+      // "already_marked"    → Legacy cooldown alias
+      // "marked_in"         → Legacy: first mark of the day
+      // "recognized"        → Non-webcam source (photo upload), no attendance
+      // "attendance_failed" → DB/constraint error writing attendance
+      // "validation_failed" → Timezone or date validation error
+      // "unknown"           → Employee not found or inactive
+
       const markedFace = faces.find((f) =>
-        f.state === "in" || f.state === "out" || f.state === "marked_in" || f.state === "check_in" || f.state === "check_out"
+        f.state === "in" || f.state === "out" ||
+        f.state === "break_in" || f.state === "break_out" ||
+        f.state === "marked_in"
       );
       const cooldownFace = faces.find((f) =>
         f.state === "cooldown" || f.state === "already_marked"
       );
+      const failedFace = faces.find((f) =>
+        f.state === "attendance_failed" || f.state === "validation_failed"
+      );
 
       if (data.attendance?.employee_id != null) {
-        // A real attendance event was recorded
+        // A real attendance event was recorded — update UI
         const actingFace = markedFace ?? recognizedFaces[0];
         if (actingFace) {
           handleAttendanceResult(actingFace, data);
         }
-      } else if (cooldownFace) {
-        // Backend rejected — within 60 s cooldown
-        setAttendanceStatus(
-          `${cooldownFace.employee_name} – duplicate scan ignored (within 60 s cooldown).`
+      } else if (failedFace) {
+        // ⚠ Attendance write failed on backend — show error prominently
+        const reason = failedFace.state === "validation_failed"
+          ? "date/time validation error"
+          : "database error";
+        setCameraError(
+          `⚠ Attendance NOT recorded for ${failedFace.employee_name}: ${reason}. ` +
+          `Check backend logs for details (STEP-9 or STEP-8).`
         );
+        setAttendanceStatus(
+          `❌ Attendance failed for ${failedFace.employee_name}. See error above.`
+        );
+      } else if (cooldownFace) {
+        // Backend rejected — within 60 s cooldown (this is normal, not an error)
+        const cached = cooldownFace.employee_id != null
+          ? attendanceCacheRef.current.get(cooldownFace.employee_id)
+          : undefined;
+        if (cached) {
+          // Already have attendance data — just keep last status, don't spam
+          setAttendanceStatus(
+            `${cooldownFace.employee_name} – already marked. Next scan allowed after 60 s.`
+          );
+        } else {
+          setAttendanceStatus(
+            `${cooldownFace.employee_name} – duplicate scan ignored (within 60 s cooldown).`
+          );
+        }
       } else if (recognizedFaces.length && !data.attendance) {
-        // Recognized but no attendance action taken (e.g. non-webcam source)
-        setAttendanceStatus(`${recognizedFaces[0].employee_name} recognized. Attendance tracked.`);
+        // Recognized but no attendance was written (non-webcam source or unhandled state)
+        const faceName = recognizedFaces[0].employee_name;
+        const faceState = recognizedFaces[0].state;
+        if (faceState === "recognized") {
+          setAttendanceStatus(`${faceName} recognized (photo mode – attendance not auto-marked).`);
+        } else {
+          // Unknown state returned — show it so operators can diagnose
+          setAttendanceStatus(`${faceName} recognized but no attendance recorded (state: ${faceState}).`);
+        }
       } else if (unknownFaces > 0 && recognizedFaces.length === 0) {
         setAttendanceStatus("Unknown person detected. No attendance action taken.");
       }
@@ -486,10 +536,20 @@ export default function FaceDetection() {
       } else {
         setScanStatus("Unknown face detected.");
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Recognition request failed.";
-      setCameraError(message);
-      setScanStatus("Recognition stopped because of an error.");
+    } catch (err: unknown) {
+      // Extract the most useful error message — check for axios response detail first
+      let message = "Recognition request failed.";
+      if (err && typeof err === "object") {
+        const axiosErr = err as { response?: { data?: { detail?: string }; status?: number }; message?: string };
+        if (axiosErr.response?.data?.detail) {
+          message = `Server error (${axiosErr.response.status}): ${axiosErr.response.data.detail}`;
+        } else if (axiosErr.message) {
+          message = axiosErr.message;
+        }
+      }
+      setCameraError(`⚠ ${message}`);
+      setScanStatus("Recognition error – retrying on next scan.");
+      // Don't stop the loop for transient errors (network blip, etc.)
     } finally {
       busyRef.current = false;
     }
@@ -736,13 +796,13 @@ export default function FaceDetection() {
                     marginBottom: "0.85rem",
                     fontSize: "0.8rem",
                     fontWeight: 700,
-                    background: lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT"
+                    background: lastEmployee.lastEventType === "OUT"
                       ? "rgba(239,68,68,0.15)"
                       : "rgba(34,197,94,0.15)",
-                    border: `1px solid ${lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"}`,
-                    color: lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "#fca5a5" : "#86efac",
+                    border: `1px solid ${lastEmployee.lastEventType === "OUT" ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"}`,
+                    color: lastEmployee.lastEventType === "OUT" ? "#fca5a5" : "#86efac",
                   }}>
-                    {lastEmployee.lastEventType === "OUT" || lastEmployee.lastEventType === "CHECK_OUT" ? "⬆ Checked Out" : "⬇ Checked In"}
+                    {lastEmployee.lastEventType === "OUT" ? "⬆ Checked Out" : "⬇ Checked In"}
                     {lastEmployee.lastEventTime ? ` at ${lastEmployee.lastEventTime}` : ""}
                   </div>
                 )}

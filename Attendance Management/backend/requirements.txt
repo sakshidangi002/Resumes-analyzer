@@ -1,4 +1,4 @@
-﻿# Web
+# Web
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 aiofiles>=23.0.0
@@ -40,9 +40,13 @@ tzdata>=2024.1
 pywebpush>=2.0.0
 
 
-# Face recognition
+# Face recognition / CCTV
 numpy>=1.24.0
 pillow>=10.0.0
+# IMPORTANT: use ONLY opencv-python (includes FFmpeg+RTSP).
+# Do NOT install opencv-python-headless or opencv-contrib-python alongside it
+# as they overwrite cv2.so and break FFmpeg/RTSP support.
 opencv-python>=4.8.0
 insightface>=0.7.3
 onnxruntime>=1.16.0
+scikit-image>=0.21.0

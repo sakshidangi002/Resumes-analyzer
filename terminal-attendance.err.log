@@ -1,8 +1,0 @@
-INFO:     Started server process [16556]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:5001 (Press CTRL+C to quit)
-C:\sakshi folder\application\Resume analyzer\Attendance Management\backend\app\api\routes\company.py:84: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
-  .filter(AttendanceRecord.employee_id.in_(active_emp_ids_subq))
-C:\sakshi folder\application\Resume analyzer\Attendance Management\backend\app\api\routes\company.py:97: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
-  LeaveRequest.employee_id.in_(active_emp_ids_subq),

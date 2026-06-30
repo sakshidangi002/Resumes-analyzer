@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import User, AttendanceRecord, AttendanceCorrectionRequest, Employee, AttendanceEvent
+from app.models import User, AttendanceRecord, AttendanceCorrectionRequest, Employee
 from app.schemas.attendance import (
     AttendanceRecordResponse,
     AttendanceCorrectionRequestCreate,
@@ -29,7 +29,6 @@ from app.services.attendance_event_service import (
     add_attendance_event,
     get_events_for_day,
     recalculate_attendance_summary,
-    delete_attendance_event,
 )
 
 router = APIRouter()
@@ -182,7 +181,7 @@ def create_attendance_event(
 @router.get("/events", response_model=list[AttendanceEventResponse])
 def list_attendance_events(
     employee_id: int = Query(...),
-    event_date: date | None = Query(None, alias="date"),
+    event_date: date = Query(..., alias="date"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -195,16 +194,7 @@ def list_attendance_events(
     ):
         if current_user.employee_id != employee_id:
             raise HTTPException(status_code=403, detail="Not allowed to view other employees' events")
-    
-    if event_date:
-        return get_events_for_day(db, employee_id, event_date)
-    else:
-        return (
-            db.query(AttendanceEvent)
-            .filter(AttendanceEvent.employee_id == employee_id)
-            .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
-            .all()
-        )
+    return get_events_for_day(db, employee_id, event_date)
 
 
 @router.get("/details", response_model=AttendanceDetailsResponse)
@@ -246,20 +236,6 @@ def get_attendance_details(
         is_late=rec.is_late,
         is_early_exit=rec.is_early_exit,
     )
-
-
-@router.delete("/events/{event_id}", response_model=AttendanceRecordResponse)
-def delete_event(
-    event_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(["Admin", "HR"])),
-):
-    """Delete an attendance event and recalculate the daily summary."""
-    try:
-        rec = delete_attendance_event(db, event_id)
-        return rec
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/recalculate", response_model=AttendanceRecordResponse)

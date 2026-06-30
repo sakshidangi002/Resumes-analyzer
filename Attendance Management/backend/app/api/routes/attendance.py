@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import User, AttendanceRecord, AttendanceCorrectionRequest, Employee, AttendanceEvent
+from app.models import User, AttendanceRecord, AttendanceCorrectionRequest, Employee
 from app.schemas.attendance import (
     AttendanceRecordResponse,
     AttendanceCorrectionRequestCreate,
@@ -29,7 +29,6 @@ from app.services.attendance_event_service import (
     add_attendance_event,
     get_events_for_day,
     recalculate_attendance_summary,
-    delete_attendance_event,
 )
 
 router = APIRouter()
@@ -182,7 +181,7 @@ def create_attendance_event(
 @router.get("/events", response_model=list[AttendanceEventResponse])
 def list_attendance_events(
     employee_id: int = Query(...),
-    event_date: date | None = Query(None, alias="date"),
+    event_date: date = Query(..., alias="date"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -195,16 +194,7 @@ def list_attendance_events(
     ):
         if current_user.employee_id != employee_id:
             raise HTTPException(status_code=403, detail="Not allowed to view other employees' events")
-    
-    if event_date:
-        return get_events_for_day(db, employee_id, event_date)
-    else:
-        return (
-            db.query(AttendanceEvent)
-            .filter(AttendanceEvent.employee_id == employee_id)
-            .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
-            .all()
-        )
+    return get_events_for_day(db, employee_id, event_date)
 
 
 @router.get("/details", response_model=AttendanceDetailsResponse)
@@ -246,20 +236,6 @@ def get_attendance_details(
         is_late=rec.is_late,
         is_early_exit=rec.is_early_exit,
     )
-
-
-@router.delete("/events/{event_id}", response_model=AttendanceRecordResponse)
-def delete_event(
-    event_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(["Admin", "HR"])),
-):
-    """Delete an attendance event and recalculate the daily summary."""
-    try:
-        rec = delete_attendance_event(db, event_id)
-        return rec
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/recalculate", response_model=AttendanceRecordResponse)
@@ -432,6 +408,166 @@ def list_correction_requests(
     if status:
         q = q.filter(AttendanceCorrectionRequest.status == status)
     return q.order_by(AttendanceCorrectionRequest.created_at.desc()).all()
+
+
+@router.get("/today")
+def get_today_attendance(
+    department_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
+):
+    """Get today's attendance for all employees (or filtered by department)."""
+    from app.core.datetime_utils import get_ist_now
+    from app.services.attendance_event_service import get_events_for_day, recalculate_attendance_summary
+    
+    today = get_ist_now().date()
+    
+    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    if department_id is not None:
+        q = q.filter(Employee.department_id == department_id)
+    employees = q.order_by(Employee.employee_code.asc()).all()
+    
+    attendance_list = []
+    for emp in employees:
+        rec = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.employee_id == emp.id,
+                AttendanceRecord.date == today,
+            )
+            .first()
+        )
+        
+        if rec:
+            rec = recalculate_attendance_summary(db, emp.id, today)
+            events = get_events_for_day(db, emp.id, today)
+        else:
+            events = []
+        
+        attendance_list.append({
+            "employee_id": emp.id,
+            "employee_code": emp.employee_code,
+            "employee_name": emp.full_name,
+            "department": emp.department.name if emp.department else None,
+            "status": rec.status if rec else "ABSENT",
+            "sign_in_time": rec.sign_in_time.isoformat() if rec and rec.sign_in_time else None,
+            "sign_out_time": rec.sign_out_time.isoformat() if rec and rec.sign_out_time else None,
+            "total_work_hours": float(rec.total_work_hours) if rec and rec.total_work_hours else 0,
+            "total_break_hours": float(rec.total_break_hours) if rec and rec.total_break_hours else 0,
+            "is_late": rec.is_late if rec else False,
+            "is_early_exit": rec.is_early_exit if rec else False,
+            "event_count": len(events),
+        })
+    
+    return attendance_list
+
+
+@router.get("/live-status")
+def get_live_attendance_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
+):
+    """Get real-time attendance status for all active employees today."""
+    from app.core.datetime_utils import get_ist_now
+    from app.services.attendance_event_service import get_latest_event_for_day
+    
+    today = get_ist_now().date()
+    
+    # Get all active employees
+    employees = db.query(Employee).filter(Employee.employment_status == "Active").all()
+    
+    status_list = []
+    for emp in employees:
+        rec = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.employee_id == emp.id,
+                AttendanceRecord.date == today,
+            )
+            .first()
+        )
+        latest_event = get_latest_event_for_day(db, emp.id, today)
+        
+        status_list.append({
+            "employee_id": emp.id,
+            "employee_code": emp.employee_code,
+            "employee_name": emp.full_name,
+            "department": emp.department.name if emp.department else None,
+            "status": rec.status if rec else "ABSENT",
+            "sign_in_time": rec.sign_in_time.isoformat() if rec and rec.sign_in_time else None,
+            "sign_out_time": rec.sign_out_time.isoformat() if rec and rec.sign_out_time else None,
+            "total_work_hours": float(rec.total_work_hours) if rec and rec.total_work_hours else 0,
+            "total_break_hours": float(rec.total_break_hours) if rec and rec.total_break_hours else 0,
+            "last_event_type": latest_event.event_type if latest_event else None,
+            "last_event_time": latest_event.event_time.isoformat() if latest_event else None,
+        })
+    
+    return status_list
+
+
+@router.get("/employee/{employee_id}/history")
+def get_employee_attendance_history(
+    employee_id: int,
+    from_date: date = Query(...),
+    to_date: date = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
+):
+    """Get detailed attendance history for an employee with events."""
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    from app.services.attendance_event_service import get_events_for_day, recalculate_attendance_summary
+    
+    history = []
+    current_date = from_date
+    while current_date <= to_date:
+        rec = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.employee_id == employee_id,
+                AttendanceRecord.date == current_date,
+            )
+            .first()
+        )
+        
+        if rec:
+            rec = recalculate_attendance_summary(db, employee_id, current_date)
+            events = get_events_for_day(db, employee_id, current_date)
+        else:
+            events = []
+        
+        history.append({
+            "date": current_date.isoformat(),
+            "sign_in_time": rec.sign_in_time.isoformat() if rec and rec.sign_in_time else None,
+            "sign_out_time": rec.sign_out_time.isoformat() if rec and rec.sign_out_time else None,
+            "total_work_hours": float(rec.total_work_hours) if rec and rec.total_work_hours else 0,
+            "total_break_hours": float(rec.total_break_hours) if rec and rec.total_break_hours else 0,
+            "status": rec.status if rec else "ABSENT",
+            "is_late": rec.is_late if rec else False,
+            "is_early_exit": rec.is_early_exit if rec else False,
+            "is_weekly_off": rec.is_weekly_off if rec else False,
+            "is_holiday": rec.is_holiday if rec else False,
+            "events": [
+                {
+                    "event_time": e.event_time.isoformat(),
+                    "event_type": e.event_type,
+                    "source": e.source,
+                    "camera_id": e.camera_id,
+                }
+                for e in events
+            ],
+        })
+        
+        current_date = date.fromordinal(current_date.toordinal() + 1)
+    
+    return {
+        "employee_id": employee_id,
+        "employee_code": employee.employee_code,
+        "employee_name": employee.full_name,
+        "history": history,
+    }
 
 
 @router.patch("/correction-requests/{request_id}", response_model=AttendanceCorrectionRequestResponse)

@@ -61,10 +61,10 @@ const Icons = {
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
     </svg>
   ),
-  Clock: () => (
+  Eye: () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"></circle>
-      <polyline points="12 6 12 12 16 14"></polyline>
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
     </svg>
   ),
   Calendar: () => (
@@ -113,19 +113,14 @@ export default function Attendance() {
   const [dialogRecords, setDialogRecords] = useState<AttendanceRow[]>([]);
   const [dialogLoading, setDialogLoading] = useState(false);
 
-
-
   const formatCompactDuration = (hours: number | null | undefined) => {
     if (hours == null) return "-";
-    const totalSeconds = Math.round(Number(hours) * 3600);
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
-    if (h <= 0 && m <= 0) return `${s}s`;
-    if (h <= 0) return `${m}m ${s}s`;
-    if (m <= 0 && s <= 0) return `${h}h`;
-    if (s <= 0) return `${h}h ${m}m`;
-    return `${h}h ${m}m ${s}s`;
+    const totalMinutes = Math.round(Number(hours) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (h <= 0) return `${m}m`;
+    if (m <= 0) return `${h}h`;
+    return `${h}h ${m}m`;
   };
 
   const formatTime12h = (timeStr: string | null | undefined) => {
@@ -356,6 +351,7 @@ export default function Attendance() {
       member: (r) => `${r.info.first_name} ${r.info.last_name}`,
       sign_in_time: (r) => r.rec?.sign_in_time || "",
       sign_out_time: (r) => r.rec?.sign_out_time || "",
+      required: (r) => r.info.expected_working_hours || 9,
       working_hours: (r) => Number(r.rec?.total_work_hours ?? 0),
       break_time: (r) => Number(r.rec?.total_break_hours ?? 0),
       status: (r) => effectiveStatus(r),
@@ -456,8 +452,9 @@ export default function Attendance() {
             <thead>
               <tr>
                 <SortableHeader label="Member" columnKey="member" sort={attendanceSort} onToggle={toggleAttendanceSort} style={{ paddingLeft: '1.5rem' }} />
-                <SortableHeader label="First Check-In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Last Check-Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="First In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Last Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
+                <SortableHeader label="Required Time" columnKey="required" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Working Hours" columnKey="working_hours" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Break Time" columnKey="break_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
                 <SortableHeader label="Status" columnKey="status" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
@@ -467,13 +464,13 @@ export default function Attendance() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <SectionLoader size="md" />
                   </td>
                 </tr>
               ) : displayedEmployeeRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
                     No attendance rows match your search.
                   </td>
                 </tr>
@@ -481,21 +478,10 @@ export default function Attendance() {
                 displayedEmployeeRows.map(({ info, rec }) => {
                   const rawStatus = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
 
-                  // Status logic:
-                  // - For today, if checked in but not checked out: show "Present"
-                  // - If checked out: calculate final status based on working hours
+                  // If DB says ABSENT but employee has actual working hours recorded,
+                  // derive the real status from total_work_hours vs expected
                   let s = rawStatus;
-                  if (selectedDate === todayIso && rec?.sign_in_time && !rec?.sign_out_time) {
-                    // Currently checked in - show Present
-                    s = "PRESENT";
-                  } else if (rec?.sign_out_time && rec?.total_work_hours != null && rec.total_work_hours > 0) {
-                    // Checked out - calculate final status based on working hours
-                    const expected = info.expected_working_hours || 9;
-                    if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
-                    else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
-                    else s = "SHORT";
-                  } else if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
-                    // Fallback for past dates with working hours but no sign_out_time
+                  if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
                     const expected = info.expected_working_hours || 9;
                     if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
                     else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
@@ -514,27 +500,25 @@ export default function Attendance() {
                         {(rec?.sign_out_time && rec.sign_out_time !== "00:00:00") ? formatTime12h(rec.sign_out_time) : "-"}
                       </td>
                       <td style={{ opacity: 0.9, textAlign: 'center' }}>
+                        {s === "WEEKLY_OFF" || s === "HOLIDAY" ? "-" : `${info.expected_working_hours || 9} Hours`}
+                      </td>
+                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
                         {(() => {
-                          // For today, if employee has sign_in_time, calculate running time from first check-in
-                          // Subtract break time to get actual working hours
-                          if (rec?.sign_in_time && selectedDate === todayIso) {
+                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
+                            return formatCompactDuration(rec.total_work_hours);
+                          }
+                          if (rec?.sign_in_time && selectedDate === todayIso && !rec?.sign_out_time) {
                             const [h, m, sec] = rec.sign_in_time.split(':').map(Number);
                             const start = new Date();
                             start.setHours(h, m, sec, 0);
                             if (nowTick > start) {
                               const diffHours = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
-                              const breakHours = rec?.total_break_hours || 0;
-                              const workHours = Math.max(0, diffHours - breakHours);
                               return (
                                 <span style={{ color: "rgb(34, 192, 93)", fontWeight: 600, fontSize: "0.95rem" }}>
-                                  {formatCompactDuration(workHours)}
+                                  {formatCompactDuration(diffHours)}
                                 </span>
                               );
                             }
-                          }
-                          // For past dates, show static total_work_hours
-                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
-                            return formatCompactDuration(rec.total_work_hours);
                           }
                           return "-";
                         })()}
@@ -556,7 +540,7 @@ export default function Attendance() {
                       <td style={{ textAlign: 'center' }}>
                         <div className="actions-stack" style={{ justifyContent: 'center', display: 'flex', gap: '0.35rem' }}>
                           <button className="btn-icon-circle" onClick={() => setDetailsEmployee(info)} title="View Attendance Details">
-                            <Icons.Clock />
+                            <Icons.Eye />
                           </button>
                           <button className="btn-icon-circle" onClick={() => { setAttendanceDialogEmployee(info); setDialogMonth(month); setDialogYear(year); }} title="View Monthly Attendance History">
                             <Icons.Calendar />

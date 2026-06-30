@@ -179,7 +179,7 @@ class ResumeDB(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, index=True)
-    email = Column(String, unique=True, index=True)
+    email = Column(String, nullable=True, unique=True, index=True)
     phone = Column(String)
     location = Column(Text)
     skills = Column(Text)
@@ -209,6 +209,7 @@ class ResumeDB(Base):
     key_skills = Column(Text, nullable=True)
     primary_skills = Column(Text, nullable=True)
     other_skills = Column(Text, nullable=True)
+    raw_skills_text = Column(Text, nullable=True)
     employee_id = Column(Integer, nullable=True)
     
     # Newly requested details form fields
@@ -265,6 +266,7 @@ class ResumeSchema(BaseModel):
     key_skills: List[str] = []
     primary_skills: List[str] = []
     other_skills: List[str] = []
+    raw_skills_text: str = ""
 
 
 class AnalyzeFitRequest(BaseModel):
@@ -484,6 +486,7 @@ def _run_migrations():
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS key_skills TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS primary_skills TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS other_skills TEXT",
+        "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS raw_skills_text TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual_upload'",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS total_experience_years FLOAT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS experience_level VARCHAR(50)",
@@ -1189,6 +1192,35 @@ async def upload_resume(
                 )
             else:
                 resume_text = _extract_text_from_bytes(file_bytes, ext, BASE_DIR)
+            
+            # STAGE 1: PDF TEXT EXTRACTION DEBUG LOGS
+            logger.info(f"=== STAGE 1: PDF TEXT EXTRACTION DEBUG ===")
+            logger.info(f"File: {file.filename}")
+            logger.info(f"Extension: {ext}")
+            logger.info(f"Raw extracted text length: {len(resume_text)} characters")
+            logger.info(f"Raw extracted text (first 1000 chars):\n{resume_text[:100000]}")
+            
+            # Check for sections
+            text_lower = resume_text.lower()
+            has_skills = any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"])
+            has_experience = any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"])
+            has_education = any(kw in text_lower for kw in ["education", "academic", "qualification"])
+            has_projects = any(kw in text_lower for kw in ["projects", "project experience"])
+            
+            logger.info(f"Section detection - Skills: {has_skills}, Experience: {has_experience}, Education: {has_education}, Projects: {has_projects}")
+            
+            # Check for broken words (PDF extraction artifacts)
+            broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
+            if broken_words:
+                logger.warning(f"Potential broken words detected: {broken_words[:10]}")
+            
+            # Check for spacing artifacts
+            spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
+            if spaced_words:
+                logger.warning(f"Potential spacing artifacts: {spaced_words[:5]}")
+            
+            logger.info(f"=== END STAGE 1 ===")
+            
             logger.info("Text extracted from %s: %d chars", file.filename, len(resume_text))
             if not (resume_text or resume_text.strip()):
                 results[i] = {"status": "error", "file": file.filename, "message": "Text extraction produced no content."}
@@ -1236,23 +1268,36 @@ async def upload_resume(
             except Exception as _gate_exc:
                 logger.warning("Extraction validation gate failed for %s: %s", filename, _gate_exc)
 
-            # Skills repair: prefer deterministic section-aware extraction over
-            # the broader LLM-derived list when we have any usable signal.
-            try:
-                primary_clean, other_clean = _derive_clean_skills_from_text(norm_text or resume_text or "")
-                deterministic_skills = primary_clean + other_clean
-                if deterministic_skills:
-                    extracted["primary_skills"] = primary_clean
-                    extracted["other_skills"] = other_clean
-                    extracted["skills"] = deterministic_skills
-                    extracted["key_skills"] = primary_clean[:15] if primary_clean else deterministic_skills[:15]
-            except Exception as _skills_exc:
-                logger.debug("Skills split skipped for %s: %s", filename, _skills_exc)
+            # Skills repair: DISABLED - V3 extraction is already working correctly
+            # The _derive_clean_skills_from_text function was overriding V3 skills with
+            # incorrect extraction from Languages/Interests sections instead of technical skills.
+            # V3 already does proper section-aware extraction with confidence scoring.
+            # try:
+            #     primary_clean, other_clean = _derive_clean_skills_from_text(norm_text or resume_text or "")
+            #     deterministic_skills = primary_clean + other_clean
+            #     if deterministic_skills:
+            #         extracted["primary_skills"] = primary_clean
+            #         extracted["other_skills"] = other_clean
+            #         extracted["skills"] = deterministic_skills
+            #         extracted["key_skills"] = primary_clean[:15] if primary_clean else deterministic_skills[:15]
+            # except Exception as _skills_exc:
+            #     logger.debug("Skills split skipped for %s: %s", filename, _skills_exc)
 
             # Sanitize NUL characters from all extracted string fields before schemas and DB write
             extracted = sanitize_db_string(extracted)
 
             cleaned = ResumeSchema(**extracted)
+
+            # STAGE 6: DATABASE SAVE DEBUG LOGS
+            logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG ===")
+            logger.info(f"Before database save - Name: {cleaned.name}")
+            logger.info(f"Before database save - Skills: {cleaned.skills}")
+            logger.info(f"Before database save - Number of skills: {len(cleaned.skills) if cleaned.skills else 0}")
+            logger.info(f"Before database save - Experience years: {cleaned.experience_years}")
+            logger.info(f"Before database save - Primary skills: {cleaned.primary_skills}")
+            logger.info(f"Before database save - Other skills: {cleaned.other_skills}")
+            logger.info(f"Before database save - Key skills: {cleaned.key_skills}")
+            logger.info(f"=== END STAGE 6 (BEFORE SAVE) ===")
 
             if cleaned.experience_years == 0.0:
                 cleaned.experience_years = calculate_experience_years(cleaned.experience_summary or "")
@@ -1354,7 +1399,7 @@ async def upload_resume(
             def _make_record(include_new_cols: bool = True) -> ResumeDB:
                 base = dict(
                     name=_sanitize_name(cleaned.name) or cleaned.name or "",
-                    email=cleaned.email,
+                    email=cleaned.email if cleaned.email else None,
                     phone=cleaned.phone,
                     location=cleaned.location or "",
                     skills=_dump_text_list(cleaned.skills),
@@ -1382,6 +1427,7 @@ async def upload_resume(
                         key_skills=_dump_text_list(getattr(cleaned, "key_skills", []) or []),
                         primary_skills=_dump_text_list(getattr(cleaned, "primary_skills", []) or []),
                         other_skills=_dump_text_list(getattr(cleaned, "other_skills", []) or []),
+                        raw_skills_text=getattr(cleaned, "raw_skills_text", "") or "",
                         is_shortlisted=False,
                         tags=None,
                         deleted_at=None,
@@ -1395,6 +1441,19 @@ async def upload_resume(
             try:
                 db.commit()
                 db.refresh(db_record)
+                
+                # STAGE 6: DATABASE SAVE DEBUG LOGS (after save)
+                logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG (AFTER SAVE) ===")
+                logger.info(f"After database save - Record ID: {db_record.id}")
+                logger.info(f"After database save - Name: {db_record.name}")
+                logger.info(f"After database save - Skills: {db_record.skills}")
+                logger.info(f"After database save - Number of skills: {len(_parse_text_list(db_record.skills))}")
+                logger.info(f"After database save - Experience years: {db_record.experience_years}")
+                logger.info(f"After database save - Primary skills: {db_record.primary_skills}")
+                logger.info(f"After database save - Other skills: {db_record.other_skills}")
+                logger.info(f"After database save - Key skills: {db_record.key_skills}")
+                logger.info(f"=== END STAGE 6 (AFTER SAVE) ===")
+                
                 if db_record.email:
                     try:
                         emp_row = db.execute(

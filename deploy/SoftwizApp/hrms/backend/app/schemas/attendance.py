@@ -17,8 +17,6 @@ class AttendanceRecordResponse(BaseModel):
     date: date
     sign_in_time: Optional[time] = None
     sign_out_time: Optional[time] = None
-    first_check_in: Optional[time] = None
-    last_check_out: Optional[time] = None
     total_work_hours: Optional[float] = None
     total_break_hours: Optional[float] = None
     status: str
@@ -89,7 +87,6 @@ class AttendanceEventResponse(BaseModel):
     id: int
     employee_id: int
     attendance_record_id: Optional[int] = None
-    attendance_date: date
     event_time: datetime
     event_type: str
     source: str
@@ -107,8 +104,6 @@ class AttendanceDetailsResponse(BaseModel):
     events: list[AttendanceEventResponse]
     sign_in_time: Optional[time] = None
     sign_out_time: Optional[time] = None
-    first_check_in: Optional[time] = None
-    last_check_out: Optional[time] = None
     total_work_hours: Optional[float] = None
     total_break_hours: Optional[float] = None
     status: str
@@ -123,8 +118,6 @@ class DailyAttendanceReportRow(BaseModel):
     date: date
     sign_in_time: Optional[time] = None
     sign_out_time: Optional[time] = None
-    first_check_in: Optional[time] = None
-    last_check_out: Optional[time] = None
     total_work_hours: Optional[float] = None
     total_break_hours: Optional[float] = None
     expected_working_hours: Optional[float] = None

@@ -106,10 +106,10 @@ export const attendance = {
     api.post("/attendance/auto-mark", data),
   addEvent: (data: { employee_id: number; event_time?: string | null; event_type?: string | null; source?: string; camera_id?: string | null }) =>
     api.post("/attendance/events", data),
-  listEvents: (employee_id: number, date?: string) =>
-    api.get("/attendance/events", { params: { employee_id, date } }),
   deleteEvent: (event_id: number) =>
     api.delete("/attendance/events/" + event_id),
+  listEvents: (employee_id: number, date: string) =>
+    api.get("/attendance/events", { params: { employee_id, date } }),
   details: (employee_id: number, date: string) =>
     api.get("/attendance/details", { params: { employee_id, date } }),
   recalculate: (employee_id: number, date: string) =>
@@ -124,15 +124,22 @@ export const attendance = {
 };
 
 export const recognition = {
-  recognizeFrame: (file: Blob, threshold?: number) => {
+  recognizeFrame: (file: Blob, threshold?: number, cameraId?: string | null, cameraPurpose?: string | null) => {
     const formData = new FormData();
     formData.append("file", file);
+    // Build query params
+    const params: Record<string, string | number> = {};
+    if (threshold != null) params.threshold = threshold;
+    if (cameraId != null) params.camera_id = cameraId;
+    if (cameraPurpose != null) params.camera_purpose = cameraPurpose;
     // Call the main HRMS backend (port 5001/5002) directly
     return api.post("/recognize-frame", formData, {
-      params: threshold != null ? { threshold } : undefined,
+      params: Object.keys(params).length > 0 ? params : undefined,
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+  recognizeCctvFrame: (data: { stream_url: string; threshold?: number; camera_id?: string | null; camera_type?: string }) =>
+    api.post("/recognize-cctv-frame", data),
   registerFace: (employee_id: number, name: string, department: string, images: FileList | File[]) => {
     const formData = new FormData();
     formData.append("employee_id", String(employee_id));
@@ -451,3 +458,57 @@ export const dsr = {
       user_ids,
     }),
 };
+
+export const cameras = {
+  list: () => api.get("/cameras"),
+  get: (id: number) => api.get(`/cameras/${id}`),
+  create: (data: {
+    name: string;
+    location?: string;
+    source_url: string;
+    source_type?: string;
+    camera_purpose: string;
+    threshold?: number;
+    interval_sec?: number;
+    enabled?: boolean;
+  }) => api.post("/cameras", data),
+  update: (id: number, data: {
+    name?: string;
+    location?: string;
+    source_url?: string;
+    source_type?: string;
+    camera_purpose?: string;
+    threshold?: number;
+    interval_sec?: number;
+    enabled?: boolean;
+  }) => api.put(`/cameras/${id}`, data),
+  remove: (id: number) => api.delete(`/cameras/${id}`),
+  start: (id: number) => api.post(`/cameras/${id}/start`),
+  stop: (id: number) => api.post(`/cameras/${id}/stop`),
+  restart: (id: number) => api.post(`/cameras/${id}/restart`),
+  status: (id: number) => api.get(`/cameras/${id}/status`),
+  previewUrl: (id: number) => `/api/cameras/${id}/preview.jpg`,
+  testConnection: (data: { source_url: string; source_type?: string }) =>
+    api.post("/cameras/test-connection", data),
+  stats: () => api.get("/cameras/stats"),
+  discoverDVR: (data: { ip: string; port: number; username: string; password: string }) =>
+    api.post("/dvr/discover", data),
+};
+
+export const dvr = {
+  connect: (data: { ip: string; port: number; username: string; password: string }) =>
+    api.post("/dvr/connect", data),
+  disconnect: () => api.post("/dvr/disconnect"),
+  status: () => api.get("/dvr/status"),
+  startCamera: (channelId: number) => api.post(`/dvr/cameras/${channelId}/start`),
+  stopCamera: (channelId: number) => api.post(`/dvr/cameras/${channelId}/stop`),
+  setRecognition: (channelId: number, enabled: boolean) =>
+    api.post(`/dvr/cameras/${channelId}/recognition`, null, { params: { enabled } }),
+  startAll: () => api.post("/dvr/cameras/start-all"),
+  stopAll: () => api.post("/dvr/cameras/stop-all"),
+  previewUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/preview`,
+  streamUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/stream`,
+};
+
+
+

@@ -10,6 +10,7 @@ const Icons = {
   Dashboard: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>,
   Attendance: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M6 20V10M18 20V4"></path></svg>,
   FaceDetection: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 8c0-2.2 1.8-4 4-4h8c2.2 0 4 1.8 4 4v8c0 2.2-1.8 4-4 4H8c-2.2 0-4-1.8-4-4V8z"></path><path d="M9 10h0"></path><path d="M15 10h0"></path><path d="M9 15c1 .8 2 .8 3 .8s2-.3 3-.8"></path></svg>,
+  Cctv: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l7-4 7 4-7 4-7-4z"></path><path d="M10 15v5"></path><path d="M10 20h6"></path><path d="M10 15l4 2"></path></svg>,
   Profile: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>,
   Employees: () => (
     <svg
@@ -85,6 +86,15 @@ export default function DashboardLayout() {
             </NavLink>
             <NavLink to="/face-detection" onClick={closeSidebar}>
               <Icons.FaceDetection /> Face Detection
+            </NavLink>
+            <NavLink to="/cctv-attendance" onClick={closeSidebar}>
+              <Icons.Cctv /> CCTV Attendance
+            </NavLink>
+            <NavLink to="/cctv-cameras" onClick={closeSidebar}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg> Camera Manager
+            </NavLink>
+            <NavLink to="/dvr-cameras" onClick={closeSidebar}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> DVR Dashboard
             </NavLink>
             <NavLink to="/calendar" onClick={closeSidebar}>
               <Icons.Calendar /> Calendar

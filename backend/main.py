@@ -815,6 +815,11 @@ _SKILLS_SECTION_HEADERS = {
     "technical focus",
     "specialized skills",
     "professional skills",
+    # Combined headers (e.g., "SKILLS EDUCATION")
+    "skills education",
+    "skills & education",
+    "technical skills education",
+    "key skills education",
     "technical background",
     "development languages",
     "frameworks & libraries",
@@ -1394,6 +1399,12 @@ def _is_plausible_person_name(candidate: str) -> bool:
     # Common header-y phrases that show up as "names" in PDFs
     if any(x in norm for x in ("key skills", "technical skills", "programming languages", "languages")):
         return False
+    # Job title keywords that should not be treated as names
+    if any(tok in norm for tok in ("full", "stack", "front-end", "frontend", "backend", "back-end", "senior", "junior", "intern", "trainee", "assistant")):
+        return False
+    # Testing-related keywords that should not be treated as names
+    if any(tok in norm for tok in ("testing", "test", "cross-browser", "regression", "smoke", "sanity", "functional", "manual", "automation", "qa", "quality", "assurance")):
+        return False
     if any(tok in norm for tok in _GENERIC_NAME_REJECT_WORDS):
         return False
     if norm in {"phone", "email", "location", "experience"}:
@@ -1510,6 +1521,8 @@ def extract_name_from_header(resume_text: str) -> str:
             return False
         n = _norm_header(raw)
         if not n or n in _HEADER_BAD_NAMES or n in _COMMON_SECTION_HEADERS or n in _SKILLS_SECTION_HEADERS:
+            return False
+        if not _is_plausible_person_name(raw):
             return False
         if n in {"hindi", "english"}:
             return False
@@ -1684,7 +1697,7 @@ def _collect_name_candidate_records(resume_text: str, email: str) -> list[dict]:
 
     if email:
         email_name = _name_from_email_local(email)
-        if email_name:
+        if email_name and _is_plausible_person_name(email_name):
             add(email_name, "email")
 
     for idx, ln in enumerate(lines[:40]):
@@ -1857,7 +1870,7 @@ def rank_name_candidates(resume_text: str, email: str, candidates: list[str] | N
 
     if not records and email:
         email_name = _name_from_email_local(email)
-        if email_name:
+        if email_name and _is_plausible_person_name(email_name):
             records = [{"value": email_name, "sources": {"email"}, "line_indices": set()}]
 
     attempts: list[dict] = []
@@ -1966,7 +1979,7 @@ def reconcile_name_with_email(name: str, email: str) -> tuple[str, list[str]]:
     if _is_extracted_name_acceptable(cleaned):
         return cleaned, warnings
 
-    if email_name:
+    if email_name and _is_plausible_person_name(email_name):
         if cleaned:
             warnings.append("name_from_email_fallback")
         else:
@@ -2063,6 +2076,19 @@ _GENERIC_NAME_REJECT_WORDS = {
     "language",
     "languages",
     "driven",
+    "learning",
+    "running",
+    "working",
+    "testing",
+    "managed",
+    "developed",
+    "implemented",
+    "handled",
+    "built",
+    "created",
+    "team",
+    "teams",
+    "management",
     "retail",
     "decision",
     "conditional",
@@ -2200,6 +2226,10 @@ def select_best_name(candidates: list[str], resume_text: str, email: str) -> tup
     plausible = [c for c in candidates if _is_plausible_person_name(c)]
     if plausible:
         candidates = plausible
+    else:
+        # Fail closed: if nothing looks like a person name, do not promote a
+        # section title or job title just because it scored slightly higher.
+        candidates = []
 
     text_lower = (resume_text or "").lower()
     email_local = (email or "").split("@", 1)[0].lower()
@@ -2280,7 +2310,10 @@ def select_best_name(candidates: list[str], resume_text: str, email: str) -> tup
             best_score = score
             best_name = c
 
-    # Reject best candidate if score is too low OR is a known bad header
+    # Reject best candidate if score is too low or it still does not look like
+    # a person name after scoring.
+    if best_name and not _is_plausible_person_name(best_name):
+        best_name = ""
     if best_score < 0.2 or (best_name and _norm_header(best_name) in _HEADER_BAD_NAMES.union(_COMMON_SECTION_HEADERS).union(_SKILLS_SECTION_HEADERS)):
         best_name = ""
 
@@ -2771,7 +2804,7 @@ def extract_skills_from_text(resume_text: str) -> list[str]:
         if not s:
             _note_skip("empty")
             continue
-        if _looks_like_header(s) and not _is_skills_header_line(s):
+        if _looks_like_header(s) and not _is_skills_header_line(s) and not _is_core_tech_label(s):
             _note_skip("header")
             continue
         if len(s) > 120 and not any(sep in s for sep in (",", ";", "|", "/", "•", "·", "&")):
@@ -3228,7 +3261,7 @@ def validate_and_repair_extraction(extracted: dict, resume_text: str) -> tuple[d
 
         if (not (out.get("name") or "").strip()) and email:
             email_name = _name_from_email_local(email)
-            if email_name:
+            if email_name and _is_plausible_person_name(email_name):
                 out["name"] = email_name
                 name = out["name"]
                 warnings.append("name_repaired_from_email")
@@ -3519,9 +3552,10 @@ def extract_resume(resume_text: str) -> dict:
     base_text = resume_text_sanitised or resume_text
     resume_lower = (base_text or "").lower()
 
-    # Parse explicit SKILLS section (highest precision source; section-only policy)
+    # Parse explicit SKILLS section only (highest precision source; section-only policy)
+    skills_block = _find_section_block(base_text, _SKILLS_SECTION_HEADERS, max_lines=60)
     try:
-        section_skills = extract_skills_from_text(base_text)
+        section_skills = extract_skills_from_text(skills_block) if skills_block else []
     except Exception as exc:
         logger.debug("Skills section parse failed: %s", exc)
         section_skills = []
@@ -3541,8 +3575,9 @@ def extract_resume(resume_text: str) -> dict:
             extraction_low_confidence=extraction_low_confidence,
         )
     else:
-        # No skills section header found: allow controlled vocabulary scan (not full narrative dump)
-        skills_text = (blocks.get("skills", "") or "").strip()
+        # No explicit skills section found: keep skills empty rather than
+        # guessing from experience/projects/summary text.
+        skills_text = ""
         candidates = _tokenize_skill_candidates(skills_text) if skills_text else []
         vocab = {str(x).strip().lower() for x in (skill_keywords or []) if str(x).strip()}
         vocab.update({str(x).strip().lower() for x in _CORE_TECH_PRIMARY})
@@ -3808,6 +3843,7 @@ def extract_resume(resume_text: str) -> dict:
 
     # --- NEW V3 DETERMINISTIC FALLBACKS / OVERRIDES ---
     # We call extraction_v3 here since tech vocab is built and text is available.
+    raw_skills_text = ""  # Initialize before V3 try block
     try:
         try:
             from backend.extraction_v3 import deterministic_extract_pipeline  # type: ignore
@@ -3816,15 +3852,11 @@ def extract_resume(resume_text: str) -> dict:
         
         v3_results = deterministic_extract_pipeline(base_text, _tech_vocab)
         
-        # 1. Override name - use V3 name if it has any reasonable confidence
+        # 1. Override name only when V3 agrees with email or header evidence
         v3_name = (v3_results.get("name") or "").strip()
-        if v3_results.get("name_conf", 0) > 0.4 and v3_name:
-            # Accept V3 name if it has decent confidence OR matches email/header
-            if v3_results.get("name_conf", 0) > 0.6 or _name_overlaps_email(v3_name, email) or _name_has_header_support(v3_name, base_text, email):
+        if v3_results.get("name_conf", 0) > 0.8 and v3_name:
+            if _name_overlaps_email(v3_name, email) or _name_has_header_support(v3_name, base_text, email):
                 name = v3_name
-        # Fallback: use V3 name even with low confidence if current name is "Unknown"
-        elif v3_name and name == "Unknown":
-            name = v3_name
 
         # Re-validate after any V3 name change
         name, v3_name_warnings = reconcile_name_with_email(name, email)
@@ -3832,14 +3864,14 @@ def extract_resume(resume_text: str) -> dict:
             if w not in extraction_warnings:
                 extraction_warnings.append(w)
 
-        # 2. Merge V3 skills - use them even when explicit skills section was parsed
-        # This captures skills not in hardcoded vocabulary
-        if v3_results["skills"]:
-            # Combine V3 skills with existing skills, deduplicate
-            v3_skills = list(v3_results["skills"])
-            combined_skills = list(dict.fromkeys(skills + v3_skills))
-            skills = combined_skills
+        # 2. STRICT RULE: Use V3 skills if available, even if empty
+        # If V3 returned empty skills (no Skills section found), respect that and don't run broad extraction
+        if "skills" in v3_results:
+            # V3 ran successfully - use its result (even if empty)
+            skills = list(v3_results["skills"])
+            raw_skills_text = v3_results.get("raw_skills_text", "")
         elif skills:
+            # V3 failed completely, fall back to old LLM extraction with cleaning
             llm_clean = []
             for s in skills:
                 s_norm = s.lower().strip()
@@ -3864,6 +3896,11 @@ def extract_resume(resume_text: str) -> dict:
                     continue
                 llm_clean.append(s)
             skills = llm_clean
+            raw_skills_text = ""
+        else:
+            # No skills from any source
+            skills = []
+            raw_skills_text = ""
 
             
         # 3. Override Experience Years with deterministic date range parser (much more accurate than LLM hallucination)
@@ -3918,18 +3955,22 @@ def extract_resume(resume_text: str) -> dict:
     experience_notes_final = exp_notes or ""
 
     # --- Skills consolidation (broad, deduped, normalized) ---
-    # Merge all sources: model output, section parser, and full-text candidate scan.
-    skill_sources: list[str] = []
-    for src in (skills, key_skills, important_keywords, section_skills):
-        if isinstance(src, list):
-            skill_sources.extend(str(x).strip() for x in src if str(x).strip())
-        elif isinstance(src, str) and src.strip():
-            skill_sources.append(src.strip())
+    # STRICT RULE: If V3 ran successfully, use its skills directly and skip broad consolidation
+    # This prevents garbage skills from being extracted from experience/projects sections
+    v3_ran_successfully = "v3_results" in locals() and v3_results is not None
+    if v3_ran_successfully and "skills" in v3_results:
+        # V3 ran - use its skills directly, skip broad consolidation
+        skill_sources = skills if isinstance(skills, list) else []
+    else:
+        # V3 didn't run - fall back to old broad consolidation
+        skill_sources: list[str] = []
+        for src in (section_skills,):
+            if isinstance(src, list):
+                skill_sources.extend(str(x).strip() for x in src if str(x).strip())
+            elif isinstance(src, str) and src.strip():
+                skill_sources.append(src.strip())
 
-    try:
-        skill_sources.extend(extract_skills_from_text(base_text))
-    except Exception as exc:
-        logger.debug("broad skill extraction failed: %s", exc)
+        # section-only policy: do not scan the full document here
 
     def _is_generic_bad_skill(s: str) -> bool:
         low = _norm_header(s)
@@ -3990,7 +4031,8 @@ def extract_resume(resume_text: str) -> dict:
 
     skills = merged_skills
     key_skills = skills[:15]
-    primary_skills = skills[:3]
+    # STRICT RULE: Primary skills MUST be first 3-5 from Skills section only
+    primary_skills = skills[:5]
     other_skills = [s for s in skills if s not in primary_skills]
     logger.debug(
         "skills_final count=%d primary=%s skipped=%s",
@@ -4036,19 +4078,12 @@ def extract_resume(resume_text: str) -> dict:
         key_skills = [s for s in (key_skills or []) if not _skill_is_excluded_name_token(s, _name_toks)]
         primary_skills = [s for s in (primary_skills or []) if not _skill_is_excluded_name_token(s, _name_toks)]
         other_skills = [s for s in (other_skills or []) if not _skill_is_excluded_name_token(s, _name_toks)]
-    if not primary_skills and skills:
-        primary_skills = [s for s in skills if _is_core_tech_label(str(s))][:3]
 
-    name_low_confidence = any(
-        w in set(extraction_warnings)
-        for w in (
-            "name_low_confidence",
-            "name_from_email",
-            "name_from_email_fallback",
-            "name_rejected_label",
-        )
-    )
-    final_name = "" if name_low_confidence else (name if name and name != "Unknown" else "")
+    # STRICT RULE: Never discard valid name due to low confidence
+    # If name exists from header or email extraction, use it
+    if name and not _is_plausible_person_name(name):
+        name = ""
+    final_name = name if name and name != "Unknown" else ""
 
     return {
         "name": final_name,
@@ -4072,6 +4107,7 @@ def extract_resume(resume_text: str) -> dict:
         "primary_skills": primary_skills,
         "other_skills": other_skills,
         "extraction_warnings": extraction_warnings,
+        "raw_skills_text": raw_skills_text or "",
     }
 
 

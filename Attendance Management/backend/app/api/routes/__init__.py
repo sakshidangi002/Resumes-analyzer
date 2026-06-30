@@ -16,6 +16,7 @@ from app.api.routes import (
     dsr_reminder,
     push,
     recognition,
+    cameras,
 )
 
 api_router = APIRouter()
@@ -37,3 +38,4 @@ api_router.include_router(
 )
 api_router.include_router(push.router, prefix="/push", tags=["push"])
 api_router.include_router(recognition.router, prefix="", tags=["recognition"])
+api_router.include_router(cameras.router, prefix="", tags=["cameras"])

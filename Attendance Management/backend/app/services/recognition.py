@@ -37,7 +37,23 @@ def _attendance_payload(rec, employee, event_type: str | None = None) -> dict:
     }
 
 
-def _mark_attendance(employee_id: int, now_dt=None) -> tuple[dict | None, str]:
+def _mark_attendance(
+    employee_id: int,
+    now_dt=None,
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,   # "IN" | "OUT" | None
+) -> tuple[dict | None, str]:
+    """
+    Step 7: Attendance service called.
+    Step 8: Business logic determines event type (IN/OUT/cooldown).
+    Step 9: Attendance record inserted into database.
+    Step 10: Daily attendance summary updated.
+    """
+    logger.info(
+        "STEP-7 attendance_service_called employee_id=%s camera_id=%s camera_purpose=%s",
+        employee_id, camera_id, camera_purpose,
+    )
+
     with SessionLocal() as db:
         employee = (
             db.query(Employee)
@@ -48,23 +64,44 @@ def _mark_attendance(employee_id: int, now_dt=None) -> tuple[dict | None, str]:
             .first()
         )
         if not employee:
-            logger.info("face-match employee_id=%s action=unknown_employee", employee_id)
+            logger.warning(
+                "STEP-7 FAILED employee_id=%s reason=not_found_or_inactive",
+                employee_id,
+            )
             return None, "unknown"
 
+        logger.info(
+            "STEP-8 business_logic_start employee=%s employee_id=%s determining_event_type",
+            employee.full_name, employee.id,
+        )
+
         try:
-            event, rec, action = record_face_attendance(db, employee_id, now_dt=now_dt)
+            event, rec, action = record_face_attendance(
+                db, employee_id, now_dt=now_dt,
+                camera_id=camera_id,
+                camera_purpose=camera_purpose,
+            )
         except ValueError as exc:
-            logger.info(
-                "face-match employee=%s employee_id=%s action=validation_failed detail=%s",
+            logger.warning(
+                "STEP-8 FAILED employee=%s employee_id=%s reason=validation_error detail=%s",
                 employee.full_name,
                 employee.id,
                 exc,
             )
             return None, "validation_failed"
+        except Exception as exc:
+            logger.exception(
+                "STEP-9 FAILED employee=%s employee_id=%s reason=database_error detail=%s",
+                employee.full_name,
+                employee.id,
+                exc,
+            )
+            return None, "attendance_failed"
 
         if action == "cooldown":
             logger.info(
-                "face-match employee=%s employee_id=%s action=cooldown attendance_date=%s",
+                "STEP-8 cooldown employee=%s employee_id=%s attendance_date=%s "
+                "reason=duplicate_within_60s",
                 employee.full_name,
                 employee.id,
                 rec.date.isoformat(),
@@ -73,12 +110,23 @@ def _mark_attendance(employee_id: int, now_dt=None) -> tuple[dict | None, str]:
 
         event_type = event.event_type if event else action
         logger.info(
-            "face-match employee=%s employee_id=%s action=%s attendance_date=%s event_time=%s",
+            "STEP-9 database_insert_successful employee=%s employee_id=%s "
+            "event_type=%s attendance_date=%s event_time=%s",
             employee.full_name,
             employee.id,
             event_type,
             rec.date.isoformat(),
             event.event_time.isoformat() if event else None,
+        )
+        logger.info(
+            "STEP-10 daily_attendance_updated employee=%s employee_id=%s "
+            "sign_in=%s sign_out=%s work_hours=%s status=%s",
+            employee.full_name,
+            employee.id,
+            rec.sign_in_time,
+            rec.sign_out_time,
+            rec.total_work_hours,
+            rec.status,
         )
         return _attendance_payload(rec, employee, event_type=event_type), event_type.lower()
 
@@ -88,6 +136,8 @@ def _build_face_result(
     candidates: list[dict],
     threshold: float,
     source: str,
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
 ) -> dict:
     best = find_best_match(
         face["embedding"],
@@ -106,8 +156,11 @@ def _build_face_result(
     if best["status"]:
         matched = True
         employee_name = best["employee_name"]
+
+        # ── Step 3: Recognition ──────────────────────────────────────────────
         logger.info(
-            "face-match detected_face=match employee_name=%s employee_id=%s employee_code=%s score=%.4f margin=%.4f source=%s",
+            "STEP-3 face_recognition_match employee_name=%s employee_id=%s "
+            "employee_code=%s score=%.4f margin=%.4f source=%s",
             employee_name,
             employee_id,
             employee_code,
@@ -115,16 +168,62 @@ def _build_face_result(
             float(best["margin"]),
             source,
         )
-        if source == "webcam":
-            attendance_info, face_state = _mark_attendance(int(best["employee_id"]), get_ist_now())
+
+        # ── Step 4: Employee ID returned ────────────────────────────────────
+        logger.info(
+            "STEP-4 employee_id_returned employee_id=%s source=%s",
+            employee_id, source,
+        )
+
+        # ── Step 5: Confidence threshold passes ─────────────────────────────
+        logger.info(
+            "STEP-5 confidence_threshold_passed score=%.4f threshold=%.4f margin=%.4f",
+            float(best["score"]), threshold, float(best["margin"]),
+        )
+
+        # ── Step 6: Attendance event triggered (webcam/cctv only) ───────────
+        if source in {"webcam", "cctv"}:
+            logger.info(
+                "STEP-6 attendance_trigger employee_name=%s employee_id=%s "
+                "source=%s camera_id=%s camera_purpose=%s",
+                employee_name, employee_id, source, camera_id, camera_purpose,
+            )
+            try:
+                attendance_info, face_state = _mark_attendance(
+                    int(best["employee_id"]),
+                    get_ist_now(),
+                    camera_id=camera_id,
+                    camera_purpose=camera_purpose,
+                )
+                logger.info(
+                    "STEP-6 attendance_trigger_complete employee_name=%s "
+                    "employee_id=%s face_state=%s attendance_recorded=%s",
+                    employee_name, employee_id, face_state,
+                    attendance_info is not None,
+                )
+            except Exception:
+                # This outer catch should never trigger because _mark_attendance
+                # handles its own exceptions — but keep it as a safety net and
+                # NEVER silently swallow it.
+                logger.exception(
+                    "STEP-6 CRITICAL attendance_trigger_exception "
+                    "employee_name=%s employee_id=%s source=%s",
+                    employee_name, employee_id, source,
+                )
+                attendance_info, face_state = None, "attendance_failed"
         else:
+            # Photo upload or other non-live source — do not record attendance
+            logger.info(
+                "STEP-6 skipped_non_live_source source=%s employee_name=%s",
+                source, employee_name,
+            )
             face_state = "recognized"
     else:
         logger.info(
-            "face-match detected_face=unknown employee_name=%s employee_id=%s employee_code=%s score=%.4f margin=%.4f source=%s",
+            "STEP-3 face_recognition_no_match best_candidate=%s employee_id=%s "
+            "score=%.4f margin=%.4f source=%s",
             best.get("employee_name") or "Unknown",
             employee_id,
-            employee_code,
             float(best.get("score", -1.0)),
             float(best.get("margin", 0.0)),
             source,
@@ -153,26 +252,45 @@ def recognize_faces(
     image: Image.Image,
     threshold: float = DEFAULT_THRESHOLD,
     source: str = "webcam",
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
 ) -> dict:
     faces = extract_face_embeddings(image)
-    return _recognize_from_faces(faces, threshold=threshold, source=source)
+    return _recognize_from_faces(
+        faces, threshold=threshold, source=source,
+        camera_id=camera_id, camera_purpose=camera_purpose,
+    )
 
 
 def recognize_from_rgb(
     rgb_image: np.ndarray,
     threshold: float = DEFAULT_THRESHOLD,
     source: str = "cctv",
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
 ) -> dict:
     faces = extract_faces_from_rgb(rgb_image)
-    return _recognize_from_faces(faces, threshold=threshold, source=source)
+    return _recognize_from_faces(
+        faces, threshold=threshold, source=source,
+        camera_id=camera_id, camera_purpose=camera_purpose,
+    )
 
 
 def _recognize_from_faces(
     faces: list[dict],
     threshold: float,
     source: str,
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
 ) -> dict:
+    # ── Step 1: Webcam frame received ────────────────────────────────────────
+    logger.info(
+        "STEP-1 frame_received source=%s face_count=%d camera_id=%s camera_purpose=%s",
+        source, len(faces), camera_id, camera_purpose,
+    )
+
     if not faces:
+        logger.debug("STEP-2 face_detection=none source=%s", source)
         return {
             "status": False,
             "message": "No face detected",
@@ -183,6 +301,10 @@ def _recognize_from_faces(
 
     candidates = get_employee_candidates()
     if not candidates:
+        logger.warning(
+            "STEP-2 face_detection_ok but no_registered_employees source=%s",
+            source,
+        )
         return {
             "status": False,
             "message": "No registered employees found",
@@ -191,16 +313,33 @@ def _recognize_from_faces(
             "attendance": None,
         }
 
+    # ── Step 2: Face detection ───────────────────────────────────────────────
+    logger.info(
+        "STEP-2 face_detection_complete faces_detected=%d candidates_available=%d source=%s",
+        len(faces), len(candidates), source,
+    )
+
     results = []
     attendance = None
     any_match = False
 
     for face in faces:
-        outcome = _build_face_result(face, candidates, threshold, source)
+        outcome = _build_face_result(
+            face, candidates, threshold, source,
+            camera_id=camera_id, camera_purpose=camera_purpose,
+        )
         any_match = any_match or outcome["any_match"]
         if attendance is None and outcome["attendance"] is not None:
             attendance = outcome["attendance"]
         results.append(outcome["face_payload"])
+
+    # ── Step 11: UI notification ──────────────────────────────────────────────
+    matched_names = [r["employee_name"] for r in results if r.get("matched")]
+    logger.info(
+        "STEP-11 recognition_complete source=%s any_match=%s matched=%s "
+        "attendance_recorded=%s",
+        source, any_match, matched_names, attendance is not None,
+    )
 
     return {
         "status": any_match,
