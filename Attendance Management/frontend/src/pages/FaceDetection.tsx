@@ -431,6 +431,10 @@ export default function FaceDetection() {
       const data = response.data as RecognitionResult;
       const faces = data.faces || [];
 
+      console.log("Recognition response:", data);
+      console.log("Faces detected:", faces);
+      console.log("Matched faces:", faces.filter(f => f.matched));
+
       lastFacesRef.current = faces;
       setLatestFaces(faces);
       drawFaces(faces);

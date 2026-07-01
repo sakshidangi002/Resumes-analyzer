@@ -24,6 +24,7 @@ from app.services.hcnetsdk_wrapper import (
     NET_DVR_PREVIEWINFO,
     REALDATA_CALLBACK,
 )
+from app.services.face_tracker import FaceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,7 @@ class HCNetSDKCameraWorker:
         camera_purpose: str,
         threshold: float,
         interval_sec: float,
+        frame_skip: int = 0,
     ) -> None:
         self.camera_id = camera_id
         self.name = name
@@ -194,10 +196,19 @@ class HCNetSDKCameraWorker:
         self.camera_purpose = camera_purpose.upper()
         self.threshold = threshold
         self.interval_sec = interval_sec
+        self.frame_skip = frame_skip
         
         self.state = HCNetSDKRuntimeState()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        self._frame_counter = 0  # For frame skipping
+        
+        # Face tracking for multi-face recognition
+        self.face_tracker = FaceTracker(
+            max_distance=100.0,
+            recognition_cooldown=3.0,
+            max_misses=10,
+        )
         
         self._login_id = -1
         self._play_handle = -1
@@ -475,7 +486,7 @@ class HCNetSDKCameraWorker:
         )
     
     def _process_frame_for_recognition(self, frame: np.ndarray) -> None:
-        """Process frame for face recognition (mirrors CameraWorker behavior)."""
+        """Process frame for face recognition with tracking (mirrors CameraWorker behavior)."""
         try:
             # Check if frame is blurry
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -486,19 +497,63 @@ class HCNetSDKCameraWorker:
             # Convert to RGB for recognition
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Import recognition function
-            from app.services.recognition import recognize_from_rgb
+            # Import recognition functions
+            from app.services.recognition import recognize_face
+            from app.services.recognition import extract_faces_from_rgb
+
+            # Step 1: Detect all faces ONCE on the full frame. Each face dict
+            # already carries its embedding — recognition must NOT re-run the
+            # detector on a cropped box (a tight crop makes SCRFD return zero
+            # faces, silently turning every employee into "Unknown Person").
+            faces = extract_faces_from_rgb(rgb)
+            detections = [{"box": face.get("box"), "face": face} for face in faces]
+
+            # Step 2: Update face tracker (always update for smooth tracking)
+            tracks = self.face_tracker.update(detections)
+
+            # Frame skipping for recognition only (not tracking)
+            self._frame_counter += 1
+            skip_recognition = self.frame_skip > 0 and self._frame_counter % (self.frame_skip + 1) != 0
+
+            # Step 3: Recognise tracks seen in THIS frame whose cooldown elapsed.
+            if not skip_recognition:
+                for track in tracks:
+                    if track.consecutive_misses != 0 or track.face is None:
+                        continue
+                    if not track.can_recognize():
+                        continue
+
+                    # Match from the already-computed embedding (no re-detect).
+                    result = recognize_face(
+                        track.face,
+                        threshold=self.threshold,
+                        source="cctv",
+                        camera_id=str(self.camera_id),
+                        camera_purpose=self.camera_purpose,
+                    )
+                    faces_data = result.get("faces", [])
+                    face_data = faces_data[0] if faces_data else {}
+                    track.update_recognition(
+                        employee_id=face_data.get("employee_id"),
+                        employee_name=face_data.get("employee_name") or "Unknown Person",
+                        employee_code=face_data.get("employee_code"),
+                        matched=face_data.get("matched", False),
+                        confidence=face_data.get("score", 0.0),
+                    )
+
+                    if track.matched:
+                        logger.info(
+                            f"Camera {self.camera_id} [{self.camera_purpose}]: track={track.track_id} "
+                            f"RECOGNIZED {track.employee_name} (id={track.employee_id}, conf={track.confidence * 100:.1f}%)"
+                        )
+                    else:
+                        logger.info(
+                            f"Camera {self.camera_id}: track={track.track_id} REJECTED "
+                            f"score={track.confidence:.4f} reason={face_data.get('state', 'no_face_or_below_threshold')}"
+                        )
             
-            result = recognize_from_rgb(
-                rgb,
-                threshold=self.threshold,
-                source="cctv",
-                camera_id=str(self.camera_id),
-                camera_purpose=self.camera_purpose,
-            )
-            
-            # Annotate frame and encode JPEG for preview
-            annotated = self._draw_boxes(frame, result)
+            # Step 4: Always annotate frame with enhanced overlay (shows persistent boxes)
+            annotated = self._draw_enhanced_overlay(frame, tracks, self.name, self.state.fps)
             ok_enc, jpeg_buf = cv2.imencode(
                 ".jpg", annotated,
                 [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY],
@@ -507,24 +562,126 @@ class HCNetSDKCameraWorker:
             if ok_enc:
                 self.state.latest_jpeg = jpeg_buf.tobytes()
             
-            self.state.latest_result = result
             self.state.updated_at = time.time()
-            
-            # Log matches
-            faces = result.get("faces", [])
-            matched = [f for f in faces if f.get("matched")]
-            if matched:
-                logger.info(
-                    f"Camera {self.camera_id} [{self.camera_purpose}]: {len(matched)} face(s) matched – "
-                    + ", ".join(f.get("employee_name", "?") for f in matched)
-                )
-            elif faces:
-                logger.debug(f"Camera {self.camera_id}: {len(faces)} unknown face(s)")
                 
         except Exception as exc:
             logger.error(
                 f"Camera {self.camera_id}: Recognition error: {exc}", exc_info=True
             )
+    
+    def _draw_enhanced_overlay(
+        self,
+        frame: np.ndarray,
+        tracks: list,
+        camera_name: str,
+        fps: float,
+    ) -> np.ndarray:
+        """Enhanced overlay with green/red boxes, labels, confidence, and metadata."""
+        annotated = frame.copy()
+        
+        # Draw face overlays
+        for track in tracks:
+            display_info = track.get_display_info()
+            box = display_info["box"]
+            if len(box) < 4:
+                continue
+            
+            x1, y1, x2, y2 = box
+            matched = display_info["matched"]
+            employee_name = display_info["employee_name"]
+            confidence = display_info["confidence"]
+            employee_id = display_info["employee_id"]
+            employee_code = display_info["employee_code"]
+            
+            # Color based on recognition status
+            if matched:
+                color = (34, 197, 94)  # Green for known employees
+            else:
+                color = (239, 68, 68)  # Red for unknown
+            
+            # Draw bounding box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            
+            # Build label text
+            label_lines = [employee_name]
+            
+            if matched:
+                # Add confidence percentage
+                confidence_pct = int(confidence * 100)
+                label_lines.append(f"Confidence: {confidence_pct}%")
+                
+                # Add employee ID if available
+                if employee_id:
+                    id_display = employee_code or str(employee_id)
+                    label_lines.append(f"ID: {id_display}")
+            
+            # Draw label background and text
+            label_height = 24 * len(label_lines)
+            text_bg_x2 = x1 + max(180, max(len(line) for line in label_lines) * 9)
+            
+            cv2.rectangle(
+                annotated,
+                (x1, max(0, y1 - label_height - 4)),
+                (text_bg_x2, y1 - 2),
+                color,
+                -1,
+            )
+            
+            for i, line in enumerate(label_lines):
+                y_pos = max(16, y1 - label_height + 4 + i * 24)
+                cv2.putText(
+                    annotated,
+                    line,
+                    (x1 + 4, y_pos),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+        
+        # Draw camera info overlay (top-left)
+        from datetime import datetime
+        overlay_lines = [
+            f"Camera: {camera_name}",
+            f"FPS: {fps:.1f}",
+            f"Faces: {len(tracks)}",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        
+        # Draw overlay background
+        overlay_height = 24 * len(overlay_lines) + 8
+        overlay_width = 220
+        cv2.rectangle(
+            annotated,
+            (10, 10),
+            (10 + overlay_width, 10 + overlay_height),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.rectangle(
+            annotated,
+            (10, 10),
+            (10 + overlay_width, 10 + overlay_height),
+            (255, 255, 255),
+            1,
+        )
+        
+        # Draw overlay text
+        for i, line in enumerate(overlay_lines):
+            y_pos = 30 + i * 24
+            cv2.putText(
+                annotated,
+                line,
+                (20, y_pos),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+        
+        return annotated
     
     def _draw_boxes(self, frame: np.ndarray, result: dict) -> np.ndarray:
         """Overlay recognition results on frame (mirrors CameraWorker behavior)."""

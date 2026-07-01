@@ -202,6 +202,33 @@ interface Payslip {
   generated_at: string;
 }
 
+interface TimelineData {
+  employee_id: number;
+  employee_code: string;
+  employee_name: string;
+  date: string;
+  first_check_in: string | null;
+  final_check_out: string | null;
+  total_work_hours: number;
+  total_break_hours: number;
+  current_status: string;
+  status: string;
+  timeline: Array<{
+    start_time: string;
+    end_time: string;
+    type: string;
+    duration_seconds: number;
+    duration_formatted: string;
+    event_type: string;
+  }>;
+  events: Array<{
+    event_time: string;
+    event_type: string;
+    source: string;
+    camera_id: string | null;
+  }>;
+}
+
 const tabLabel: Record<TabKey, string> = {
   about: "About",
   attendance: "Attendance Grid",
@@ -429,13 +456,7 @@ export default function EmployeeProfile() {
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   });
-  const [timelineData, setTimelineData] = useState<{
-    first_check_in: string | null;
-    last_check_out: string | null;
-    total_work_hours: number | null;
-    total_break_hours: number | null;
-    status: string;
-  } | null>(null);
+  const [timelineData, setTimelineData] = useState<TimelineData | null>(null);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [eventHistory, setEventHistory] = useState<
     Array<{
@@ -454,19 +475,18 @@ export default function EmployeeProfile() {
       .then(() => {
         // Refresh timeline and events after deletion
         if (employeeId && selectedDetailDate) {
-          attendanceApi.details(employeeId, selectedDetailDate)
+          attendanceApi.timeline(employeeId, selectedDetailDate)
             .then((res) => {
-              setTimelineData({
-                first_check_in: res.data.first_check_in || res.data.sign_in_time || null,
-                last_check_out: res.data.last_check_out || res.data.sign_out_time || null,
-                total_work_hours: res.data.total_work_hours,
-                total_break_hours: res.data.total_break_hours,
-                status: res.data.status,
-              });
-              setEventHistory(res.data.events || []);
+              setTimelineData(res.data);
             })
             .catch(() => {
               setTimelineData(null);
+            });
+          attendanceApi.listEvents(employeeId, selectedDetailDate)
+            .then((res) => {
+              setEventHistory(res.data || []);
+            })
+            .catch(() => {
               setEventHistory([]);
             });
         }
@@ -653,15 +673,9 @@ export default function EmployeeProfile() {
     if (!canViewProfile || !employeeId || tab !== "attendance_details" || !selectedDetailDate) return;
     setTimelineLoading(true);
     attendanceApi
-      .details(employeeId, selectedDetailDate)
+      .timeline(employeeId, selectedDetailDate)
       .then((res) => {
-        setTimelineData({
-          first_check_in: res.data.first_check_in || res.data.sign_in_time || null,
-          last_check_out: res.data.last_check_out || res.data.sign_out_time || null,
-          total_work_hours: res.data.total_work_hours,
-          total_break_hours: res.data.total_break_hours,
-          status: res.data.status || "ABSENT",
-        });
+        setTimelineData(res.data);
       })
       .catch(() => setTimelineData(null))
       .finally(() => setTimelineLoading(false));
@@ -1474,24 +1488,79 @@ export default function EmployeeProfile() {
                 {timelineLoading ? (
                   <SectionLoader size="sm" />
                 ) : timelineData ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "1rem" }}>
-                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>First Check-In</div>
-                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#22c55e" }}>{formatTime12h(timelineData.first_check_in)}</div>
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+                      <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)" }}>
+                        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>First Check-In</div>
+                        <div style={{ fontSize: "1rem", fontWeight: 700, color: "#22c55e" }}>{formatTime12h(timelineData.first_check_in)}</div>
+                      </div>
+                      <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Final Check-Out</div>
+                        <div style={{ fontSize: "1rem", fontWeight: 700, color: "#ef4444" }}>{formatTime12h(timelineData.final_check_out)}</div>
+                      </div>
+                      <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)" }}>
+                        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Working Hours</div>
+                        <div style={{ fontSize: "1rem", fontWeight: 700, color: "#3b82f6" }}>{formatCompactDuration(timelineData.total_work_hours)}</div>
+                      </div>
+                      <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.15)" }}>
+                        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Break Time</div>
+                        <div style={{ fontSize: "1rem", fontWeight: 700, color: "#a855f7" }}>{formatCompactDuration(timelineData.total_break_hours)}</div>
+                      </div>
+                      <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.15)" }}>
+                        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Current Status</div>
+                        <div style={{ fontSize: "1rem", fontWeight: 700, color: "#fbbf24" }}>{timelineData.current_status?.replace("_", " ") || "ABSENT"}</div>
+                      </div>
                     </div>
-                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Last Check-Out</div>
-                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#ef4444" }}>{formatTime12h(timelineData.last_check_out)}</div>
-                    </div>
-                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Working Hours</div>
-                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#3b82f6" }}>{formatCompactDuration(timelineData.total_work_hours)}</div>
-                    </div>
-                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.15)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Break Time</div>
-                      <div style={{ fontSize: "1rem", fontWeight: 700, color: "#a855f7" }}>{formatCompactDuration(timelineData.total_break_hours)}</div>
-                    </div>
-                  </div>
+
+                    {/* Timeline Events */}
+                    {timelineData.timeline && timelineData.timeline.length > 0 && (
+                      <div>
+                        <h5 style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem", color: "rgba(255,255,255,0.7)" }}>Movement Timeline</h5>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                          {timelineData.timeline.map((item: TimelineData["timeline"][0], idx: number) => (
+                            <div key={idx} style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "1rem",
+                              padding: "0.75rem",
+                              borderRadius: "8px",
+                              background: item.type === "work" ? "rgba(59,130,246,0.06)" : "rgba(168,85,247,0.06)",
+                              border: `1px solid ${item.type === "work" ? "rgba(59,130,246,0.12)" : "rgba(168,85,247,0.12)"}`,
+                            }}>
+                              <div style={{
+                                minWidth: "120px",
+                                fontSize: "0.85rem",
+                                fontWeight: 600,
+                                color: "rgba(255,255,255,0.9)",
+                              }}>
+                                {new Date(item.start_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })}
+                              </div>
+                              <div style={{
+                                flex: 1,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.5rem",
+                              }}>
+                                <span style={{
+                                  fontSize: "0.8rem",
+                                  padding: "0.2rem 0.5rem",
+                                  borderRadius: "4px",
+                                  background: item.type === "work" ? "rgba(59,130,246,0.15)" : "rgba(168,85,247,0.15)",
+                                  color: item.type === "work" ? "#60a5fa" : "#c084fc",
+                                  fontWeight: 600,
+                                }}>
+                                  {item.type === "work" ? "WORK" : "BREAK"}
+                                </span>
+                                <span style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                                  {item.duration_formatted}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div style={{ opacity: 0.65, textAlign: "center", padding: "1rem" }}>No attendance data for this date.</div>
                 )}
@@ -1517,7 +1586,7 @@ export default function EmployeeProfile() {
                         </tr>
                       </thead>
                       <tbody>
-                        {eventHistory.map((evt) => {
+                        {eventHistory.sort((a, b) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime()).map((evt) => {
                           const eventDate = new Date(evt.event_time).toLocaleDateString("en-IN", {
                             day: "2-digit",
                             month: "short",
@@ -1529,6 +1598,7 @@ export default function EmployeeProfile() {
                             hour12: true
                           });
                           const isCheckIn = evt.event_type === "CHECK_IN" || evt.event_type === "IN";
+                          const isCheckOut = evt.event_type === "CHECK_OUT" || evt.event_type === "OUT";
                           return (
                             <tr key={evt.id}>
                               <td style={{ textAlign: "left", paddingLeft: "1.5rem" }}>{eventDate}</td>
@@ -1536,7 +1606,7 @@ export default function EmployeeProfile() {
                               <td>
                                 <span style={{
                                   fontWeight: 700,
-                                  color: isCheckIn ? "#22c55e" : "#f59e0b",
+                                  color: isCheckIn ? "#22c55e" : isCheckOut ? "#ef4444" : "#f59e0b",
                                 }}>
                                   {evt.event_type}
                                 </span>

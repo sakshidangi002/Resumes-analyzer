@@ -50,6 +50,9 @@ class CameraCreateRequest(BaseModel):
     camera_purpose: str = Field(default="IN", pattern="^(IN|OUT)$")
     threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     interval_sec: float = Field(default=2.0, ge=0.5, le=60.0)
+    frame_skip: int = Field(default=0, ge=0, le=10)
+    tracking_max_distance: float = Field(default=100.0, ge=10.0, le=500.0)
+    tracking_cooldown: float = Field(default=3.0, ge=0.5, le=30.0)
     enabled: bool = False
 
 
@@ -96,6 +99,9 @@ class CameraUpdateRequest(BaseModel):
     camera_purpose: Optional[str] = Field(None, pattern="^(IN|OUT)$")
     threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     interval_sec: Optional[float] = Field(None, ge=0.5, le=60.0)
+    frame_skip: Optional[int] = Field(None, ge=0, le=10)
+    tracking_max_distance: Optional[float] = Field(None, ge=10.0, le=500.0)
+    tracking_cooldown: Optional[float] = Field(None, ge=0.5, le=30.0)
     enabled: Optional[bool] = None
 
 
@@ -649,21 +655,17 @@ def dvr_camera_preview(channel_id: int):
         if not camera:
             raise HTTPException(status_code=400, detail="Camera not available")
         
-        # Get latest frame from worker (HCNetSDK or RTSP)
-        frame = None
+        # Get latest annotated JPEG from worker (HCNetSDK or RTSP)
+        jpeg = None
         if camera.worker:
-            frame = camera.worker.get_latest_frame()
+            jpeg = camera.worker.get_latest_jpeg()
         elif camera.rtsp_worker:
-            frame = camera.rtsp_worker.get_latest_frame()
+            jpeg = camera.rtsp_worker.get_latest_jpeg()
         
-        if frame is None:
+        if jpeg is None:
             raise HTTPException(status_code=503, detail="Stream connected, waiting for first frame")
         
-        # Convert to JPEG
-        import cv2
-        _, jpeg = cv2.imencode('.jpg', frame)
-        
-        return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+        return Response(content=jpeg, media_type="image/jpeg")
 
 
 @router.get("/dvr/cameras/{channel_id}/stream")
@@ -692,16 +694,15 @@ async def dvr_camera_stream(channel_id: int):
                 if not camera:
                     break
                 
-                frame = None
+                jpeg = None
                 if camera.worker:
-                    frame = camera.worker.get_latest_frame()
+                    jpeg = camera.worker.get_latest_jpeg()
                 elif camera.rtsp_worker:
-                    frame = camera.rtsp_worker.get_latest_frame()
+                    jpeg = camera.rtsp_worker.get_latest_jpeg()
             
-            if frame is not None:
-                _, jpeg = cv2.imencode('.jpg', frame)
+            if jpeg is not None:
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
             
             # Control frame rate (~10 FPS)
             await asyncio.sleep(0.1)

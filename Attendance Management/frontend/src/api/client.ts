@@ -121,6 +121,16 @@ export const attendance = {
   createCorrection: (data: object) => api.post("/attendance/correction-requests", data),
   approveCorrection: (id: number, approved: boolean, rejection_reason?: string) =>
     api.patch("/attendance/correction-requests/" + id, null, { params: { approved, rejection_reason } }),
+  today: (department_id?: number) =>
+    api.get("/attendance/today", { params: { department_id } }),
+  liveStatus: () =>
+    api.get("/attendance/live-status"),
+  timeline: (employee_id: number, date: string) =>
+    api.get(`/attendance/employee/${employee_id}/timeline`, { params: { date } }),
+  monthlySummary: (employee_id: number, year: number, month: number) =>
+    api.get(`/attendance/employee/${employee_id}/monthly-summary`, { params: { year, month } }),
+  employeeHistory: (employee_id: number, from_date: string, to_date: string) =>
+    api.get(`/attendance/employee/${employee_id}/history`, { params: { from_date, to_date } }),
 };
 
 export const recognition = {

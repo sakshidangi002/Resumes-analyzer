@@ -276,6 +276,40 @@ def recognize_from_rgb(
     )
 
 
+def recognize_face(
+    face: dict,
+    threshold: float = DEFAULT_THRESHOLD,
+    source: str = "cctv",
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
+) -> dict:
+    """Recognize a single, ALREADY-DETECTED face.
+
+    ``face`` must be a detection dict produced by ``extract_faces_from_rgb``
+    (i.e. it already contains a normalised ``embedding``, ``box``,
+    ``confidence`` and ``pose``).
+
+    This exists specifically for the CCTV tracking pipeline: face detection is
+    run ONCE per frame on the full image, and each detected face is then
+    matched here directly from its precomputed embedding. We must NOT re-run
+    the detector on a cropped face box — the InsightFace/SCRFD detector expects
+    scene context around the face and routinely returns zero detections for a
+    tight crop, which silently turns every employee into "Unknown Person".
+    """
+    if not face or face.get("embedding") is None:
+        return {
+            "status": False,
+            "message": "No embedding on face",
+            "source": source,
+            "faces": [],
+            "attendance": None,
+        }
+    return _recognize_from_faces(
+        [face], threshold=threshold, source=source,
+        camera_id=camera_id, camera_purpose=camera_purpose,
+    )
+
+
 def _recognize_from_faces(
     faces: list[dict],
     threshold: float,

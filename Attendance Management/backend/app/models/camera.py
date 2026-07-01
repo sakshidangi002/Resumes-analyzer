@@ -31,6 +31,9 @@ class CameraConfig(Base):
     # --- Recognition settings ---
     threshold = Column(Float, nullable=False, default=0.45)
     interval_sec = Column(Float, nullable=False, default=2.0)
+    frame_skip = Column(Integer, nullable=False, default=0)  # Skip N frames between recognition
+    tracking_max_distance = Column(Float, nullable=False, default=100.0)  # Max pixels for face tracking
+    tracking_cooldown = Column(Float, nullable=False, default=3.0)  # Seconds between recognitions
     enabled = Column(Boolean, nullable=False, default=False)
 
     # --- Timestamps ---

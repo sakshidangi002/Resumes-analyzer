@@ -28,6 +28,7 @@ import Notifications from "./pages/Notifications";
 import Inbox from "./pages/Inbox";
 import Onboarding from "./pages/Onboarding";
 import DSR from "./pages/DSR";
+import LiveAttendanceDashboard from "./pages/LiveAttendanceDashboard";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth();
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="inbox" element={<Inbox />} />
         <Route path="onboarding" element={<Onboarding />} />
         <Route path="dsr" element={<DSR />} />
+        <Route path="live-attendance" element={<LiveAttendanceDashboard />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

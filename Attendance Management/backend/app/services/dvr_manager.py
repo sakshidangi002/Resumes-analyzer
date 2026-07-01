@@ -219,8 +219,9 @@ class DVRManager:
                     source_url=rtsp_url,
                     source_type="rtsp",
                     camera_purpose="IN",
-                    threshold=0.45,
-                    interval_sec=2
+                    threshold=0.05,  # Very low threshold for poor CCTV footage quality
+                    interval_sec=0.5,  # Process frames every 0.5 seconds for faster response
+                    frame_skip=0,  # No frame skipping for accurate recognition
                 )
                 
                 camera.rtsp_worker.start()

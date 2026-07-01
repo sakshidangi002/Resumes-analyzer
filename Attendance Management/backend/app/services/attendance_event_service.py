@@ -124,20 +124,39 @@ def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
 
 def calculate_intervals_from_events(
     events: list[AttendanceEvent],
-) -> tuple[Decimal | None, Decimal | None, time | None, time | None]:
-    """Return total work hours, break hours, first IN time, last OUT time."""
+    cutoff_time: time = time(23, 59),
+) -> tuple[Decimal | None, Decimal | None, time | None, time | None, list[dict]]:
+    """Return total work hours, break hours, first IN time, last OUT time, and timeline data.
+    
+    Timeline data includes all event pairs with durations for IN/OUT and break periods.
+    """
     if not events:
-        return None, None, None, None
+        return None, None, None, None, []
 
     sorted_events = sorted(events, key=lambda e: (to_naive_ist(e.event_time), e.id))
     in_events = [e for e in sorted_events if _normalize_event_type(e.event_type) in _WORK_START_EVENTS]
     out_events = [e for e in sorted_events if _normalize_event_type(e.event_type) in _WORK_END_EVENTS]
 
     first_in = to_naive_ist(in_events[0].event_time).time() if in_events else None
-    last_out = to_naive_ist(out_events[-1].event_time).time() if out_events else None
+    
+    # Determine final check-out based on cutoff time
+    last_out = None
+    if out_events:
+        last_out_event = out_events[-1]
+        last_out_time = to_naive_ist(last_out_event.event_time)
+        # Check if there's an IN event after the last OUT before cutoff
+        has_later_in = any(
+            to_naive_ist(e.event_time) > last_out_time and 
+            to_naive_ist(e.event_time).time() <= cutoff_time
+            for e in in_events if to_naive_ist(e.event_time) > last_out_time
+        )
+        if not has_later_in:
+            last_out = last_out_time.time()
 
     total_work_seconds = 0
     total_break_seconds = 0
+    timeline = []
+    
     for i in range(len(sorted_events) - 1):
         cur = sorted_events[i]
         nxt = sorted_events[i + 1]
@@ -148,14 +167,40 @@ def calculate_intervals_from_events(
             continue
         cur_type = _normalize_event_type(cur.event_type)
         nxt_type = _normalize_event_type(nxt.event_type)
+        
         if cur_type in _WORK_START_EVENTS and nxt_type in _WORK_END_EVENTS:
             total_work_seconds += delta
+            timeline.append({
+                "start_time": cur_t.isoformat(),
+                "end_time": nxt_t.isoformat(),
+                "type": "work",
+                "duration_seconds": delta,
+                "duration_formatted": format_duration(delta),
+                "event_type": cur_type,
+            })
         elif cur_type in _WORK_END_EVENTS and nxt_type in _WORK_START_EVENTS:
             total_break_seconds += delta
+            timeline.append({
+                "start_time": cur_t.isoformat(),
+                "end_time": nxt_t.isoformat(),
+                "type": "break",
+                "duration_seconds": delta,
+                "duration_formatted": format_duration(delta),
+                "event_type": cur_type,
+            })
 
     work_hours = Decimal(round(total_work_seconds / 3600, 2)) if total_work_seconds else Decimal("0")
     break_hours = Decimal(round(total_break_seconds / 3600, 2)) if total_break_seconds else Decimal("0")
-    return work_hours, break_hours, first_in, last_out
+    return work_hours, break_hours, first_in, last_out, timeline
+
+
+def format_duration(seconds: int) -> str:
+    """Format seconds into human-readable duration (e.g., '1h 30m', '45m')."""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def _apply_late_and_early(db: Session, rec: AttendanceRecord) -> None:
@@ -197,7 +242,7 @@ def recalculate_attendance_summary(db: Session, employee_id: int, d: date) -> At
     events = get_events_for_day(db, employee_id, d)
 
     if events:
-        work_h, break_h, first_in, last_out = calculate_intervals_from_events(events)
+        work_h, break_h, first_in, last_out, _timeline = calculate_intervals_from_events(events)
         # first_in = earliest IN event time — NEVER overwritten by later events.
         # last_out = latest OUT event time — always updated when new OUT arrives.
         rec.sign_in_time = first_in

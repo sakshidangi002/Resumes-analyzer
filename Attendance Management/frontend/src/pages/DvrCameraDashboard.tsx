@@ -147,7 +147,7 @@ export default function DvrCameraDashboard() {
     background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: 16,
-    padding: "1.2rem 1.4rem",
+    padding: "0.8rem 1rem",
   };
 
   const inputStyle: React.CSSProperties = {
@@ -268,7 +268,7 @@ export default function DvrCameraDashboard() {
           </div>
 
           {/* Camera Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(500px, 1fr))", gap: "1.5rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "1rem" }}>
             {dvrStatus.cameras.map((camera) => (
               <div key={camera.channel_id} style={cardStyle}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
@@ -294,7 +294,7 @@ export default function DvrCameraDashboard() {
                 <div style={{
                   background: "rgba(0,0,0,0.3)",
                   borderRadius: 8,
-                  aspectRatio: "16/9",
+                  height: "80vh",
                   marginBottom: "1rem",
                   border: "1px solid rgba(255,255,255,0.1)",
                   overflow: "hidden",
@@ -307,7 +307,7 @@ export default function DvrCameraDashboard() {
                       style={{
                         width: "100%",
                         height: "100%",
-                        objectFit: "cover",
+                        objectFit: "contain",
                       }}
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = "none";
