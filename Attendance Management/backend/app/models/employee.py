@@ -47,6 +47,9 @@ class Employee(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     employee_code = Column(String(50), unique=True, nullable=False)
+    # Free-text staff category, e.g. "Employee", "Housekeeping", "Security",
+    # "Driver". Defaults to "Employee" so existing records are unaffected.
+    staff_type = Column(String(50), nullable=True, default="Employee")
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
     official_email = Column(String(255), nullable=False)

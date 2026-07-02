@@ -11,6 +11,7 @@ import { useTableControls, SortableHeader, TableToolbar } from "../components/da
 interface Emp {
   id: number;
   employee_code: string;
+  staff_type?: string;
   first_name: string;
   last_name: string;
   official_email: string;
@@ -33,8 +34,11 @@ const EMPLOYMENT_TYPES = ["Full-time", "Intern", "Contract"];
 const EMPLOYMENT_STATUSES = ["Active", "Resigned", "Terminated"];
 const MARITAL_STATUSES = ["Single", "Married", "Divorced", "Widowed"];
 
+const STAFF_TYPE_SUGGESTIONS = ["Employee", "Housekeeping", "Security", "Driver", "Contractor", "Other"];
+
 const emptyForm = (): Record<string, string | number | undefined> => ({
   employee_code: "",
+  staff_type: "Employee",
   first_name: "",
   last_name: "",
   official_email: "",
@@ -152,6 +156,7 @@ export default function Employees() {
     columns: {
       employee_code: (e) => e.employee_code,
       name: (e) => `${e.first_name} ${e.last_name}`,
+      staff_type: (e) => e.staff_type || "",
       official_email: (e) => e.official_email,
       department: (e) => deptName(e.department_id),
       date_of_joining: (e) => e.date_of_joining,
@@ -159,7 +164,7 @@ export default function Employees() {
       employment_status: (e) => e.employment_status,
     },
     searchableText: (e) =>
-      `${e.employee_code} ${e.first_name} ${e.last_name} ${e.official_email} ${deptName(e.department_id)} ${e.employment_status}`,
+      `${e.employee_code} ${e.first_name} ${e.last_name} ${e.staff_type || ""} ${e.official_email} ${deptName(e.department_id)} ${e.employment_status}`,
   });
 
   const [page, setPage] = useState(1);
@@ -228,6 +233,7 @@ export default function Employees() {
     setError("");
     const payload: Record<string, unknown> = {
       employee_code: form.employee_code,
+      staff_type: form.staff_type || "Employee",
       first_name: form.first_name,
       last_name: form.last_name,
       official_email: form.official_email,
@@ -376,6 +382,7 @@ export default function Employees() {
                 <colgroup>
                   <col style={{ width: '80px' }} />
                   <col style={{ width: '16%' }} />
+                  <col style={{ width: '110px' }} />
                   <col style={{ width: '20%' }} />
                   <col style={{ width: '16%' }} />
                   <col style={{ width: '130px' }} />
@@ -387,6 +394,7 @@ export default function Employees() {
                   <tr>
                     <SortableHeader className="hide-md" label="ID" columnKey="employee_code" sort={sort} onToggle={toggleSort} style={{ paddingLeft: '1.5rem' }} />
                     <SortableHeader label="Name" columnKey="name" sort={sort} onToggle={toggleSort} />
+                    <SortableHeader label="Staff Type" columnKey="staff_type" sort={sort} onToggle={toggleSort} />
                     <SortableHeader label="Email" columnKey="official_email" sort={sort} onToggle={toggleSort} />
                     <SortableHeader className="hide-sm" label="Department" columnKey="department" sort={sort} onToggle={toggleSort} />
                     <SortableHeader className="hide-md" label="DOJ" columnKey="date_of_joining" sort={sort} onToggle={toggleSort} />
@@ -400,7 +408,7 @@ export default function Employees() {
                 <tbody>
                   {displayedList.length === 0 ? (
                     <tr>
-                      <td colSpan={canEdit ? 8 : 7} style={{ textAlign: 'center', padding: '1.5rem', opacity: 0.65 }}>
+                      <td colSpan={canEdit ? 9 : 8} style={{ textAlign: 'center', padding: '1.5rem', opacity: 0.65 }}>
                         No employees match your search / filters.
                       </td>
                     </tr>
@@ -420,6 +428,7 @@ export default function Employees() {
                     <tr key={e.id} style={rowStyle} title={hasLeft ? `Employee left on ${dolText}` : undefined}>
                       <td className="hide-md" style={{ textAlign: 'left', paddingLeft: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.employee_code}</td>
                       <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.first_name} {e.last_name}</td>
+                      <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.staff_type || "Employee"}</td>
                       <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.official_email}</td>
                       <td className="hide-sm" style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
                       <td className="hide-md" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{e.date_of_joining ? new Date(e.date_of_joining).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' }) : "-"}</td>
@@ -535,6 +544,21 @@ export default function Employees() {
             <form onSubmit={handleSubmitAdd}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
 
+                <div className="form-group">
+                  <label>Staff Type *</label>
+                  <input
+                    list="staff-type-options"
+                    value={form.staff_type ?? "Employee"}
+                    onChange={(e) => setField("staff_type", e.target.value)}
+                    required
+                    placeholder="e.g. Employee, Housekeeping, Security"
+                  />
+                  <datalist id="staff-type-options">
+                    {STAFF_TYPE_SUGGESTIONS.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </div>
                 <div className="form-group">
                   <label>First Name *</label>
                   <input value={form.first_name} onChange={(e) => setField("first_name", e.target.value)} required placeholder="First Name" />

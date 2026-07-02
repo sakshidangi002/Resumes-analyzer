@@ -131,6 +131,25 @@ def _mark_attendance(
         return _attendance_payload(rec, employee, event_type=event_type), event_type.lower()
 
 
+def mark_cctv_attendance(
+    employee_id: int,
+    camera_id: str | None = None,
+    camera_purpose: str | None = None,
+) -> tuple[dict | None, str]:
+    """Public helper to record attendance for an already-CONFIRMED employee.
+
+    The CCTV pipeline identifies a face over several frames and only calls this
+    once the same employee has been confirmed on a track, so a single spurious
+    frame can never create a false attendance record.
+    """
+    return _mark_attendance(
+        employee_id,
+        get_ist_now(),
+        camera_id=camera_id,
+        camera_purpose=camera_purpose,
+    )
+
+
 def _build_face_result(
     face: dict,
     candidates: list[dict],
@@ -138,6 +157,7 @@ def _build_face_result(
     source: str,
     camera_id: str | None = None,
     camera_purpose: str | None = None,
+    mark_attendance: bool = True,
 ) -> dict:
     best = find_best_match(
         face["embedding"],
@@ -182,7 +202,7 @@ def _build_face_result(
         )
 
         # ── Step 6: Attendance event triggered (webcam/cctv only) ───────────
-        if source in {"webcam", "cctv"}:
+        if source in {"webcam", "cctv"} and mark_attendance:
             logger.info(
                 "STEP-6 attendance_trigger employee_name=%s employee_id=%s "
                 "source=%s camera_id=%s camera_purpose=%s",
@@ -282,6 +302,7 @@ def recognize_face(
     source: str = "cctv",
     camera_id: str | None = None,
     camera_purpose: str | None = None,
+    mark_attendance: bool = True,
 ) -> dict:
     """Recognize a single, ALREADY-DETECTED face.
 
@@ -307,6 +328,7 @@ def recognize_face(
     return _recognize_from_faces(
         [face], threshold=threshold, source=source,
         camera_id=camera_id, camera_purpose=camera_purpose,
+        mark_attendance=mark_attendance,
     )
 
 
@@ -316,6 +338,7 @@ def _recognize_from_faces(
     source: str,
     camera_id: str | None = None,
     camera_purpose: str | None = None,
+    mark_attendance: bool = True,
 ) -> dict:
     # ── Step 1: Webcam frame received ────────────────────────────────────────
     logger.info(
@@ -361,6 +384,7 @@ def _recognize_from_faces(
         outcome = _build_face_result(
             face, candidates, threshold, source,
             camera_id=camera_id, camera_purpose=camera_purpose,
+            mark_attendance=mark_attendance,
         )
         any_match = any_match or outcome["any_match"]
         if attendance is None and outcome["attendance"] is not None:

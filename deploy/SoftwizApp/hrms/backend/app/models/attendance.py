@@ -54,8 +54,9 @@ class AttendanceEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
     attendance_record_id = Column(Integer, ForeignKey("attendance_records.id"), nullable=True, index=True)
+    attendance_date = Column(Date, nullable=False, index=True)  # required NOT NULL column in DB
     event_time = Column(DateTime, nullable=False, index=True)
-    event_type = Column(String(10), nullable=False)  # IN / OUT
+    event_type = Column(String(10), nullable=False)  # IN / OUT / BREAK_IN / BREAK_OUT
     source = Column(String(20), nullable=False, default="AUTO")  # AUTO / MANUAL
     camera_id = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=get_ist_now)

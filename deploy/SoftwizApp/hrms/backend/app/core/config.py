@@ -62,8 +62,22 @@ class Settings(BaseSettings):
     vapid_claim_email: str = "mailto:noreply@company.com"
 
     # Face recognition (webcam / upload)
+    # 0.45/0.05 was too permissive for CCTV and allowed impostor matches.
+    # A stricter margin requires the top candidate to clearly beat the runner-up
+    # before a match is accepted, which — together with CCTV stable confirmation
+    # — prevents false attendance for people who are not present.
     default_threshold: float = 0.45
-    min_match_margin: float = 0.05
+    min_match_margin: float = 0.10
+
+    # ---- Face detector backend -------------------------------------------
+    # "insightface" -> SCRFD detector from buffalo_l (default, no extra deps)
+    # "yolo"        -> YOLOv8-face for DETECTION; ArcFace (buffalo_l) still
+    #                  produces the recognition embedding.
+    # Enabling "yolo" requires `pip install ultralytics` and a face weights
+    # file (with 5 landmarks) at FACE_YOLO_MODEL_PATH, e.g. yolov8n-face.pt.
+    face_detector: str = "insightface"
+    yolo_face_model_path: str = "models/yolov8n-face.pt"
+    yolo_conf: float = 0.35
 
     class Config:
         env_file = ".env"

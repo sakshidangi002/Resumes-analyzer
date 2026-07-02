@@ -248,6 +248,7 @@ def create_employee(
         raise HTTPException(status_code=400, detail="Employee code already exists")
     emp = Employee(
         employee_code=data.employee_code,
+        staff_type=(data.staff_type or "Employee"),
         first_name=data.first_name,
         last_name=data.last_name,
         official_email=data.official_email,

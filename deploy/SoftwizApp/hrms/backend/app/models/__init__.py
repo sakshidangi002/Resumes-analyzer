@@ -14,6 +14,7 @@ from app.models.in_app_notification import AppNotification
 from app.models.onboarding import OnboardingTask
 from app.models.dsr import DailyStatusReport
 from app.models.push_subscription import PushSubscription
+from app.models.camera import CameraConfig
 
 __all__ = [
     "Base",
@@ -46,4 +47,5 @@ __all__ = [
     "OnboardingTask",
     "DailyStatusReport",
     "PushSubscription",
+    "CameraConfig",
 ]

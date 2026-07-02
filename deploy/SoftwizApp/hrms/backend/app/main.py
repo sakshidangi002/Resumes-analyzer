@@ -245,7 +245,9 @@ def _sync_blocked_employee_users() -> None:
 @asynccontextmanager
 async def _unified_lifespan(parent_app: FastAPI):
     """Bridge the Resume API's lifespan so mounted sub-app startup hooks run,
-    and run our background scheduler (5 PM IST DSR reminder) alongside it."""
+    and run our background scheduler (5 PM IST DSR reminder) alongside it.
+    Also starts persistent CCTV camera workers on boot.
+    """
     _warn_on_weak_secret_key()
     _sync_blocked_employee_users()
 
@@ -261,6 +263,14 @@ async def _unified_lifespan(parent_app: FastAPI):
     except Exception:
         logger.exception("Failed to capture event loop for WebSocket manager")
 
+    # --- Start CCTV camera workers -----------------------------------------
+    try:
+        from app.services.camera_service import camera_manager
+        camera_manager.start_all_from_db()
+        logger.info("CCTV camera manager started")
+    except Exception:
+        logger.exception("Failed to start CCTV camera manager – cameras will not run")
+
     scheduler = _start_background_scheduler()
     try:
         if resume_api_app is not None and getattr(resume_api_app.router, "lifespan_context", None):
@@ -269,6 +279,14 @@ async def _unified_lifespan(parent_app: FastAPI):
         else:
             yield
     finally:
+        # --- Shutdown camera workers ---------------------------------------
+        try:
+            from app.services.camera_service import camera_manager
+            camera_manager.stop_all()
+            logger.info("CCTV camera manager stopped")
+        except Exception:
+            logger.exception("Error stopping CCTV camera manager")
+
         if scheduler is not None:
             try:
                 if scheduler.running:

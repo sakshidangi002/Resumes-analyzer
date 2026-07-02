@@ -70,6 +70,7 @@ class EmployeeBankDetailResponse(BaseModel):
 
 class EmployeeCreate(BaseModel):
     employee_code: str
+    staff_type: Optional[str] = "Employee"
     first_name: str
     last_name: str
     official_email: str
@@ -97,6 +98,7 @@ class EmployeeCreate(BaseModel):
 
 class EmployeeUpdate(BaseModel):
     employee_code: Optional[str] = None
+    staff_type: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     official_email: Optional[str] = None
@@ -124,6 +126,7 @@ class EmployeeUpdate(BaseModel):
 class EmployeeResponse(BaseModel):
     id: int
     employee_code: str
+    staff_type: Optional[str] = None
     first_name: str
     last_name: str
     official_email: str

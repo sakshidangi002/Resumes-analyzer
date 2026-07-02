@@ -1127,6 +1127,7 @@ def extract_deterministic_name(text: str) -> str:
         r"(?i)\b(objective|career goal|professional summary|about me|contact|phone|email|address|portfolio|github|linkedin)\b", # Section headers
         r"https?://[^\s]+", # URLs
         r"(?i)\b(page|cv|vitae)\b", # Document type
+        r"(?i)\b(testing|test|cross-browser|regression|smoke|sanity|functional|manual|automation|qa|quality|assurance)\b", # Testing terms
     ]
     
     # Expanded name regex patterns with support for special characters
