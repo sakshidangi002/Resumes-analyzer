@@ -22,6 +22,7 @@ from app.models import (
 from app.models.employee import EmploymentStatus
 from app.schemas.employee import (
     EmployeeCreate,
+    StaffCreate,
     EmployeeUpdate,
     EmployeeResponse,
     EmployeeBankDetailCreate,
@@ -283,6 +284,52 @@ def create_employee(
             account_type=data.bank_details.account_type,
         )
         db.add(b)
+    db.commit()
+    db.refresh(emp)
+    invalidate_embedding_cache()
+    return emp
+
+
+def _next_staff_code(db: Session) -> str:
+    """Generate a unique STF#### code for a non-employee staff record."""
+    existing = {
+        c[0] for c in db.query(Employee.employee_code)
+        .filter(Employee.employee_code.like("STF%")).all()
+    }
+    n = len(existing) + 1
+    while f"STF{n:04d}" in existing:
+        n += 1
+    return f"STF{n:04d}"
+
+
+@router.post("/staff", response_model=EmployeeResponse)
+def create_staff(
+    data: StaffCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Register a non-employee staff member (housekeeping, security, driver…).
+
+    Only name + staff type are required; everything else is auto-filled. These
+    people are recognised on camera but are NOT marked for attendance (that is
+    enforced in the recognition layer by staff_type).
+    """
+    from datetime import date as _date
+
+    code = _next_staff_code(db)
+    emp = Employee(
+        employee_code=code,
+        staff_type=(data.staff_type or "Staff"),
+        first_name=data.first_name.strip(),
+        last_name=(data.last_name or "").strip(),
+        official_email=f"{code.lower()}@staff.local",
+        phone=data.phone,
+        date_of_joining=_date.today(),
+        employment_type="Contract",
+        employment_status="Active",
+        expected_working_hours=0.0,  # no work-hour expectation for support staff
+    )
+    db.add(emp)
     db.commit()
     db.refresh(emp)
     invalidate_embedding_cache()

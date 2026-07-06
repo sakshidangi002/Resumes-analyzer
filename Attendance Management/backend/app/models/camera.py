@@ -36,6 +36,15 @@ class CameraConfig(Base):
     tracking_cooldown = Column(Float, nullable=False, default=3.0)  # Seconds between recognitions
     enabled = Column(Boolean, nullable=False, default=False)
 
+    # --- Doorway line-crossing (entry/exit detection) ---
+    # When enabled, a virtual line is drawn across the frame; a person crossing
+    # it in `entry_direction` fires this camera's event (IN/OUT). Works from an
+    # overhead camera where faces can't be recognised, using body tracking.
+    crossing_enabled = Column(Boolean, nullable=False, default=False)
+    line_orientation = Column(String(10), nullable=False, default="horizontal")  # horizontal | vertical
+    line_position = Column(Float, nullable=False, default=0.5)  # 0..1 across the frame
+    entry_direction = Column(String(10), nullable=False, default="down")  # down|up (horizontal); right|left (vertical)
+
     # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(

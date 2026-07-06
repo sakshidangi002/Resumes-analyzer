@@ -291,28 +291,54 @@ export default function DvrCameraDashboard() {
                 </div>
 
                 {/* Live Preview */}
-                <div style={{
-                  background: "rgba(0,0,0,0.3)",
-                  borderRadius: 8,
-                  height: "80vh",
-                  marginBottom: "1rem",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  overflow: "hidden",
-                  position: "relative",
-                }}>
+                <div
+                  className="dvr-feed"
+                  style={{
+                    background: "#000",
+                    borderRadius: 8,
+                    width: "100%",
+                    marginBottom: "1rem",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    overflow: "hidden",
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
                   {camera.worker_status?.is_alive ? (
+                    <>
                     <img
                       src={dvr.streamUrl(camera.channel_id)}
                       alt={camera.name}
                       style={{
                         width: "100%",
-                        height: "100%",
+                        height: "auto",
+                        maxHeight: "100vh",
                         objectFit: "contain",
+                        display: "block",
                       }}
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = "none";
                       }}
                     />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        const box = (e.currentTarget.closest(".dvr-feed") as HTMLElement | null);
+                        if (document.fullscreenElement) void document.exitFullscreen();
+                        else void box?.requestFullscreen?.();
+                      }}
+                      style={{
+                        position: "absolute", top: 10, right: 10, zIndex: 2,
+                        padding: "0.35rem 0.7rem", borderRadius: 8, cursor: "pointer",
+                        background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.3)",
+                        color: "#fff", fontSize: "0.8rem", fontWeight: 700,
+                      }}
+                    >
+                      ⛶ Fullscreen
+                    </button>
+                    </>
                   ) : (
                     <div style={{
                       display: "flex",

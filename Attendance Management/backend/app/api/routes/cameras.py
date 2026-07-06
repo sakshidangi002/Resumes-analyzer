@@ -22,7 +22,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Query
+from fastapi import APIRouter, Depends, HTTPException, Response, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -47,7 +47,7 @@ class CameraCreateRequest(BaseModel):
     location: Optional[str] = None
     source_url: str = Field(..., min_length=1, max_length=500)  # Database uses source_url
     source_type: str = Field(default="rtsp", pattern="^(rtsp|usb|http|hcnetsdk)$")
-    camera_purpose: str = Field(default="IN", pattern="^(IN|OUT)$")
+    camera_purpose: str = Field(default="IN", pattern="^(IN|OUT|MONITOR)$")
     threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     interval_sec: float = Field(default=2.0, ge=0.5, le=60.0)
     frame_skip: int = Field(default=0, ge=0, le=10)
@@ -96,7 +96,7 @@ class CameraUpdateRequest(BaseModel):
     location: Optional[str] = None
     source_url: Optional[str] = Field(None, min_length=1, max_length=500)  # Database uses source_url
     source_type: Optional[str] = Field(None, pattern="^(rtsp|usb|http|hcnetsdk)$")
-    camera_purpose: Optional[str] = Field(None, pattern="^(IN|OUT)$")
+    camera_purpose: Optional[str] = Field(None, pattern="^(IN|OUT|MONITOR)$")
     threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     interval_sec: Optional[float] = Field(None, ge=0.5, le=60.0)
     frame_skip: Optional[int] = Field(None, ge=0, le=10)
@@ -252,7 +252,7 @@ def create_camera(
             raise ValueError("Source URL is required")
         if payload.source_type not in ["rtsp", "usb", "http", "hcnetsdk"]:
             raise ValueError(f"Invalid source_type: {payload.source_type}")
-        if payload.camera_purpose not in ["IN", "OUT"]:
+        if payload.camera_purpose not in ["IN", "OUT", "MONITOR"]:
             raise ValueError(f"Invalid camera_purpose: {payload.camera_purpose}")
         
         cam = CameraConfig(
@@ -420,6 +420,38 @@ def get_camera_preview(
             detail="No frame available. Camera may be offline or not yet started.",
         )
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+@router.get("/cameras/{camera_id}/stream.mjpg", tags=["cameras"])
+async def stream_camera_mjpeg(camera_id: int, request: Request):
+    """Continuous MJPEG stream of the annotated live feed.
+
+    Rendered directly by an <img> tag in the browser, so the video plays at the
+    backend display FPS with no client-side polling. (No auth dependency, same
+    as the DVR stream endpoint, because <img> cannot send a Bearer header.)
+    """
+    async def generate_frames():
+        # ~30 FPS ceiling; the display thread produces frames at CCTV_DISPLAY_FPS.
+        frame_period = 1.0 / 30.0
+        last_sent = None
+        while True:
+            # Stop as soon as the browser navigates away, so the connection and
+            # this task are released promptly (avoids piling up open streams).
+            if await request.is_disconnected():
+                break
+            jpeg = camera_manager.get_latest_jpeg(camera_id)
+            if jpeg is not None and jpeg is not last_sent:
+                last_sent = jpeg
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                )
+            await asyncio.sleep(frame_period)
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @router.post("/dvr/discover", tags=["cameras"])
@@ -669,42 +701,35 @@ def dvr_camera_preview(channel_id: int):
 
 
 @router.get("/dvr/cameras/{channel_id}/stream")
-async def dvr_camera_stream(channel_id: int):
+async def dvr_camera_stream(channel_id: int, request: Request):
     """MJPEG streaming endpoint for live video feed."""
-    import cv2
-    import time
-    
     dvr_manager = get_dvr_manager()
-    
+
     if not dvr_manager._connection or not dvr_manager._connection.connected:
         raise HTTPException(status_code=400, detail="Not connected to DVR")
-    
+
     camera_status = dvr_manager.get_camera_status(channel_id)
     if not camera_status:
         raise HTTPException(status_code=404, detail="Camera not found")
-    
+
     if not camera_status.get("worker_status", {}).get("is_alive"):
         raise HTTPException(status_code=400, detail="Camera not streaming")
-    
+
+    # Resolve the worker ONCE, up front, so the per-frame loop never has to take
+    # the connection lock (which a blocking connect/start could be holding —
+    # taking it here would stall the whole event loop).
+    conn = dvr_manager._connection
+    camera = conn.cameras.get(channel_id) if conn else None
+    worker = (camera.worker or camera.rtsp_worker) if camera else None
+
     async def generate_frames():
-        """Generator function that yields JPEG frames for MJPEG stream."""
-        while True:
-            with dvr_manager._connection.lock:
-                camera = dvr_manager._connection.cameras.get(channel_id)
-                if not camera:
-                    break
-                
-                jpeg = None
-                if camera.worker:
-                    jpeg = camera.worker.get_latest_jpeg()
-                elif camera.rtsp_worker:
-                    jpeg = camera.rtsp_worker.get_latest_jpeg()
-            
+        while worker is not None:
+            if await request.is_disconnected():
+                break
+            jpeg = worker.get_latest_jpeg()
             if jpeg is not None:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
-            
-            # Control frame rate (~10 FPS)
             await asyncio.sleep(0.1)
     
     return StreamingResponse(

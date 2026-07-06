@@ -471,8 +471,8 @@ def get_live_attendance_status(
 ):
     """Get real-time attendance status for all active employees today."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_latest_event_for_day
-    
+    from app.services.attendance_event_service import get_latest_event_for_day, _normalize_event_type
+
     today = get_ist_now().date()
     
     # Get all active employees
@@ -495,14 +495,14 @@ def get_live_attendance_status(
         )
         latest_event = get_latest_event_for_day(db, emp.id, today)
         
-        # Determine current state
+        # Determine current state (normalise so CHECK_IN/BREAK_IN/BREAK_OUT map right)
         current_state = "ABSENT"
         if latest_event:
-            latest_type = latest_event.event_type.upper()
+            latest_type = _normalize_event_type(latest_event.event_type)
             if latest_type in {"IN", "BREAK_IN"}:
                 current_state = "WORKING"
             elif latest_type in {"OUT", "BREAK_OUT"}:
-                # Check if they have a check-in today
+                # Has a check-in but currently out → on break; else checked out
                 if rec and rec.sign_in_time:
                     current_state = "OUTSIDE"
                 else:
@@ -654,15 +654,17 @@ def get_attendance_timeline(
     events = get_events_for_day(db, employee_id, attendance_date)
     work_h, break_h, first_in, last_out, timeline = calculate_intervals_from_events(events)
 
-    # Determine current status
+    # Determine current status (normalise so CHECK_IN/BREAK_IN/BREAK_OUT map right)
+    from app.services.attendance_event_service import _normalize_event_type
     latest_event = events[-1] if events else None
     current_status = "ABSENT"
     if latest_event:
-        latest_type = latest_event.event_type.upper()
+        latest_type = _normalize_event_type(latest_event.event_type)
         if latest_type in {"IN", "BREAK_IN"}:
-            current_status = "CHECKED_IN"
+            current_status = "PRESENT"
         elif latest_type in {"OUT", "BREAK_OUT"}:
-            current_status = "CHECKED_OUT"
+            # 'out' with no later return = checked out; otherwise on break
+            current_status = "CHECKED_OUT" if last_out else "ON_BREAK"
 
     return {
         "employee_id": employee_id,

@@ -271,6 +271,24 @@ async def _unified_lifespan(parent_app: FastAPI):
     except Exception:
         logger.exception("Failed to start CCTV camera manager – cameras will not run")
 
+    # --- Auto-connect DVR and start its streams (opt-in via .env) ----------
+    try:
+        from app.core.config import get_settings
+        _s = get_settings()
+        if _s.dvr_autostart and _s.dvr_ip and _s.dvr_username:
+            from app.services.dvr_manager import get_dvr_manager
+            dvr = get_dvr_manager()
+            ok, msg, _dev = dvr.connect(
+                _s.dvr_ip, _s.dvr_port, _s.dvr_username, _s.dvr_password
+            )
+            if ok:
+                started = dvr.start_all_streams()
+                logger.info("DVR auto-start: connected, %d stream(s) started", started)
+            else:
+                logger.error("DVR auto-start: connect failed: %s", msg)
+    except Exception:
+        logger.exception("DVR auto-start failed")
+
     scheduler = _start_background_scheduler()
     try:
         if resume_api_app is not None and getattr(resume_api_app.router, "lifespan_context", None):

@@ -96,6 +96,19 @@ class EmployeeCreate(BaseModel):
     bank_details: Optional[EmployeeBankDetailCreate] = None
 
 
+class StaffCreate(BaseModel):
+    """Minimal registration for non-employee staff (housekeeping, security…).
+
+    Only a name and staff type are needed; the backend fills the rest with
+    sensible placeholders. These records are recognised on camera but are NOT
+    marked for attendance.
+    """
+    first_name: str
+    last_name: Optional[str] = ""
+    staff_type: str = "Staff"
+    phone: Optional[str] = None
+
+
 class EmployeeUpdate(BaseModel):
     employee_code: Optional[str] = None
     staff_type: Optional[str] = None

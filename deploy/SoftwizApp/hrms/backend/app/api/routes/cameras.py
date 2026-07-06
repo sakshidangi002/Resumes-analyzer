@@ -422,6 +422,34 @@ def get_camera_preview(
     return Response(content=jpeg, media_type="image/jpeg")
 
 
+@router.get("/cameras/{camera_id}/stream.mjpg", tags=["cameras"])
+async def stream_camera_mjpeg(camera_id: int):
+    """Continuous MJPEG stream of the annotated live feed.
+
+    Rendered directly by an <img> tag in the browser, so the video plays at the
+    backend display FPS with no client-side polling. (No auth dependency, same
+    as the DVR stream endpoint, because <img> cannot send a Bearer header.)
+    """
+    async def generate_frames():
+        # ~30 FPS ceiling; the display thread produces frames at CCTV_DISPLAY_FPS.
+        frame_period = 1.0 / 30.0
+        last_sent = None
+        while True:
+            jpeg = camera_manager.get_latest_jpeg(camera_id)
+            if jpeg is not None and jpeg is not last_sent:
+                last_sent = jpeg
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                )
+            await asyncio.sleep(frame_period)
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
 @router.post("/dvr/discover", tags=["cameras"])
 def discover_dvr_cameras(
     request: DVRDiscoveryRequest,

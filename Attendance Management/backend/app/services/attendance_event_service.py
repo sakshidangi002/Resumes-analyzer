@@ -122,6 +122,59 @@ def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
     return "IN"
 
 
+# ── Attendance state machine ────────────────────────────────────────────────
+# State derived from the last event of the day:
+#   ABSENT   – no events yet
+#   WORKING  – last event is a work-start (CHECK_IN / BREAK_IN) → employee inside
+#   AWAY     – last event is a work-end  (BREAK_OUT / CHECK_OUT) → employee out
+def current_state(last_type: str | None) -> str:
+    if last_type is None:
+        return "ABSENT"
+    n = _normalize_event_type(last_type)
+    if n in _WORK_START_EVENTS:
+        return "WORKING"
+    if n in _WORK_END_EVENTS:
+        return "AWAY"
+    return "ABSENT"
+
+
+def resolve_camera_event(
+    camera_type: str, last_type: str | None, allow_missing_in: bool
+) -> tuple[str | None, str | None]:
+    """Decide the event type for a camera recognition, or reject it.
+
+    Returns (event_type, reject_reason). event_type is one of
+    CHECK_IN / BREAK_IN / BREAK_OUT (the final BREAK_OUT of the day is surfaced
+    as the check-out in the summary). reject_reason is set (and event_type None)
+    for an invalid transition.
+
+        IN  camera:  ABSENT  → CHECK_IN
+                     AWAY    → BREAK_IN         (returning from a break)
+                     WORKING → reject (duplicate check-in / already inside)
+        OUT camera:  WORKING → BREAK_OUT        (a departure; last one = checkout)
+                     ABSENT  → CHECK_IN if allow_missing_in else reject
+                     AWAY    → reject (duplicate break-out / already outside)
+    """
+    state = current_state(last_type)
+    cam = (camera_type or "IN").upper()
+
+    if cam == "IN":
+        if state == "ABSENT":
+            return "CHECK_IN", None
+        if state == "AWAY":
+            return "BREAK_IN", None
+        return None, "duplicate_check_in_already_working"
+
+    # OUT / check-out camera
+    if state == "WORKING":
+        return "BREAK_OUT", None
+    if state == "ABSENT":
+        if allow_missing_in:
+            return "CHECK_IN", None  # entrance was missed — record the check-in
+        return None, "check_out_without_check_in"
+    return None, "duplicate_out_already_away"
+
+
 def calculate_intervals_from_events(
     events: list[AttendanceEvent],
     cutoff_time: time = time(23, 59),
@@ -188,6 +241,19 @@ def calculate_intervals_from_events(
                 "duration_formatted": format_duration(delta),
                 "event_type": cur_type,
             })
+
+    # Live open interval: if the employee is CURRENTLY working (last event is a
+    # work-start) on TODAY, count the time from that event until now, so the
+    # displayed working hours reflect reality instead of freezing at the last
+    # break-out. (Past days close naturally at the final check-out.)
+    last_ev = sorted_events[-1]
+    if _normalize_event_type(last_ev.event_type) in _WORK_START_EVENTS:
+        last_t = to_naive_ist(last_ev.event_time)
+        now = get_ist_now()
+        if last_t.date() == now.date():
+            open_secs = int((now - last_t).total_seconds())
+            if open_secs > 0:
+                total_work_seconds += open_secs
 
     work_hours = Decimal(round(total_work_seconds / 3600, 2)) if total_work_seconds else Decimal("0")
     break_hours = Decimal(round(total_break_seconds / 3600, 2)) if total_break_seconds else Decimal("0")
@@ -319,6 +385,7 @@ def add_attendance_event(
     #   1. Explicit caller override  (event_type param)
     #   2. Camera purpose            (camera_purpose param)
     #   3. Auto-toggle from last event
+    from_camera_purpose = event_type is None and camera_purpose is not None
     if event_type is not None:
         resolved_type = event_type
     else:
@@ -332,6 +399,34 @@ def add_attendance_event(
     resolved_type = _normalize_event_type(resolved_type) or ""
     if resolved_type not in {"IN", "OUT", "BREAK_IN", "BREAK_OUT"}:
         raise ValueError("event_type must be IN, OUT, BREAK_IN, or BREAK_OUT")
+
+    # ── Attendance state machine (dedicated IN / OUT cameras) ───────────────
+    # Classify the camera recognition into CHECK_IN / BREAK_IN / BREAK_OUT based
+    # on the employee's current state, and REJECT invalid transitions (with the
+    # exact reason logged). Manual/explicit events (event_type given) bypass it.
+    if from_camera_purpose and resolved_type in {"IN", "OUT"}:
+        last_event = get_latest_event_for_day(db, employee_id, d)
+        last_type = last_event.event_type if last_event else None
+        camera_type = "IN" if resolved_type == "IN" else "OUT"
+
+        from app.core.config import get_settings
+        allow_missing = get_settings().attendance_checkin_on_missing_in
+
+        new_type, reject = resolve_camera_event(camera_type, last_type, allow_missing)
+        state = current_state(last_type)
+        if reject:
+            rec = get_or_create_attendance(db, employee_id, d)
+            db.refresh(rec)
+            logger.info(
+                "attendance_event REJECTED employee_id=%s camera=%s state=%s last=%s reason=%s",
+                employee_id, camera_type, state, last_type, reject,
+            )
+            return None, rec, reject
+        logger.info(
+            "attendance_event STATE employee_id=%s camera=%s state=%s last=%s -> event=%s",
+            employee_id, camera_type, state, last_type, new_type,
+        )
+        resolved_type = new_type
 
     rec = get_or_create_attendance(db, employee_id, d)
     event = AttendanceEvent(

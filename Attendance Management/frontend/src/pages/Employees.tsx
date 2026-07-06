@@ -90,7 +90,7 @@ export default function Employees() {
   const [departments, setDepartments] = useState<Array<{ id: number; name: string }>>([]);
   const [designations, setDesignations] = useState<Array<{ id: number; title: string }>>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<"add" | null>(null);
+  const [modal, setModal] = useState<"add" | "staff" | null>(null);
   const [form, setForm] = useState(emptyForm());
   const [filterDept, setFilterDept] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
@@ -226,6 +226,43 @@ export default function Employees() {
 
   const setField = (key: string, value: string | number) => {
     setForm((f) => ({ ...f, [key]: value }));
+  };
+
+  // ── Non-employee staff (housekeeping/security/etc.) — minimal form ──────
+  const [staffForm, setStaffForm] = useState({ first_name: "", last_name: "", staff_type: "Housekeeping", phone: "" });
+  const setStaffField = (key: string, value: string) => setStaffForm((f) => ({ ...f, [key]: value }));
+
+  const openStaff = () => {
+    setError("");
+    setSuccess("");
+    setStaffForm({ first_name: "", last_name: "", staff_type: "Housekeeping", phone: "" });
+    setModal("staff");
+  };
+
+  const handleSubmitStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!staffForm.first_name.trim() || !staffForm.staff_type.trim()) {
+      setError("Name and staff type are required.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await api.createStaff({
+        first_name: staffForm.first_name.trim(),
+        last_name: staffForm.last_name.trim(),
+        staff_type: staffForm.staff_type.trim(),
+        phone: staffForm.phone.trim() || undefined,
+      });
+      setModal(null);
+      setSuccess("Staff member added. Open their profile to register a face.");
+      await load();
+    } catch (err) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      setError(e.response?.data?.detail || "Failed to add staff member.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleSubmitAdd = (e: React.FormEvent) => {
@@ -365,9 +402,14 @@ export default function Employees() {
           }
           rightControls={
             canEdit ? (
-              <button type="button" className="btn btn-primary" onClick={openAdd} title="Add New Employee" style={{ height: "42px", minWidth: "140px" }}>
-                Add Employee
-              </button>
+              <div style={{ display: "flex", gap: "0.6rem" }}>
+                <button type="button" className="btn btn-secondary" onClick={openStaff} title="Add non-employee staff (housekeeping, security, etc.)" style={{ height: "42px", minWidth: "120px" }}>
+                  + Add Staff
+                </button>
+                <button type="button" className="btn btn-primary" onClick={openAdd} title="Add New Employee" style={{ height: "42px", minWidth: "140px" }}>
+                  Add Employee
+                </button>
+              </div>
             ) : null
           }
         />
@@ -536,6 +578,54 @@ export default function Employees() {
           </div>
         )}
       </div>
+
+      {modal === "staff" && (
+        <div className="modal-backdrop" onClick={() => setModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <h3 style={{ marginTop: 0 }}>Add Staff</h3>
+            <p style={{ marginTop: 0, fontSize: "0.85rem", opacity: 0.7 }}>
+              For non-employee staff (housekeeping, security, driver…). They are recognised on
+              camera but not marked for attendance. Register their face from the profile after saving.
+            </p>
+            <form onSubmit={handleSubmitStaff}>
+              <div style={{ display: "grid", gap: "0.9rem" }}>
+                <div className="form-group">
+                  <label>Staff Type *</label>
+                  <input
+                    list="staff-type-options"
+                    value={staffForm.staff_type}
+                    onChange={(e) => setStaffField("staff_type", e.target.value)}
+                    required
+                    placeholder="e.g. Housekeeping, Security, Driver"
+                  />
+                  <datalist id="staff-type-options">
+                    {STAFF_TYPE_SUGGESTIONS.filter((s) => s !== "Employee").map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className="form-group">
+                  <label>First Name *</label>
+                  <input value={staffForm.first_name} onChange={(e) => setStaffField("first_name", e.target.value)} required placeholder="First Name" />
+                </div>
+                <div className="form-group">
+                  <label>Last Name</label>
+                  <input value={staffForm.last_name} onChange={(e) => setStaffField("last_name", e.target.value)} placeholder="Last Name (optional)" />
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input value={staffForm.phone} onChange={(e) => setStaffField("phone", e.target.value)} placeholder="Phone (optional)" />
+                </div>
+              </div>
+              {error ? <div style={{ color: "#f87171", marginTop: "0.75rem", fontSize: "0.85rem" }}>{error}</div> : null}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
+                <button type="button" className="btn btn-cancel-alt" onClick={() => setModal(null)} disabled={submitting}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? "Saving…" : "Save Staff"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {modal === "add" && (
         <div className="modal-backdrop" onClick={() => setModal(null)}>

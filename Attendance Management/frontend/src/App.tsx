@@ -37,6 +37,14 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Restrict a route to specific roles; others are bounced to the dashboard. */
+function RoleRoute({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { hasRole, loading } = useAuth();
+  if (loading) return <AppLoadingScreen />;
+  if (!hasRole(...roles)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -58,9 +66,9 @@ export default function App() {
         <Route path="users" element={<ManageUsers />} />
         <Route path="attendance" element={<Attendance />} />
         <Route path="face-detection" element={<FaceDetection />} />
-        <Route path="cctv-attendance" element={<CctvAttendance />} />
-        <Route path="cctv-cameras" element={<CctvCameraManager />} />
-        <Route path="dvr-cameras" element={<DvrCameraDashboard />} />
+        <Route path="cctv-attendance" element={<RoleRoute roles={["Admin", "HR"]}><CctvAttendance /></RoleRoute>} />
+        <Route path="cctv-cameras" element={<RoleRoute roles={["Admin", "HR"]}><CctvCameraManager /></RoleRoute>} />
+        <Route path="dvr-cameras" element={<RoleRoute roles={["Admin", "HR"]}><DvrCameraDashboard /></RoleRoute>} />
         <Route path="leave" element={<Leave />} />
         <Route path="leave-approvals" element={<LeaveApprovals />} />
         <Route path="leave-allocations" element={<LeaveAllocations />} />

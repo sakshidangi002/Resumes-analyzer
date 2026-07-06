@@ -48,6 +48,8 @@ import cv2
 import numpy as np
 
 from app.services.face_tracker import FaceTracker
+from app.services.person_tracker import PersonTracker, check_line_crossing
+from app.services import person_detector
 
 # Import HCNetSDK components (will be used when source_type="hcnetsdk")
 try:
@@ -72,6 +74,28 @@ _FPS_WINDOW           = 30  # frames used to compute rolling FPS
 # Number of consecutive frames the SAME employee must be identified on a track
 # before attendance is recorded (stable confirmation → no false positives).
 _CONFIRM_FRAMES       = int(os.getenv("CCTV_CONFIRM_FRAMES",   "3"))
+# Target FPS for the display/encode thread. This is decoupled from recognition
+# so the live feed stays smooth even while face analysis runs in the background.
+_DISPLAY_FPS          = float(os.getenv("CCTV_DISPLAY_FPS",    "25"))
+# Attendance cooldown PER CAMERA PER EMPLOYEE. Once an employee is marked on a
+# camera, further marks are ignored until this many seconds pass — this covers
+# the "employee lingers in view / leaves and comes back" case. IN and OUT are
+# separate cameras (separate workers) so they never block each other.
+_ATTENDANCE_COOLDOWN  = float(os.getenv("CCTV_ATTENDANCE_COOLDOWN", "90"))
+# Optional: downscale the longest frame side to this many px BEFORE detection to
+# speed up analysis on high-res streams (0 = disabled, detect at full res).
+_DETECT_MAXSIDE       = int(os.getenv("CCTV_DETECT_MAXSIDE",   "0"))
+# How often the analysis (detect+track+identify) loop runs. Kept small so face
+# boxes follow people smoothly; the actual rate is bounded by detector speed.
+_ANALYSIS_INTERVAL    = float(os.getenv("CCTV_ANALYSIS_INTERVAL", "0.12"))
+# How long (seconds) a RECOGNISED person keeps their name after their face is no
+# longer visible — the box coasts along their motion until they leave the frame.
+_IDENTITY_HOLD_SEC    = float(os.getenv("CCTV_IDENTITY_HOLD_SEC", "6.0"))
+# Body/person tracking (opt-in; requires the MobileNet-SSD model files). When
+# active, a recognised face binds to the person's body track so the name stays
+# on them even when the face turns away, until they leave the frame.
+_PERSON_TRACKING      = os.getenv("CCTV_PERSON_TRACKING", "").lower() in {"1", "true", "yes"}
+_PERSON_REVERIFY_SEC  = float(os.getenv("CCTV_PERSON_REVERIFY_SEC", "5.0"))
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +147,10 @@ class CameraRuntimeState:
     latest_result: dict = field(default_factory=dict)
     _fps_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
     active_tracks: int = 0  # Number of active face tracks
+    display_fps: float = 0.0  # rendered (encoded) FPS shown to the viewer
+    recognition_status: str = "idle"  # idle | analyzing | recognized
+    crossing_count: int = 0  # people who crossed the doorway line (this camera)
+    _disp_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +161,21 @@ def _draw_enhanced_overlay(
     tracks: list,
     camera_name: str,
     fps: float,
+    line: Optional[dict] = None,
+    crossing_count: int = 0,
 ) -> np.ndarray:
     """Enhanced overlay with green/red boxes, labels, confidence, and metadata."""
     annotated = frame.copy()
+
+    # Doorway crossing line (cyan) if configured.
+    if line:
+        h, w = annotated.shape[:2]
+        if line.get("orientation") == "vertical":
+            x = int(line.get("position", 0.5) * w)
+            cv2.line(annotated, (x, 0), (x, h), (255, 255, 0), 2)
+        else:
+            y = int(line.get("position", 0.5) * h)
+            cv2.line(annotated, (0, y), (w, y), (255, 255, 0), 2)
     
     # Draw face overlays
     for track in tracks:
@@ -212,6 +252,8 @@ def _draw_enhanced_overlay(
         f"FPS: {fps:.1f}",
         f"Faces: {len(tracks)}",
     ]
+    if line:
+        overlay_lines.append(f"Crossings: {crossing_count}")
     
     # Add timestamp
     from datetime import datetime
@@ -303,6 +345,22 @@ def _is_blurry(frame: np.ndarray, threshold: float = 80.0) -> bool:
     """Return True when the frame is too blurry for reliable recognition."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < threshold
+
+
+def _face_in_box(faces: list, box) -> Optional[dict]:
+    """Return the highest-confidence detected face whose centre lies inside box."""
+    x1, y1, x2, y2 = box
+    best, best_score = None, -1.0
+    for f in faces:
+        fb = f.get("box") or []
+        if len(fb) < 4:
+            continue
+        cx, cy = (fb[0] + fb[2]) / 2, (fb[1] + fb[3]) / 2
+        if x1 <= cx <= x2 and y1 <= cy <= y2:
+            score = float(f.get("confidence", 0.0))
+            if score > best_score:
+                best, best_score = f, score
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -452,12 +510,111 @@ class _RecognitionThread(threading.Thread):
     def stop(self) -> None:
         self._stop_evt.set()
 
+    def _analyze_person(self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray) -> None:
+        """Body-tracking pipeline: detect people, bind recognised faces to their
+        body track, and keep the name on them until they leave the frame."""
+        from app.services.recognition import recognize_face, mark_cctv_attendance
+        from app.services.recognition import extract_faces_from_rgb
+
+        # 1. Detect & track whole bodies (person detection runs on the BGR frame).
+        persons = person_detector.detect_persons(frame)
+        ptracks = w.person_tracker.update(persons)
+
+        # 2. Detect faces (with embeddings) once on the full frame.
+        faces = extract_faces_from_rgb(rgb)
+        logger.debug(
+            "STAGE-person camera=%s persons=%d faces=%d", w.camera_id, len(ptracks), len(faces)
+        )
+
+        # Precompute the doorway line position in pixels (if crossing enabled).
+        line_px = None
+        if w.crossing_enabled:
+            h, wpx = frame.shape[:2]
+            line_px = w.line_position * (wpx if w.line_orientation == "vertical" else h)
+
+        def _mark(emp_id: int) -> None:
+            if emp_id is not None and w.can_mark_attendance(int(emp_id)):
+                w.note_attendance_marked(int(emp_id))
+                w.state.recognition_status = "recognized"
+                mark_cctv_attendance(
+                    int(emp_id), camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
+                )
+
+        any_match = False
+        for pt in ptracks:
+            fresh = pt.consecutive_misses == 0
+
+            # (a) Bind identity: recognise a face inside this body when the track
+            #     is still unknown or a periodic re-verify is due.
+            if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC):
+                face = _face_in_box(faces, pt.box)
+                if face is not None:
+                    result = recognize_face(
+                        face, threshold=w.threshold, source="cctv",
+                        camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
+                        mark_attendance=False,
+                    )
+                    fd = (result.get("faces") or [{}])[0]
+                    pt.bind_identity(
+                        fd.get("employee_id"), fd.get("employee_name") or "Person",
+                        fd.get("employee_code"), fd.get("matched", False), fd.get("score", 0.0),
+                    )
+            if pt.matched:
+                any_match = True
+
+            # (b) Attendance. A recognised person is marked ONCE per track when
+            #     EITHER they cross the doorway line OR their identity is stably
+            #     confirmed — whichever happens first. This makes marking robust
+            #     to a mis-set line and to recognition landing a frame after the
+            #     crossing. Duplicates are still blocked by the per-camera
+            #     cooldown and the IN/OUT presence state machine.
+            if fresh:
+                if w.crossing_enabled and check_line_crossing(
+                    pt, w.line_orientation, line_px, w.entry_direction
+                ):
+                    pt.crossed = True
+                    w.state.crossing_count += 1
+                    logger.info(
+                        "Camera %s [%s]: LINE-CROSS #%d track=%d person=%s",
+                        w.camera_id, w.camera_purpose, w.state.crossing_count,
+                        pt.track_id, pt.employee_name or "Person",
+                    )
+
+                if pt.matched and not pt.attendance_marked:
+                    # Count consecutive recognised frames of the same employee.
+                    if pt.pending_employee_id == pt.employee_id:
+                        pt.confirm_count += 1
+                    else:
+                        pt.pending_employee_id = pt.employee_id
+                        pt.confirm_count = 1
+
+                    confirmed = pt.confirm_count >= _CONFIRM_FRAMES
+                    # If a line is configured, a crossing is required OR a longer
+                    # confirmation as fallback; without a line, confirmation alone.
+                    trigger = pt.crossed or confirmed
+                    if trigger:
+                        pt.attendance_marked = True
+                        logger.info(
+                            "Camera %s [%s]: ATTENDANCE track=%d emp=%s via=%s",
+                            w.camera_id, w.camera_purpose, pt.track_id,
+                            pt.employee_name, "cross" if pt.crossed else "confirm",
+                        )
+                        _mark(pt.employee_id)
+
+        # 3. Publish person tracks for the display thread.
+        w.state.active_tracks = len(ptracks)
+        with w._frame_lock:
+            w._latest_tracks = list(ptracks)
+            w.state.updated_at = time.time()
+        if w.state.recognition_status == "analyzing":
+            w.state.recognition_status = "recognized" if any_match else ("idle" if not ptracks else "analyzing")
+
     def run(self) -> None:
         w = self._w
         logger.info("Camera %s: Recognition thread started", w.camera_id)
 
         while not self._stop_evt.is_set():
-            self._stop_evt.wait(max(0.5, float(w.interval_sec)))
+            self._stop_evt.wait(max(0.02, _ANALYSIS_INTERVAL))
             if self._stop_evt.is_set():
                 break
 
@@ -472,16 +629,38 @@ class _RecognitionThread(threading.Thread):
                 continue
 
             try:
+                w.state.recognition_status = "analyzing"
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
+
+                # Body-tracking mode: track people, bind a recognised face to the
+                # person so the name persists while they are in view.
+                if w.use_person_tracking:
+                    self._analyze_person(w, frame, rgb)
+                    continue
+
                 # Import here to avoid circular imports at module load
                 from app.services.recognition import recognize_face, mark_cctv_attendance
                 from app.services.recognition import extract_faces_from_rgb
 
-                # Step 1: Detect all faces ONCE on the full frame. Each face dict
-                # already carries its embedding, so recognition never needs a
-                # second detection pass.
-                faces = extract_faces_from_rgb(rgb)
+                # Step 1: Detect all faces ONCE. Each face dict already carries its
+                # embedding, so recognition never needs a second detection pass.
+                # Optionally downscale first to speed up detection on hi-res feeds.
+                det_scale = 1.0
+                det_rgb = rgb
+                if _DETECT_MAXSIDE > 0:
+                    h, w_px = rgb.shape[:2]
+                    longest = max(h, w_px)
+                    if longest > _DETECT_MAXSIDE:
+                        det_scale = _DETECT_MAXSIDE / float(longest)
+                        det_rgb = cv2.resize(
+                            rgb, (int(w_px * det_scale), int(h * det_scale))
+                        )
+
+                faces = extract_faces_from_rgb(det_rgb)
+                if det_scale != 1.0:
+                    inv = 1.0 / det_scale
+                    for f in faces:
+                        f["box"] = [c * inv for c in f["box"]]
                 logger.debug(
                     "STAGE-detect camera=%s faces_detected=%d", w.camera_id, len(faces)
                 )
@@ -490,8 +669,10 @@ class _RecognitionThread(threading.Thread):
                 # each track can be recognised directly from its embedding.
                 detections = [{"box": face.get("box"), "face": face} for face in faces]
 
-                # Step 2: Update face tracker (always update for smooth tracking)
-                tracks = w.face_tracker.update(detections)
+                # Step 2: Update face tracker (always update for smooth tracking).
+                # frame_shape lets coasted (recognised-but-face-hidden) tracks
+                # expire once they drift out of the frame.
+                tracks = w.face_tracker.update(detections, frame_shape=rgb.shape[:2])
                 logger.debug(
                     "STAGE-track camera=%s active_tracks=%d", w.camera_id, len(tracks)
                 )
@@ -507,6 +688,12 @@ class _RecognitionThread(threading.Thread):
                 if not skip_recognition:
                     for track in tracks:
                         if track.consecutive_misses != 0 or track.face is None:
+                            continue
+
+                        # Reuse identity: once a track is confirmed & recorded,
+                        # keep displaying it and stop re-matching (Issue 3). This
+                        # both saves work and prevents identity flicker.
+                        if track.attendance_marked and track.matched:
                             continue
 
                         logger.debug(
@@ -542,18 +729,31 @@ class _RecognitionThread(threading.Thread):
                             emp_id, matched, _CONFIRM_FRAMES
                         )
                         if should_mark:
-                            logger.info(
-                                "Camera %s [%s]: track=%d CONFIRMED %s (id=%s, conf=%.1f%%) "
-                                "after %d frames -> marking attendance",
-                                w.camera_id, w.camera_purpose, track.track_id,
-                                track.employee_name, emp_id,
-                                track.confidence * 100, track.confirm_count,
-                            )
-                            mark_cctv_attendance(
-                                int(emp_id),
-                                camera_id=str(w.camera_id),
-                                camera_purpose=w.camera_purpose,
-                            )
+                            # Per-camera cooldown: covers "lingering in view" and
+                            # "left and came back quickly" (Issue 5). IN and OUT
+                            # are separate workers so they never block each other.
+                            if not w.can_mark_attendance(int(emp_id)):
+                                logger.info(
+                                    "Camera %s [%s]: track=%d %s within cooldown "
+                                    "(%.0fs) -> attendance NOT re-marked",
+                                    w.camera_id, w.camera_purpose, track.track_id,
+                                    track.employee_name, _ATTENDANCE_COOLDOWN,
+                                )
+                            else:
+                                logger.info(
+                                    "Camera %s [%s]: track=%d CONFIRMED %s (id=%s, conf=%.1f%%) "
+                                    "after %d frames -> marking attendance",
+                                    w.camera_id, w.camera_purpose, track.track_id,
+                                    track.employee_name, emp_id,
+                                    track.confidence * 100, track.confirm_count,
+                                )
+                                w.note_attendance_marked(int(emp_id))
+                                w.state.recognition_status = "recognized"
+                                mark_cctv_attendance(
+                                    int(emp_id),
+                                    camera_id=str(w.camera_id),
+                                    camera_purpose=w.camera_purpose,
+                                )
                         elif matched:
                             logger.debug(
                                 "Camera %s: track=%d identified %s confirm=%d/%d",
@@ -568,19 +768,17 @@ class _RecognitionThread(threading.Thread):
                                 face_data.get("state", "no_match_or_below_threshold"),
                             )
                 
-                # Step 4: Update state with active tracks count
+                # Step 4: Publish tracks for the display thread to render.
+                # NOTE: this thread NO LONGER encodes the display JPEG. The
+                # dedicated _DisplayThread draws these persistent tracks onto the
+                # latest raw frame at a high FPS, so the video stays smooth and
+                # boxes never flicker even though analysis runs slower.
                 w.state.active_tracks = len(tracks)
-                
-                # Step 5: Always annotate frame with enhanced overlay (shows persistent boxes)
-                annotated = _draw_enhanced_overlay(frame, tracks, w.name, w.state.fps)
-                ok_enc, jpeg_buf = cv2.imencode(
-                    ".jpg", annotated,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY],
-                )
                 with w._frame_lock:
-                    if ok_enc:
-                        w.state.latest_jpeg = jpeg_buf.tobytes()
+                    w._latest_tracks = list(tracks)
                     w.state.updated_at = time.time()
+                if w.state.recognition_status == "analyzing":
+                    w.state.recognition_status = "idle" if not tracks else "recognized"
 
             except Exception as exc:
                 logger.error(
@@ -588,6 +786,69 @@ class _RecognitionThread(threading.Thread):
                 )
 
         logger.info("Camera %s: Recognition thread stopped", w.camera_id)
+
+
+# ---------------------------------------------------------------------------
+# DisplayThread – renders the latest frame + latest tracks at a high FPS
+# ---------------------------------------------------------------------------
+class _DisplayThread(threading.Thread):
+    """Encodes the preview JPEG independently of recognition.
+
+    This is the key to a smooth feed: it reuses the most recent tracks (drawn as
+    persistent overlays) and re-encodes the newest raw frame at ~_DISPLAY_FPS,
+    so viewers see near-real-time video regardless of how long analysis takes.
+    """
+
+    def __init__(self, worker: "CameraWorker") -> None:
+        super().__init__(daemon=True, name=f"display-{worker.camera_id}")
+        self._w = worker
+        self._stop_evt = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+
+    def run(self) -> None:
+        w = self._w
+        period = 1.0 / _DISPLAY_FPS if _DISPLAY_FPS > 0 else 0.04
+        logger.info("Camera %s: Display thread started (target %.0f FPS)", w.camera_id, _DISPLAY_FPS)
+
+        while not self._stop_evt.is_set():
+            self._stop_evt.wait(period)
+            if self._stop_evt.is_set():
+                break
+
+            with w._frame_lock:
+                frame = w._latest_frame
+                tracks = list(w._latest_tracks)
+
+            if frame is None:
+                continue
+
+            try:
+                line_info = (
+                    {"orientation": w.line_orientation, "position": w.line_position}
+                    if w.crossing_enabled else None
+                )
+                annotated = _draw_enhanced_overlay(
+                    frame, tracks, w.name, w.state.fps,
+                    line=line_info, crossing_count=w.state.crossing_count,
+                )
+                ok_enc, jpeg_buf = cv2.imencode(
+                    ".jpg", annotated,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY],
+                )
+                now = time.time()
+                w.state._disp_ts.append(now)
+                if len(w.state._disp_ts) >= 2:
+                    span = w.state._disp_ts[-1] - w.state._disp_ts[0]
+                    w.state.display_fps = round((len(w.state._disp_ts) - 1) / span, 1) if span > 0 else 0.0
+                with w._frame_lock:
+                    if ok_enc:
+                        w.state.latest_jpeg = jpeg_buf.tobytes()
+            except Exception as exc:
+                logger.error("Camera %s: Display error: %s", w.camera_id, exc)
+
+        logger.info("Camera %s: Display thread stopped", w.camera_id)
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +868,10 @@ class CameraWorker:
         threshold: float,
         interval_sec: float,
         frame_skip: int = 0,  # Skip N frames between recognition (0 = no skip)
+        crossing_enabled: bool = False,
+        line_orientation: str = "horizontal",
+        line_position: float = 0.5,
+        entry_direction: str = "down",
     ) -> None:
         self.camera_id = camera_id
         self.name = name
@@ -618,20 +883,62 @@ class CameraWorker:
         self.interval_sec = interval_sec
         self.frame_skip = frame_skip
 
+        # Doorway line-crossing config
+        self.crossing_enabled = bool(crossing_enabled)
+        self.line_orientation = (line_orientation or "horizontal").lower()
+        self.line_position = float(line_position)
+        self.entry_direction = (entry_direction or "down").lower()
+
         self.state = CameraRuntimeState()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_tracks: list = []       # published by recog, drawn by display
         self._frame_counter = 0  # For frame skipping
 
-        # Face tracking for multi-face recognition
+        # Per-employee last-marked timestamp for the camera-level cooldown.
+        self._last_marked: dict[int, float] = {}
+
+        # Face tracking for multi-face recognition. A recognised person keeps
+        # their identity (name follows them) for ~_IDENTITY_HOLD_SEC after the
+        # face turns away, then the track expires when they leave the frame.
         self.face_tracker = FaceTracker(
             max_distance=100.0,
             recognition_cooldown=3.0,
             max_misses=10,
+            identity_max_misses=max(10, int(_IDENTITY_HOLD_SEC / max(0.02, _ANALYSIS_INTERVAL))),
         )
+
+        # Optional body/person tracking (falls back to face tracking if the
+        # person-detection model isn't installed).
+        self.use_person_tracking = _PERSON_TRACKING and person_detector.is_available()
+        self.person_tracker: Optional[PersonTracker] = (
+            PersonTracker(max_misses=max(15, int(_IDENTITY_HOLD_SEC / max(0.02, _ANALYSIS_INTERVAL))))
+            if self.use_person_tracking else None
+        )
+        if _PERSON_TRACKING and not self.use_person_tracking:
+            logger.warning(
+                "Camera %s: person tracking requested but model unavailable — "
+                "using face tracking instead.", camera_id,
+            )
+        if self.crossing_enabled and not self.use_person_tracking:
+            logger.warning(
+                "Camera %s: line-crossing is enabled but person tracking is NOT "
+                "active (needs CCTV_PERSON_TRACKING=true + the MobileNet-SSD "
+                "model). Crossing/attendance-by-crossing will not run.", camera_id,
+            )
 
         self._stream_thread: Optional[_StreamThread] = None
         self._recog_thread: Optional[_RecognitionThread] = None
+        self._display_thread: Optional[_DisplayThread] = None
+
+    # ── attendance cooldown ─────────────────────────────────────────────────
+    def can_mark_attendance(self, employee_id: int) -> bool:
+        """True if this employee is outside the per-camera cooldown window."""
+        last = self._last_marked.get(employee_id)
+        return last is None or (time.time() - last) >= _ATTENDANCE_COOLDOWN
+
+    def note_attendance_marked(self, employee_id: int) -> None:
+        self._last_marked[employee_id] = time.time()
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -639,8 +946,10 @@ class CameraWorker:
             return
         self._stream_thread = _StreamThread(self)
         self._recog_thread  = _RecognitionThread(self)
+        self._display_thread = _DisplayThread(self)
         self._stream_thread.start()
         self._recog_thread.start()
+        self._display_thread.start()
         logger.info(
             "Camera %s [%s]: Worker started (purpose=%s url=%s)",
             self.camera_id, self.name, self.camera_purpose, self.stream_url,
@@ -651,10 +960,14 @@ class CameraWorker:
             self._stream_thread.stop()
         if self._recog_thread:
             self._recog_thread.stop()
+        if self._display_thread:
+            self._display_thread.stop()
         if self._stream_thread:
             self._stream_thread.join(timeout=6)
         if self._recog_thread:
             self._recog_thread.join(timeout=6)
+        if self._display_thread:
+            self._display_thread.join(timeout=6)
         self.state.status = "stopped"
         logger.info("Camera %s [%s]: Worker stopped", self.camera_id, self.name)
 
@@ -664,6 +977,11 @@ class CameraWorker:
         self.state = CameraRuntimeState()
         with self._frame_lock:
             self._latest_frame = None
+            self._latest_tracks = []
+        self.face_tracker.reset()
+        if self.person_tracker is not None:
+            self.person_tracker.reset()
+        self._last_marked.clear()
         self.start()
     
     def is_alive(self) -> bool:
@@ -694,6 +1012,13 @@ class CameraWorker:
             "status": s.status,
             "last_error": s.last_error,
             "fps": s.fps,
+            "capture_fps": s.fps,
+            "display_fps": s.display_fps,
+            "recognition_status": s.recognition_status,
+            "active_tracks": s.active_tracks,
+            "crossing_enabled": self.crossing_enabled,
+            "crossing_count": s.crossing_count,
+            "person_tracking": self.use_person_tracking,
             "total_frames": s.total_frames,
             "reconnect_count": s.reconnect_count,
             "last_frame_time": s.last_frame_time,
@@ -805,6 +1130,10 @@ class CameraManager:
             threshold=float(model.threshold),
             interval_sec=float(model.interval_sec),
             frame_skip=getattr(model, 'frame_skip', 0),
+            crossing_enabled=bool(getattr(model, 'crossing_enabled', False)),
+            line_orientation=getattr(model, 'line_orientation', 'horizontal'),
+            line_position=float(getattr(model, 'line_position', 0.5)),
+            entry_direction=getattr(model, 'entry_direction', 'down'),
         )
         worker.location = getattr(model, "location", None)
         

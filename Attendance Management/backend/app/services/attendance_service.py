@@ -101,6 +101,19 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     - Time In only (no Clock Out yet) => PRESENT so employee is not shown Absent
     - PAID_LEAVE / WEEKLY_OFF / HOLIDAY are HR/system-set and never overwritten by hours.
     """
+    # The CURRENT day is still in progress — do NOT finalize to Half Day / Short
+    # from partial hours. An employee who has shown up is PRESENT until the day
+    # is over; the real classification is applied when viewing a past day.
+    from app.core.datetime_utils import get_ist_now
+    if rec.date >= get_ist_now().date():
+        if rec.sign_in_time is not None:
+            rec.status = "PRESENT"
+        elif rec.is_weekly_off:
+            rec.status = "WEEKLY_OFF"
+        elif rec.is_holiday:
+            rec.status = "HOLIDAY"
+        return
+
     # If we have hours worked, we classify based on hours even on Week Offs/Holidays.
     # If no hours worked, we use the system status (WO/Holiday/Absent).
     if rec.total_work_hours is not None:

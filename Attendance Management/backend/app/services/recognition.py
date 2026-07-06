@@ -70,6 +70,16 @@ def _mark_attendance(
             )
             return None, "unknown"
 
+        # Non-employee staff (housekeeping, security, …) are recognised on camera
+        # but must NOT be marked for attendance.
+        staff_type = (getattr(employee, "staff_type", None) or "Employee").strip().lower()
+        if staff_type != "employee":
+            logger.info(
+                "STEP-7 monitor_only employee=%s staff_type=%s -> attendance skipped",
+                employee.full_name, staff_type,
+            )
+            return None, "monitor_only"
+
         logger.info(
             "STEP-8 business_logic_start employee=%s employee_id=%s determining_event_type",
             employee.full_name, employee.id,
@@ -98,15 +108,17 @@ def _mark_attendance(
             )
             return None, "attendance_failed"
 
-        if action == "cooldown":
+        if event is None:
+            # cooldown, or an invalid transition rejected by the state machine
+            # (e.g. duplicate_check_in_already_working). No event was created.
             logger.info(
-                "STEP-8 cooldown employee=%s employee_id=%s attendance_date=%s "
-                "reason=duplicate_within_60s",
+                "STEP-8 no_event employee=%s employee_id=%s attendance_date=%s action=%s",
                 employee.full_name,
                 employee.id,
                 rec.date.isoformat(),
+                action,
             )
-            return _attendance_payload(rec, employee), "cooldown"
+            return _attendance_payload(rec, employee), action
 
         event_type = event.event_type if event else action
         logger.info(

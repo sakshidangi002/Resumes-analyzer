@@ -75,6 +75,8 @@ export const employees = {
   list: (params?: { department_id?: number; status?: string }) => api.get("/employees", { params }),
   get: (id: number) => api.get("/employees/" + id),
   create: (data: object) => api.post("/employees", data),
+  createStaff: (data: { first_name: string; last_name?: string; staff_type: string; phone?: string }) =>
+    api.post("/employees/staff", data),
   update: (id: number, data: object) => api.patch("/employees/" + id, data),
   delete: (id: number) => api.delete("/employees/" + id),
   bankGet: (id: number) => api.get(`/employees/${id}/bank`),
@@ -163,6 +165,8 @@ export const recognition = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+  faceStatus: (employee_id: number) => api.get(`/employees/${employee_id}/face`),
+  deleteFace: (employee_id: number) => api.delete(`/employees/${employee_id}/face`),
 };
 
 export const leave = {
@@ -498,6 +502,7 @@ export const cameras = {
   restart: (id: number) => api.post(`/cameras/${id}/restart`),
   status: (id: number) => api.get(`/cameras/${id}/status`),
   previewUrl: (id: number) => `/api/cameras/${id}/preview.jpg`,
+  streamUrl: (id: number) => `/api/cameras/${id}/stream.mjpg`,
   testConnection: (data: { source_url: string; source_type?: string }) =>
     api.post("/cameras/test-connection", data),
   stats: () => api.get("/cameras/stats"),

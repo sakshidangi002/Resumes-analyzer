@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     # with a guessable placeholder. Recommended: `openssl rand -hex 32`.
     secret_key: str
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    # Long-lived session: the user stays logged in until they explicitly log
+    # out (default 30 days). Override with ACCESS_TOKEN_EXPIRE_MINUTES.
+    access_token_expire_minutes: int = 60 * 24 * 30
 
     # SMTP (simple SMTP for all email)
     smtp_host: str = "localhost"
@@ -78,6 +80,43 @@ class Settings(BaseSettings):
     face_detector: str = "insightface"
     yolo_face_model_path: str = "models/yolov8n-face.pt"
     yolo_conf: float = 0.35
+
+    # ---- Person (body) tracking -------------------------------------------
+    # When enabled AND the model files exist, CCTV workers detect & track whole
+    # bodies (OpenCV DNN MobileNet-SSD, CPU-friendly, no torch). A face that is
+    # recognised is bound to the person's track, so the employee's name stays on
+    # them even when the face turns away — until they leave the frame.
+    person_tracking_enabled: bool = False
+    person_model_proto: str = "models/mobilenet_ssd/deploy.prototxt"
+    person_model_weights: str = "models/mobilenet_ssd/mobilenet_iter_73000.caffemodel"
+    person_conf: float = 0.5          # person-detection confidence threshold
+    person_reverify_sec: float = 5.0  # re-check a bound identity every N seconds
+
+    # ---- DVR auto-start on application boot -------------------------------
+    # When dvr_autostart is True and credentials are set, the app connects to
+    # the Hikvision DVR and starts all camera streams automatically on startup,
+    # so nobody has to press "Connect" in the UI.
+    dvr_autostart: bool = False
+    dvr_ip: str = ""
+    dvr_port: int = 8000
+    dvr_username: str = ""
+    dvr_password: str = ""
+    # Recognition threshold used by DVR camera workers. 0.05 (the old hard-coded
+    # value) accepts near-random matches; 0.30–0.40 is realistic for CCTV.
+    dvr_recognition_threshold: float = 0.35
+    # Comma-separated DVR channel IDs that are CHECK-OUT cameras; every other
+    # channel is treated as CHECK-IN. e.g. DVR_OUT_CHANNELS="2" makes channel 2
+    # the exit camera and channel 1 the entrance camera.
+    dvr_out_channels: str = ""
+    # Doorway line-crossing for DVR camera workers (per-DVR, since DVR channels
+    # are not CameraConfig rows). Requires person tracking to be enabled.
+    dvr_crossing_enabled: bool = False
+    dvr_line_orientation: str = "horizontal"
+    dvr_line_position: float = 0.5
+    dvr_entry_direction: str = "down"
+    # Crossing direction for OUT cameras (people leaving usually move the
+    # opposite way in-frame). Leave blank to reuse dvr_entry_direction.
+    dvr_out_entry_direction: str = ""
 
     class Config:
         env_file = ".env"

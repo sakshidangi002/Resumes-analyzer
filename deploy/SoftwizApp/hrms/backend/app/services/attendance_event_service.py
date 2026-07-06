@@ -319,6 +319,7 @@ def add_attendance_event(
     #   1. Explicit caller override  (event_type param)
     #   2. Camera purpose            (camera_purpose param)
     #   3. Auto-toggle from last event
+    from_camera_purpose = event_type is None and camera_purpose is not None
     if event_type is not None:
         resolved_type = event_type
     else:
@@ -332,6 +333,31 @@ def add_attendance_event(
     resolved_type = _normalize_event_type(resolved_type) or ""
     if resolved_type not in {"IN", "OUT", "BREAK_IN", "BREAK_OUT"}:
         raise ValueError("event_type must be IN, OUT, BREAK_IN, or BREAK_OUT")
+
+    # ── Presence state machine (dedicated IN / OUT cameras) ─────────────────
+    # An employee who is simply SITTING in the camera's view (face tilting
+    # toward the lens) must NOT be checked in again. So:
+    #   * IN  camera records IN  only if the employee is NOT already present.
+    #   * OUT camera records OUT only if the employee IS currently present.
+    # Manual/explicit events (event_type given) bypass this gate.
+    if from_camera_purpose and resolved_type in {"IN", "OUT"}:
+        last_event = get_latest_event_for_day(db, employee_id, d)
+        last_type = _normalize_event_type(last_event.event_type) if last_event else None
+        currently_present = last_type in _WORK_START_EVENTS  # IN / BREAK_IN
+        if resolved_type == "IN" and currently_present:
+            rec = get_or_create_attendance(db, employee_id, d)
+            db.refresh(rec)
+            logger.info(
+                "attendance_event SKIP employee_id=%s reason=already_checked_in", employee_id
+            )
+            return None, rec, "already_checked_in"
+        if resolved_type == "OUT" and not currently_present:
+            rec = get_or_create_attendance(db, employee_id, d)
+            db.refresh(rec)
+            logger.info(
+                "attendance_event SKIP employee_id=%s reason=not_checked_in", employee_id
+            )
+            return None, rec, "not_checked_in"
 
     rec = get_or_create_attendance(db, employee_id, d)
     event = AttendanceEvent(

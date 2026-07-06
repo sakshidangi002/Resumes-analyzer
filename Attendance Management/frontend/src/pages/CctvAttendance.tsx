@@ -167,8 +167,16 @@ export default function CctvAttendance() {
   };
   const [dbCameras, setDbCameras] = useState<DbCamera[]>([]);
   const [selectedCamId, setSelectedCamId] = useState<number | "">("");
-  const [previewTs, setPreviewTs] = useState(Date.now());
   const previewTimer = useRef<number | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const [liveStat, setLiveStat] = useState<{
+    status?: string;
+    capture_fps?: number;
+    display_fps?: number;
+    active_tracks?: number;
+    recognition_status?: string;
+    last_error?: string | null;
+  } | null>(null);
 
   useEffect(() => {
     void camerasApi.list().then((r) => {
@@ -190,15 +198,34 @@ export default function CctvAttendance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // refresh preview every 2s when a camera is selected
+  // Poll live camera status (FPS, tracks, recognition state) every 1.5s.
+  // The video itself is a continuous MJPEG stream, so it needs no polling.
   useEffect(() => {
-    if (selectedCamId !== "") {
-      previewTimer.current = window.setInterval(() => setPreviewTs(Date.now()), 2000);
-    } else {
+    if (selectedCamId === "") {
+      setLiveStat(null);
       if (previewTimer.current) window.clearInterval(previewTimer.current);
+      return;
     }
+    const poll = () => {
+      void camerasApi
+        .status(selectedCamId as number)
+        .then((r) => setLiveStat(r.data))
+        .catch(() => { /* transient */ });
+    };
+    poll();
+    previewTimer.current = window.setInterval(poll, 1500);
     return () => { if (previewTimer.current) window.clearInterval(previewTimer.current); };
   }, [selectedCamId]);
+
+  const toggleFullscreen = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void el.requestFullscreen?.();
+    }
+  };
 
   const handleCamSelect = (id: number | "") => {
     setSelectedCamId(id);
@@ -406,14 +433,48 @@ export default function CctvAttendance() {
             </div>
 
             <div style={{ marginTop: "1rem", ...panelStyle }}>
-              <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)", marginBottom: "0.35rem" }}>Live preview</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)" }}>Live preview</div>
+                {selectedCamId !== "" ? (
+                  <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem", borderRadius: 8, cursor: "pointer", background: "rgba(122,162,255,0.15)", border: "1px solid rgba(122,162,255,0.3)", color: "#cfe0ff" }}
+                  >
+                    ⛶ Fullscreen
+                  </button>
+                ) : null}
+              </div>
               {selectedCamId !== "" ? (
-                <img
-                  src={`${camerasApi.previewUrl(selectedCamId as number)}?t=${previewTs}`}
-                  alt="Camera preview"
-                  style={{ width: "100%", borderRadius: 10, maxHeight: 180, objectFit: "cover", background: "#000" }}
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
+                <div ref={feedRef} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
+                  <img
+                    src={camerasApi.streamUrl(selectedCamId as number)}
+                    alt="Live camera feed"
+                    style={{ width: "100%", display: "block", objectFit: "contain", background: "#000" }}
+                  />
+                  {/* Real-time status bar overlaid on the feed */}
+                  <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: (liveStat?.status === "running") ? "#22c55e" : "#ef4444" }} />
+                      {(liveStat?.status === "running") ? "Connected" : (liveStat?.status || "…")}
+                    </span>
+                    <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                      {dbCameras.find((c) => c.id === selectedCamId)?.name || cameraId}
+                    </span>
+                    <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                      {eventLabel(cameraType)}
+                    </span>
+                    <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#7aa2ff" }}>
+                      {(liveStat?.display_fps ?? 0).toFixed(0)} FPS
+                    </span>
+                    <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                      Faces: {liveStat?.active_tracks ?? 0}
+                    </span>
+                    <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fbbf24" }}>
+                      {liveStat?.recognition_status || "idle"}
+                    </span>
+                  </div>
+                </div>
               ) : (
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>Select a camera to see live preview.</div>
               )}

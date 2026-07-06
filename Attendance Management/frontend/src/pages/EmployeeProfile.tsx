@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, NavLink, useMatch } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import CustomSelect from "../components/CustomSelect";
+import FaceCaptureModal from "../components/FaceCaptureModal";
 import {
   employees as employeesApi,
   departments as departmentsApi,
@@ -404,25 +405,56 @@ export default function EmployeeProfile() {
   const [faceUploadLoading, setFaceUploadLoading] = useState(false);
   const [faceUploadError, setFaceUploadError] = useState("");
   const [faceUploadSuccess, setFaceUploadSuccess] = useState("");
-  
-  const handleFaceUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!faceImages.length) return;
+  const [faceStatus, setFaceStatus] = useState<{ registered: boolean; sample_count: number } | null>(null);
+  const [faceDeleteLoading, setFaceDeleteLoading] = useState(false);
+
+  const [showFaceCapture, setShowFaceCapture] = useState(false);
+
+  const refreshFaceStatus = async (id: number) => {
+    try {
+      const res = await recognitionApi.faceStatus(id);
+      setFaceStatus({ registered: !!res.data.registered, sample_count: Number(res.data.sample_count || 0) });
+    } catch {
+      setFaceStatus(null);
+    }
+  };
+
+  const handleDeleteFace = async () => {
     if (!emp) return;
-    if (faceImages.length > 5) {
-      setFaceUploadError("You can upload a maximum of 5 images.");
+    if (!confirm("Delete this employee's registered face data? They will not be recognised by the cameras until you re-register their photos.")) return;
+    setFaceDeleteLoading(true);
+    setFaceUploadError("");
+    setFaceUploadSuccess("");
+    try {
+      await recognitionApi.deleteFace(emp.id);
+      setFaceUploadSuccess("Face data deleted. You can now register fresh photos.");
+      setFaceImages([]);
+      await refreshFaceStatus(emp.id);
+    } catch (err: any) {
+      setFaceUploadError(err.response?.data?.detail || "Failed to delete face data.");
+    } finally {
+      setFaceDeleteLoading(false);
+    }
+  };
+
+  const registerFaces = async (files: File[]) => {
+    if (!emp) return;
+    if (!files.length) return;
+    if (files.length > 5) {
+      setFaceUploadError("You can register a maximum of 5 images.");
       return;
     }
     setFaceUploadLoading(true);
     setFaceUploadError("");
     setFaceUploadSuccess("");
     try {
-      await recognitionApi.registerFace(emp.id, `${emp.first_name} ${emp.last_name}`, deptName, faceImages);
-      setFaceUploadSuccess("Face samples uploaded and registered successfully.");
+      await recognitionApi.registerFace(emp.id, `${emp.first_name} ${emp.last_name}`, deptName, files);
+      setFaceUploadSuccess(`Registered ${files.length} face angle(s) successfully.`);
       setFaceImages([]);
+      await refreshFaceStatus(emp.id);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      let message = "Face upload failed.";
+      let message = "Face registration failed.";
       if (typeof detail === "string") {
         message = detail;
       } else if (Array.isArray(detail)) {
@@ -434,6 +466,11 @@ export default function EmployeeProfile() {
     } finally {
       setFaceUploadLoading(false);
     }
+  };
+
+  const handleFaceUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await registerFaces(faceImages);
   };
 
   const [attMonth, setAttMonth] = useState(() => new Date().getMonth() + 1);
@@ -573,6 +610,12 @@ export default function EmployeeProfile() {
       })
       .finally(() => setBankLoading(false));
   }, [employeeId, canViewProfile, canViewBank]);
+
+  useEffect(() => {
+    if (!canEdit || !employeeId || Number.isNaN(employeeId)) return;
+    void refreshFaceStatus(employeeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId, canEdit]);
 
   const handleSaveBank = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1058,26 +1101,86 @@ export default function EmployeeProfile() {
                         <h4 className="emp-detail-section__title" id="emp-section-face-title">
                           Face Recognition Data
                         </h4>
-                        <p className="emp-detail-section__subtitle">Upload 1-5 face samples for attendance detection</p>
+                        <p className="emp-detail-section__subtitle">Register 3–5 face angles for accurate recognition</p>
                       </div>
                     </div>
                     <div style={{ padding: "1.5rem" }}>
+                      {/* Current enrollment status + delete */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "1rem",
+                          flexWrap: "wrap",
+                          padding: "0.75rem 1rem",
+                          borderRadius: 8,
+                          background: faceStatus?.registered ? "rgba(34,197,94,0.10)" : "rgba(148,163,184,0.12)",
+                          marginBottom: "1rem",
+                        }}
+                      >
+                        <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                          {faceStatus == null
+                            ? "Checking face data…"
+                            : faceStatus.registered
+                              ? `✅ Registered — ${faceStatus.sample_count} photo${faceStatus.sample_count === 1 ? "" : "s"} on file`
+                              : "⚠️ No face registered yet"}
+                        </span>
+                        {faceStatus?.registered && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ color: "#ef4444", background: "rgba(239,68,68,0.15)" }}
+                            onClick={handleDeleteFace}
+                            disabled={faceDeleteLoading}
+                          >
+                            {faceDeleteLoading ? "Deleting…" : "🗑 Delete face data"}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Good-photo guidance — bad photos are the #1 cause of wrong/failed recognition */}
+                      <div style={{ fontSize: "0.8rem", opacity: 0.75, margin: "0 0 1rem", lineHeight: 1.5 }}>
+                        <strong>For accurate recognition, upload 4–5 front-facing photos:</strong> look straight at the
+                        camera, eyes open, face well-lit and filling the frame. One with a slight left turn and one
+                        slight right turn are fine. Avoid side profiles, looking down/away, closed eyes, and blurry
+                        shots — those are rejected automatically.
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => { setFaceUploadError(""); setFaceUploadSuccess(""); setShowFaceCapture(true); }}
+                        disabled={faceUploadLoading}
+                        style={{ marginBottom: "1rem" }}
+                      >
+                        📷 Guided Capture (recommended)
+                      </button>
+                      <p style={{ fontSize: "0.8rem", opacity: 0.6, margin: "0 0 1rem" }}>
+                        Uses your webcam to capture front / left / right / up angles — best accuracy. Or upload photos below.
+                      </p>
                       <form onSubmit={handleFaceUpload}>
                         <div className="form-group">
-                          <input 
-                            type="file" 
-                            multiple 
-                            accept="image/*" 
-                            onChange={(e) => setFaceImages(Array.from(e.target.files || []))} 
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={(e) => setFaceImages(Array.from(e.target.files || []))}
                           />
                         </div>
                         {faceUploadError && <p style={{ color: "#ef4444", marginTop: "0.5rem" }}>{faceUploadError}</p>}
                         {faceUploadSuccess && <p style={{ color: "#22c55e", marginTop: "0.5rem" }}>{faceUploadSuccess}</p>}
-                        <button type="submit" className="btn btn-primary" disabled={faceUploadLoading || faceImages.length === 0} style={{ marginTop: "1rem" }}>
-                          {faceUploadLoading ? "Uploading..." : "Upload & Register Face"}
+                        <button type="submit" className="btn btn-secondary" disabled={faceUploadLoading || faceImages.length === 0} style={{ marginTop: "1rem" }}>
+                          {faceUploadLoading ? "Registering..." : "Upload & Register Photos"}
                         </button>
                       </form>
                     </div>
+                    {showFaceCapture && (
+                      <FaceCaptureModal
+                        onClose={() => setShowFaceCapture(false)}
+                        onDone={(files) => { setShowFaceCapture(false); void registerFaces(files); }}
+                      />
+                    )}
                   </section>
                 )}
               </div>

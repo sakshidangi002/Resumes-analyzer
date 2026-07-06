@@ -213,15 +213,33 @@ class DVRManager:
                 encoded_password = quote(self._connection.password, safe='')
                 rtsp_url = f"rtsp://{encoded_username}:{encoded_password}@{self._connection.ip}:554/Streaming/Channels/{channel_id:03d}01"
                 
+                from app.core.config import get_settings
+                _s = get_settings()
+
+                # Decide IN vs OUT per channel from DVR_OUT_CHANNELS.
+                out_channels = {
+                    int(c.strip()) for c in (_s.dvr_out_channels or "").split(",")
+                    if c.strip().isdigit()
+                }
+                purpose = "OUT" if channel_id in out_channels else "IN"
+                entry_dir = _s.dvr_entry_direction
+                if purpose == "OUT" and _s.dvr_out_entry_direction:
+                    entry_dir = _s.dvr_out_entry_direction
+                logger.info("DVR channel %d configured as %s camera", channel_id, purpose)
+
                 camera.rtsp_worker = CameraWorker(
                     camera_id=channel_id,
                     name=camera.name,
                     source_url=rtsp_url,
                     source_type="rtsp",
-                    camera_purpose="IN",
-                    threshold=0.05,  # Very low threshold for poor CCTV footage quality
-                    interval_sec=0.5,  # Process frames every 0.5 seconds for faster response
-                    frame_skip=0,  # No frame skipping for accurate recognition
+                    camera_purpose=purpose,
+                    threshold=_s.dvr_recognition_threshold,  # 0.05 accepted near-random matches
+                    interval_sec=0.5,
+                    frame_skip=0,
+                    crossing_enabled=_s.dvr_crossing_enabled,
+                    line_orientation=_s.dvr_line_orientation,
+                    line_position=_s.dvr_line_position,
+                    entry_direction=entry_dir,
                 )
                 
                 camera.rtsp_worker.start()

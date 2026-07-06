@@ -43,19 +43,81 @@ class DVRConnection:
     start_channel: int = 1
 
 
+import os as _os
+
+# DVR dashboard streams are for VIEWING only. If a stream has not been requested
+# by a browser for this long, it is auto-released to free the RTSP connection.
+_DVR_IDLE_STOP_SEC = float(_os.getenv("DVR_IDLE_STOP_SEC", "30"))
+
+
 class DVRManager:
-    """Manages DVR connections and live camera streams."""
-    
+    """Manages DVR connections and on-demand live camera streams.
+
+    Streams opened from the DVR Dashboard are PREVIEW streams: they open only
+    when a channel is started/viewed and auto-release when no browser has viewed
+    them for `_DVR_IDLE_STOP_SEC`. Background attendance (Check-In / Check-Out)
+    is handled separately by `camera_service.camera_manager` and is unaffected.
+    """
+
     def __init__(self):
         self._connection: Optional[DVRConnection] = None
         self._executor = ThreadPoolExecutor(max_workers=10)
         self._running = False
+        # Idle-stream reaper (releases preview streams nobody is watching).
+        self._reaper = threading.Thread(target=self._reaper_loop, daemon=True, name="dvr-reaper")
+        self._reaper_stop = threading.Event()
+        self._reaper.start()
+
+    def _active_count(self) -> int:
+        conn = self._connection
+        if not conn:
+            return 0
+        return sum(
+            1 for c in conn.cameras.values()
+            if (c.worker and c.worker.is_alive()) or (c.rtsp_worker and c.rtsp_worker.is_alive())
+        )
+
+    def _reaper_loop(self) -> None:
+        """Periodically release preview streams that no browser is viewing."""
+        while not self._reaper_stop.wait(5.0):
+            conn = self._connection
+            if not conn:
+                continue
+            now = time.time()
+            idle: list[int] = []
+            with conn.lock:
+                for cid, cam in conn.cameras.items():
+                    worker = cam.worker or cam.rtsp_worker
+                    if worker and worker.is_alive():
+                        last_view = getattr(worker, "_last_view_ts", now)
+                        if now - last_view > _DVR_IDLE_STOP_SEC:
+                            idle.append(cid)
+            for cid in idle:
+                logger.info(
+                    "DVR reaper: releasing idle preview stream channel=%d (no viewer >%.0fs)",
+                    cid, _DVR_IDLE_STOP_SEC,
+                )
+                self.stop_camera_stream(cid)
+            if idle:
+                logger.info("DVR active streams now: %d", self._active_count())
         
     def connect(self, ip: str, port: int, username: str, password: str) -> tuple[bool, str, Optional[DiscoveredDevice]]:
         """Connect to DVR and discover cameras."""
         if self._connection and self._connection.connected:
             self.disconnect()
-            
+
+        # Fast reachability pre-check. Without this, an unreachable DVR makes the
+        # HCNetSDK login block for a long timeout while holding a request thread —
+        # a few of those (the UI polls every 5s) exhaust the server threadpool and
+        # the WHOLE app hangs. A 3s socket probe fails fast instead.
+        import socket
+        try:
+            with socket.create_connection((ip, int(port)), timeout=3):
+                pass
+        except OSError as exc:
+            logger.warning("DVR %s:%s unreachable (%s) — aborting connect", ip, port, exc)
+            return False, f"DVR not reachable at {ip}:{port}. Check IP, port and network.", None
+
         try:
             # Try HCNetSDK discovery first
             logger.info(f"Attempting HCNetSDK connection to {ip}:{port}")
@@ -199,9 +261,15 @@ class DVRManager:
             
             camera = self._connection.cameras[channel_id]
             
-            # Check if already streaming
-            if (camera.worker and camera.worker.is_alive()) or (camera.rtsp_worker and camera.rtsp_worker.is_alive()):
-                logger.info(f"Camera {channel_id} already streaming")
+            # Check if already streaming → REUSE the existing capture (one
+            # VideoCapture per camera, never a duplicate RTSP connection).
+            existing = camera.worker or camera.rtsp_worker
+            if existing and existing.is_alive():
+                existing._last_view_ts = time.time()  # refresh so reaper keeps it
+                logger.info(
+                    "DVR: reusing existing stream channel=%d (active=%d)",
+                    channel_id, self._active_count(),
+                )
                 return True
             
             try:
@@ -213,23 +281,50 @@ class DVRManager:
                 encoded_password = quote(self._connection.password, safe='')
                 rtsp_url = f"rtsp://{encoded_username}:{encoded_password}@{self._connection.ip}:554/Streaming/Channels/{channel_id:03d}01"
                 
+                from app.core.config import get_settings
+                _s = get_settings()
+
+                # Decide the camera role per channel: MONITOR > OUT > IN.
+                def _chan_set(csv: str) -> set[int]:
+                    return {int(c.strip()) for c in (csv or "").split(",") if c.strip().isdigit()}
+                monitor_channels = _chan_set(_s.dvr_monitor_channels)
+                out_channels = _chan_set(_s.dvr_out_channels)
+                if channel_id in monitor_channels:
+                    purpose = "MONITOR"
+                elif channel_id in out_channels:
+                    purpose = "OUT"
+                else:
+                    purpose = "IN"
+                entry_dir = _s.dvr_entry_direction
+                if purpose == "OUT" and _s.dvr_out_entry_direction:
+                    entry_dir = _s.dvr_out_entry_direction
+                logger.info("DVR channel %d configured as %s camera", channel_id, purpose)
+
                 camera.rtsp_worker = CameraWorker(
                     camera_id=channel_id,
                     name=camera.name,
                     source_url=rtsp_url,
                     source_type="rtsp",
-                    camera_purpose="IN",
-                    threshold=0.05,  # Very low threshold for poor CCTV footage quality
-                    interval_sec=0.5,  # Process frames every 0.5 seconds for faster response
-                    frame_skip=0,  # No frame skipping for accurate recognition
+                    camera_purpose=purpose,
+                    threshold=_s.dvr_recognition_threshold,  # 0.05 accepted near-random matches
+                    interval_sec=0.5,
+                    frame_skip=0,
+                    crossing_enabled=_s.dvr_crossing_enabled,
+                    line_orientation=_s.dvr_line_orientation,
+                    line_position=_s.dvr_line_position,
+                    entry_direction=entry_dir,
                 )
                 
                 camera.rtsp_worker.start()
+                camera.rtsp_worker._last_view_ts = time.time()  # grace before reaper
                 camera.status = "online"
                 camera.last_frame_time = time.time()
                 camera.use_rtsp = True
-                
-                logger.info(f"Started RTSP stream for camera {channel_id} (Streaming/Channels format)")
+
+                logger.info(
+                    "DVR: opened stream channel=%d purpose=%s rtsp=%s (active=%d)",
+                    channel_id, purpose, rtsp_url.split('@')[-1], self._active_count(),
+                )
                 return True
                 
             except Exception as e:
@@ -252,13 +347,13 @@ class DVRManager:
                 camera.worker.stop()
                 camera.worker = None
                 camera.status = "offline"
-                logger.info(f"Stopped HCNetSDK stream for camera {channel_id}")
+                logger.info("DVR: closed stream channel=%d (active=%d)", channel_id, self._active_count())
                 return True
             if camera.rtsp_worker:
                 camera.rtsp_worker.stop()
                 camera.rtsp_worker = None
                 camera.status = "offline"
-                logger.info(f"Stopped RTSP stream for camera {channel_id}")
+                logger.info("DVR: closed stream channel=%d (active=%d)", channel_id, self._active_count())
                 return True
             return False
     

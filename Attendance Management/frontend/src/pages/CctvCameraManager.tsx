@@ -88,15 +88,18 @@ function statusColor(s: string): string {
 
 function purposeBadge(p: string) {
   const isIn = p === "IN";
+  const isMonitor = p === "MONITOR";
+  const color = isMonitor ? "122,162,255" : isIn ? "34,197,94" : "239,68,68";
+  const text = isMonitor ? "👁 Monitor" : isIn ? "⬆ Check-In" : "⬇ Check-Out";
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: "0.3rem",
       padding: "0.2rem 0.7rem", borderRadius: 999, fontSize: "0.78rem", fontWeight: 700,
-      background: isIn ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-      border: `1px solid ${isIn ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}`,
-      color: isIn ? "#86efac" : "#fca5a5",
+      background: `rgba(${color},0.15)`,
+      border: `1px solid rgba(${color},0.4)`,
+      color: `rgb(${color})`,
     }}>
-      {isIn ? "⬆ Check-In" : "⬇ Check-Out"}
+      {text}
     </span>
   );
 }
@@ -665,6 +668,7 @@ export default function CctvCameraManager() {
                   onChange={(e) => setForm((f) => ({ ...f, camera_purpose: e.target.value }))}>
                   <option value="IN">⬆ Check-In (Entry Camera)</option>
                   <option value="OUT">⬇ Check-Out (Exit Camera)</option>
+                  <option value="MONITOR">👁 Monitor (Office — no attendance)</option>
                 </select>
               </div>
               <div>

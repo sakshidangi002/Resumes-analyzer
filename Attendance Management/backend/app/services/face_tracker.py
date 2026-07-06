@@ -47,23 +47,57 @@ class FaceTrack:
     # Track lifecycle
     age: int = 0  # number of frames tracked
     consecutive_misses: int = 0
-    max_misses: int = 10  # frames before track is deleted
-    
+    max_misses: int = 10  # frames before an UNKNOWN track is deleted
+    # A RECOGNISED track is kept much longer, so the employee's name stays
+    # locked onto them even when their face turns away — until they leave view.
+    identity_max_misses: int = 60
+    # Smoothed motion (px per analysis frame). Used to "coast" the box while the
+    # face is not visible so the label follows the person instead of freezing.
+    velocity: Tuple[float, float] = (0.0, 0.0)
+    expired: bool = False  # forced expiry (e.g. coasted out of frame)
+
     def update(self, centroid: Tuple[float, float], box: Tuple[int, int, int, int]) -> None:
         """Update track with new detection."""
+        # Exponentially-smoothed velocity from consecutive detections.
+        vx = centroid[0] - self.centroid[0]
+        vy = centroid[1] - self.centroid[1]
+        self.velocity = (0.5 * self.velocity[0] + 0.5 * vx,
+                         0.5 * self.velocity[1] + 0.5 * vy)
         self.centroid = centroid
         self.box = box
         self.last_seen = time.time()
         self.age += 1
         self.consecutive_misses = 0
-    
+
+    def predict_forward(self, frame_shape: Optional[Tuple[int, int]] = None) -> None:
+        """Advance the box along last known motion while the face is unseen.
+
+        Keeps the label moving with the person. If the coasted centroid drifts
+        out of the frame, the track is force-expired (the person has left).
+        """
+        vx, vy = self.velocity
+        # Damp so a stale velocity can't run away across the screen.
+        self.velocity = (vx * 0.9, vy * 0.9)
+        cx, cy = self.centroid[0] + vx, self.centroid[1] + vy
+        self.centroid = (cx, cy)
+        x1, y1, x2, y2 = self.box
+        self.box = (int(x1 + vx), int(y1 + vy), int(x2 + vx), int(y2 + vy))
+        if frame_shape is not None:
+            h, w = frame_shape[:2]
+            if cx < 0 or cy < 0 or cx > w or cy > h:
+                self.expired = True
+
     def mark_missed(self) -> None:
         """Mark that track was not detected in current frame."""
         self.consecutive_misses += 1
-    
+
     def is_expired(self) -> bool:
         """Check if track should be deleted."""
-        return self.consecutive_misses >= self.max_misses
+        if self.expired:
+            return True
+        # Recognised tracks persist for identity_max_misses; unknown ones don't.
+        limit = self.identity_max_misses if self.matched else self.max_misses
+        return self.consecutive_misses >= limit
     
     def can_recognize(self) -> bool:
         """Check if recognition can be performed (respecting cooldown)."""
@@ -131,23 +165,30 @@ class FaceTracker:
         self,
         max_distance: float = 100.0,  # max pixels to consider same face
         recognition_cooldown: float = 3.0,  # seconds between recognitions
-        max_misses: int = 10,  # frames before deleting track
+        max_misses: int = 10,  # frames before deleting an UNKNOWN track
+        identity_max_misses: int = 60,  # frames a RECOGNISED track survives w/o a face
     ):
         self.max_distance = max_distance
         self.recognition_cooldown = recognition_cooldown
         self.max_misses = max_misses
-        
+        self.identity_max_misses = identity_max_misses
+
         self.tracks: Dict[int, FaceTrack] = {}
         self.next_track_id = 1
         self._lock = False  # Simple lock for thread safety
-    
-    def update(self, detections: List[dict]) -> List[FaceTrack]:
+
+    def update(
+        self,
+        detections: List[dict],
+        frame_shape: Optional[Tuple[int, int]] = None,
+    ) -> List[FaceTrack]:
         """
         Update tracker with new face detections.
-        
+
         Args:
             detections: List of face detections with 'box' key (x1, y1, x2, y2)
-        
+            frame_shape: optional (H, W) so coasted tracks can expire off-frame.
+
         Returns:
             List of active FaceTrack objects
         """
@@ -198,15 +239,23 @@ class FaceTracker:
                     face=detection_faces[idx],
                     recognition_cooldown=self.recognition_cooldown,
                     max_misses=self.max_misses,
+                    identity_max_misses=self.identity_max_misses,
                 )
                 self.tracks[self.next_track_id] = new_track
                 self.next_track_id += 1
-        
+
+        # Coast recognised tracks that had no face this frame: move the box along
+        # last motion so the employee's name follows them while their face is
+        # turned away (CPU-only identity persistence — no YOLO/tracker needed).
+        for track in self.tracks.values():
+            if track.consecutive_misses > 0 and track.matched and not track.is_expired():
+                track.predict_forward(frame_shape)
+
         # Remove expired tracks
         expired_ids = [tid for tid, track in self.tracks.items() if track.is_expired()]
         for tid in expired_ids:
             del self.tracks[tid]
-        
+
         return list(self.tracks.values())
     
     def _find_best_match(

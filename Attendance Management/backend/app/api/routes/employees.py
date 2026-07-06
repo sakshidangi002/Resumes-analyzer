@@ -22,6 +22,7 @@ from app.models import (
 from app.models.employee import EmploymentStatus
 from app.schemas.employee import (
     EmployeeCreate,
+    StaffCreate,
     EmployeeUpdate,
     EmployeeResponse,
     EmployeeBankDetailCreate,
@@ -35,7 +36,11 @@ from app.schemas.employee import (
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.embedding_cache import embedding_to_blob, invalidate_embedding_cache
-from app.services.employee_face_service import process_face_uploads, save_employee_photo
+from app.services.employee_face_service import (
+    process_face_uploads,
+    save_employee_photo,
+    delete_employee_photos,
+)
 
 router = APIRouter()
 
@@ -289,6 +294,52 @@ def create_employee(
     return emp
 
 
+def _next_staff_code(db: Session) -> str:
+    """Generate a unique STF#### code for a non-employee staff record."""
+    existing = {
+        c[0] for c in db.query(Employee.employee_code)
+        .filter(Employee.employee_code.like("STF%")).all()
+    }
+    n = len(existing) + 1
+    while f"STF{n:04d}" in existing:
+        n += 1
+    return f"STF{n:04d}"
+
+
+@router.post("/staff", response_model=EmployeeResponse)
+def create_staff(
+    data: StaffCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Register a non-employee staff member (housekeeping, security, driver…).
+
+    Only name + staff type are required; everything else is auto-filled. These
+    people are recognised on camera but are NOT marked for attendance (that is
+    enforced in the recognition layer by staff_type).
+    """
+    from datetime import date as _date
+
+    code = _next_staff_code(db)
+    emp = Employee(
+        employee_code=code,
+        staff_type=(data.staff_type or "Staff"),
+        first_name=data.first_name.strip(),
+        last_name=(data.last_name or "").strip(),
+        official_email=f"{code.lower()}@staff.local",
+        phone=data.phone,
+        date_of_joining=_date.today(),
+        employment_type="Contract",
+        employment_status="Active",
+        expected_working_hours=0.0,  # no work-hour expectation for support staff
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    invalidate_embedding_cache()
+    return emp
+
+
 @router.post("/register")
 async def register_face_data(
     employee_id: int = Form(...),
@@ -303,19 +354,22 @@ async def register_face_data(
 
     if not clean_name:
         raise HTTPException(status_code=400, detail="Employee name is required")
-    if not 1 <= len(images) <= 5:
-        raise HTTPException(status_code=400, detail="Upload between 1 and 5 face images")
+    if not 1 <= len(images) <= 10:
+        raise HTTPException(status_code=400, detail="Upload between 1 and 10 face images")
 
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail=f"Employee with ID {employee_id} not found in HRMS database.")
 
     prepared_images = await process_face_uploads(images)
-    embeddings = [item["embedding"] for item in prepared_images]
-    averaged_embedding = np.mean(np.stack(embeddings), axis=0).astype(np.float32)
+    # Store ALL enrolled embeddings (one row per photo/angle) as an (N, 512)
+    # stack — NOT averaged. Recognition matches against the best of them, which
+    # handles different angles/lighting far more accurately than a mean vector.
+    embeddings = [np.asarray(item["embedding"], dtype=np.float32) for item in prepared_images]
+    embedding_stack = np.stack(embeddings).astype(np.float32)  # (N, 512)
     photo_path = save_employee_photo(employee_id, prepared_images[0]["bytes"], prepared_images[0]["filename"])
 
-    emp.embedding = embedding_to_blob(averaged_embedding)
+    emp.embedding = embedding_to_blob(embedding_stack)
     emp.photo_path = photo_path
     emp.sample_count = len(prepared_images)
     db.commit()
@@ -332,6 +386,48 @@ async def register_face_data(
             "sample_count": len(prepared_images),
         },
     }
+
+
+@router.get("/{employee_id}/face")
+def get_face_status(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Report whether an employee has registered face data, and how many photos."""
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return {
+        "employee_id": employee_id,
+        "registered": emp.embedding is not None,
+        "sample_count": int(emp.sample_count or 0),
+    }
+
+
+@router.delete("/{employee_id}/face")
+def delete_face_data(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Clear an employee's registered face data so new photos can be enrolled.
+
+    Removes the stored embedding, sample count, and saved photo files. The
+    recognition cache is invalidated so live cameras stop matching this person
+    until they are re-enrolled.
+    """
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    emp.embedding = None
+    emp.photo_path = None
+    emp.sample_count = 0
+    db.commit()
+    delete_employee_photos(employee_id)
+    invalidate_embedding_cache()
+    return {"message": "Face data deleted", "employee_id": employee_id}
 
 
 @router.patch("/{employee_id}", response_model=EmployeeResponse)
