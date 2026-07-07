@@ -76,6 +76,8 @@ function eventLabel(eventType: string | null | undefined): string {
       return "Break out";
     case "BREAK_IN":
       return "Break in";
+    case "MONITOR":
+      return "Monitor";
     default:
       return eventType || "Unknown";
   }
@@ -377,7 +379,7 @@ export default function CctvAttendance() {
                     <option value="">— Select camera —</option>
                     {dbCameras.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name} ({c.camera_purpose === "IN" ? "Check-In" : "Check-Out"})
+                        {c.name} ({c.camera_purpose === "IN" ? "Check-In" : c.camera_purpose === "OUT" ? "Check-Out" : "Monitor"})
                         {c.live?.status === "running" ? " ✓" : " ⚠"}
                       </option>
                     ))}

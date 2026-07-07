@@ -297,6 +297,10 @@ export default function DvrCameraDashboard() {
                     background: "#000",
                     borderRadius: 8,
                     width: "100%",
+                    // Fixed viewport-height box; the feed fits inside it
+                    // (object-fit: contain) — whole frame, as big as fits, no
+                    // scroll. Thin black bars fill any leftover space.
+                    height: "82vh",
                     marginBottom: "1rem",
                     border: "1px solid rgba(255,255,255,0.1)",
                     overflow: "hidden",
@@ -312,10 +316,11 @@ export default function DvrCameraDashboard() {
                       src={dvr.streamUrl(camera.channel_id)}
                       alt={camera.name}
                       style={{
+                        // Fit the whole frame inside the box (like a video
+                        // player): as large as possible, no cropping, no scroll.
                         width: "100%",
-                        height: "auto",
-                        // maxHeight: "100vh",
-                         objectFit: "cover",
+                        height: "100%",
+                        objectFit: "contain",
                         display: "block",
                       }}
                       onError={(e) => {

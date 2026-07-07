@@ -284,21 +284,19 @@ class DVRManager:
                 from app.core.config import get_settings
                 _s = get_settings()
 
-                # Decide the camera role per channel: MONITOR > OUT > IN.
-                def _chan_set(csv: str) -> set[int]:
-                    return {int(c.strip()) for c in (csv or "").split(",") if c.strip().isdigit()}
-                monitor_channels = _chan_set(_s.dvr_monitor_channels)
-                out_channels = _chan_set(_s.dvr_out_channels)
-                if channel_id in monitor_channels:
-                    purpose = "MONITOR"
-                elif channel_id in out_channels:
-                    purpose = "OUT"
-                else:
-                    purpose = "IN"
-                entry_dir = _s.dvr_entry_direction
-                if purpose == "OUT" and _s.dvr_out_entry_direction:
-                    entry_dir = _s.dvr_out_entry_direction
-                logger.info("DVR channel %d configured as %s camera", channel_id, purpose)
+                # DVR dashboard streams are PREVIEW / live-monitoring ONLY and must
+                # NEVER create attendance. Check-In / Check-Out is owned entirely by
+                # the persistent DB workers in camera_service.camera_manager (which
+                # already run the correct IN/OUT/MONITOR roles from the `cameras`
+                # table). A DVR worker therefore always runs as MONITOR — it
+                # recognises and labels faces for viewing but records no attendance —
+                # so opening any channel in the dashboard can never double-mark or
+                # wrongly mark attendance, regardless of the channel's real role.
+                purpose = "MONITOR"
+                logger.info(
+                    "DVR channel %d opened as PREVIEW (MONITOR — recognise/label only, "
+                    "no attendance)", channel_id,
+                )
 
                 camera.rtsp_worker = CameraWorker(
                     camera_id=channel_id,
@@ -312,7 +310,7 @@ class DVRManager:
                     crossing_enabled=_s.dvr_crossing_enabled,
                     line_orientation=_s.dvr_line_orientation,
                     line_position=_s.dvr_line_position,
-                    entry_direction=entry_dir,
+                    entry_direction=_s.dvr_entry_direction,
                 )
                 
                 camera.rtsp_worker.start()

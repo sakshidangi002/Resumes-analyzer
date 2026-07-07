@@ -1054,29 +1054,44 @@ class CameraWorker:
         # Per-employee last-marked timestamp for the camera-level cooldown.
         self._last_marked: dict[int, float] = {}
 
+        # Attendance cameras (IN/OUT) analyse fast; display-only MONITOR cameras
+        # analyse slowly so they don't starve the shared inference lock.
+        self.is_monitor = self.camera_purpose == "MONITOR"
+        self.analysis_interval = _MONITOR_ANALYSIS_INTERVAL if self.is_monitor else _ANALYSIS_INTERVAL
+
+        # Track-expiry is counted in ANALYSIS FRAMES, so it MUST be derived from
+        # THIS worker's analysis_interval. Otherwise a slow monitor camera (1.5s
+        # per frame) keeps a recognised box on screen ~30s after the person has
+        # left. Convert the desired hold TIME to frames for this interval.
+        _hold_frames = max(2, round(_IDENTITY_HOLD_SEC / max(0.02, self.analysis_interval)))
+        _unknown_frames = max(2, round(1.5 / max(0.02, self.analysis_interval)))
+
         # Face tracking for multi-face recognition. A recognised person keeps
         # their identity (name follows them) for ~_IDENTITY_HOLD_SEC after the
         # face turns away, then the track expires when they leave the frame.
         self.face_tracker = FaceTracker(
             max_distance=100.0,
             recognition_cooldown=3.0,
-            max_misses=10,
-            identity_max_misses=max(10, int(_IDENTITY_HOLD_SEC / max(0.02, _ANALYSIS_INTERVAL))),
+            max_misses=_unknown_frames,
+            identity_max_misses=_hold_frames,
         )
 
-        # Body/person tracking. A MONITOR camera ALWAYS uses it (and never marks
-        # attendance); an IN/OUT camera uses it only if CCTV_PERSON_TRACKING=true.
-        # Engine preference: YOLO11+ByteTrack (best cross-path IDs) → MobileNet-SSD
-        # +IoU → fall back to face tracking if neither model is installed.
-        self.is_monitor = self.camera_purpose == "MONITOR"
-        # Attendance cameras (IN/OUT) analyse fast; display-only MONITOR cameras
-        # analyse slowly so they don't starve the shared inference lock.
-        self.analysis_interval = _MONITOR_ANALYSIS_INTERVAL if self.is_monitor else _ANALYSIS_INTERVAL
-        _body_misses = max(15, int(_IDENTITY_HOLD_SEC / max(0.02, _ANALYSIS_INTERVAL)))
+        # Body/person tracking is OPT-IN via CCTV_PERSON_TRACKING=true. When it is
+        # off (the default) EVERY camera — including MONITOR — uses the pure
+        # face-detection pipeline: faces are detected and recognised directly, no
+        # YOLO/MobileNet body detector runs. MONITOR cameras still never mark
+        # attendance (enforced in the face pipeline via `not w.is_monitor`), they
+        # simply label the faces they can see. Turning person tracking off also
+        # frees the (heavy) body-detector inference, speeding up face recognition.
+        # Trade-off: on an overhead/wide monitor view where faces are small or
+        # turned away, face-only mode will box/label fewer people than body
+        # tracking did. Set CCTV_PERSON_TRACKING=true to bring body tracking back.
+        # Engine preference (only when enabled): YOLO11+ByteTrack → MobileNet-SSD.
+        _body_misses = max(3, _hold_frames)
         self.bytetrack_engine = None
         self.person_tracker: Optional[PersonTracker] = None
         self.use_person_tracking = False
-        if self.is_monitor or _PERSON_TRACKING:
+        if _PERSON_TRACKING:
             if bytetrack_engine.is_available():
                 self.bytetrack_engine = bytetrack_engine.ByteTrackEngine(
                     conf=float(os.getenv("PERSON_CONF", "0.35")), max_misses=_body_misses,

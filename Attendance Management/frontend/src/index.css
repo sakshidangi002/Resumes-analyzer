@@ -4244,3 +4244,15 @@ input[type="date"] {
     font-size: 1.25rem !important;
   }
 }
+
+/* DVR camera feed: fill the screen when a tile is fullscreened (lifts the
+   85vh cap used in the normal, in-page view). Shows the whole frame. */
+.dvr-feed:fullscreen {
+  height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+}
+.dvr-feed:fullscreen img {
+  max-height: 100vh !important;
+  object-fit: contain !important;
+}

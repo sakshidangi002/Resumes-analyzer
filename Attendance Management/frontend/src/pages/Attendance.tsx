@@ -512,21 +512,29 @@ export default function Attendance() {
                       </td>
                       <td style={{ opacity: 0.9, textAlign: 'center' }}>
                         {(() => {
-                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
-                            return formatCompactDuration(rec.total_work_hours);
-                          }
-                          if (rec?.sign_in_time && selectedDate === todayIso && !rec?.sign_out_time) {
+                          const signedOut = rec?.sign_out_time && rec.sign_out_time !== "00:00:00";
+                          // LIVE: an employee who is checked in today and NOT
+                          // checked out / on a break (sign_out_time is null only
+                          // while actively working) → tick the working hours up
+                          // each second: time since first check-in minus recorded
+                          // break time. nowTick updates every second.
+                          if (rec?.sign_in_time && selectedDate === todayIso && !signedOut) {
                             const [h, m, sec] = rec.sign_in_time.split(':').map(Number);
                             const start = new Date();
-                            start.setHours(h, m, sec, 0);
+                            start.setHours(h, m, sec || 0, 0);
                             if (nowTick > start) {
-                              const diffHours = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
+                              const elapsed = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
+                              const live = Math.max(0, elapsed - Number(rec?.total_break_hours || 0));
                               return (
                                 <span style={{ color: "rgb(34, 192, 93)", fontWeight: 600, fontSize: "0.95rem" }}>
-                                  {formatCompactDuration(diffHours)}
+                                  {formatCompactDuration(live)}
                                 </span>
                               );
                             }
+                          }
+                          // Static snapshot: checked out, on a break, or past days.
+                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
+                            return formatCompactDuration(rec.total_work_hours);
                           }
                           return "-";
                         })()}
