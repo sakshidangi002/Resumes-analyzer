@@ -27,6 +27,17 @@ from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models import User
 
+# Timestamped logs (HH:MM:SS.mmm) so recognition-pipeline stages (STEP-1 frame
+# received … STEP-11 complete, detect/match ms) can be measured to the
+# millisecond. force=True replaces uvicorn's default handler so app loggers get
+# the timestamp prefix.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s - %(message)s",
+    datefmt="%H:%M:%S",
+    force=True,
+)
+
 logger = logging.getLogger(__name__)
 
 

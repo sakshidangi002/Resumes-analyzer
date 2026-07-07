@@ -94,6 +94,14 @@ _DETECT_MAXSIDE       = int(os.getenv("CCTV_DETECT_MAXSIDE",   "0"))
 # How often the analysis (detect+track+identify) loop runs. Kept small so face
 # boxes follow people smoothly; the actual rate is bounded by detector speed.
 _ANALYSIS_INTERVAL    = float(os.getenv("CCTV_ANALYSIS_INTERVAL", "0.12"))
+# MONITOR cameras are display-only (never mark attendance) and often have people
+# permanently in view (e.g. a seating area), so at the fast interval they run
+# detection every cycle and MONOPOLISE the single global inference lock —
+# starving the IN/OUT attendance cameras (a person at the entrance then waits
+# 20-30s for a free inference slot). Monitor cameras therefore analyse at a much
+# slower rate, reserving inference throughput for the attendance cameras. Their
+# on-screen boxes/names simply refresh a little less often (no attendance impact).
+_MONITOR_ANALYSIS_INTERVAL = float(os.getenv("CCTV_MONITOR_ANALYSIS_INTERVAL", "1.5"))
 # How long (seconds) a RECOGNISED person keeps their name after their face is no
 # longer visible — the box coasts along their motion until they leave the frame.
 _IDENTITY_HOLD_SEC    = float(os.getenv("CCTV_IDENTITY_HOLD_SEC", "2.5"))
@@ -692,7 +700,7 @@ class _RecognitionThread(threading.Thread):
         logger.info("Camera %s: Recognition thread started", w.camera_id)
 
         while not self._stop_evt.is_set():
-            self._stop_evt.wait(max(0.02, _ANALYSIS_INTERVAL))
+            self._stop_evt.wait(max(0.02, w.analysis_interval))
             if self._stop_evt.is_set():
                 break
 
@@ -929,6 +937,7 @@ class _DisplayThread(threading.Thread):
         super().__init__(daemon=True, name=f"display-{worker.camera_id}")
         self._w = worker
         self._stop_evt = threading.Event()
+        self._drawn_ids: set = set()  # track ids whose box is already on screen
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -955,6 +964,13 @@ class _DisplayThread(threading.Thread):
 
             if frame is None:
                 continue
+
+            # STAGE: bounding box drawn — log the first frame each track's box is
+            # actually rendered on screen (with timestamp, for latency measuring).
+            cur_ids = {t.track_id for t in tracks if getattr(t, "track_id", None) is not None}
+            for tid in (cur_ids - self._drawn_ids):
+                logger.info("STAGE-box_drawn camera=%s track=%s", w.camera_id, tid)
+            self._drawn_ids = cur_ids
 
             try:
                 line_info = (
@@ -1053,6 +1069,9 @@ class CameraWorker:
         # Engine preference: YOLO11+ByteTrack (best cross-path IDs) → MobileNet-SSD
         # +IoU → fall back to face tracking if neither model is installed.
         self.is_monitor = self.camera_purpose == "MONITOR"
+        # Attendance cameras (IN/OUT) analyse fast; display-only MONITOR cameras
+        # analyse slowly so they don't starve the shared inference lock.
+        self.analysis_interval = _MONITOR_ANALYSIS_INTERVAL if self.is_monitor else _ANALYSIS_INTERVAL
         _body_misses = max(15, int(_IDENTITY_HOLD_SEC / max(0.02, _ANALYSIS_INTERVAL)))
         self.bytetrack_engine = None
         self.person_tracker: Optional[PersonTracker] = None

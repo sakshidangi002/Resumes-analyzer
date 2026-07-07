@@ -1,9 +1,10 @@
 import logo from '../assets/New softwiz Logo.png';
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import DsrReminderBanner from "../components/DsrReminderBanner";
 import ToastHost from "../components/ToastHost";
+import { SectionLoader } from "../components/LoadingState";
 
 // Premium SVG Icons
 const Icons = {
@@ -195,7 +196,11 @@ export default function DashboardLayout() {
 
       <main className="main-content">
         <div className="content-shell">
-          <Outlet />
+          {/* Suspense catches lazy-loaded page chunks; the sidebar/header stay
+              visible and only this content area shows a loader while it fetches. */}
+          <Suspense fallback={<SectionLoader />}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
 

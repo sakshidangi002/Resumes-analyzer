@@ -1,33 +1,40 @@
+import { lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { AppLoadingScreen } from "./components/LoadingState";
+// Eager: auth entry pages + the app shell (needed immediately).
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import DashboardLayout from "./layouts/DashboardLayout";
-import Dashboard from "./pages/Dashboard";
-import Employees from "./pages/Employees";
-import EmployeeProfile from "./pages/EmployeeProfile";
-import ManageUsers from "./pages/ManageUsers";
-import DepartmentsDesignations from "./pages/DepartmentsDesignations";
-import Attendance from "./pages/Attendance";
-import FaceDetection from "./pages/FaceDetection";
-import CctvAttendance from "./pages/CctvAttendance";
-import CctvCameraManager from "./pages/CctvCameraManager";
-import DvrCameraDashboard from "./pages/DvrCameraDashboard";
-import Leave from "./pages/Leave";
-import LeaveApprovals from "./pages/LeaveApprovals";
-import LeaveAllocations from "./pages/LeaveAllocations";
-import Payroll from "./pages/Payroll";
-import PayrollManagement from "./pages/PayrollManagement";
-import PayslipManagement from "./pages/PayslipManagement";
-import MyPayslips from "./pages/MyPayslips";
-import Letters from "./pages/Letters";
-import Reports from "./pages/Reports";
-import Calendar from "./pages/Calendar";
-import Notifications from "./pages/Notifications";
-import Inbox from "./pages/Inbox";
-import Onboarding from "./pages/Onboarding";
-import DSR from "./pages/DSR";
+
+// Lazy: every authenticated page is code-split so its JS is fetched only when
+// the route is visited, keeping the initial bundle small. The <Suspense>
+// boundary lives in DashboardLayout (around <Outlet/>), so the sidebar stays
+// visible with a loader in the content area while a page chunk downloads.
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Employees = lazy(() => import("./pages/Employees"));
+const EmployeeProfile = lazy(() => import("./pages/EmployeeProfile"));
+const ManageUsers = lazy(() => import("./pages/ManageUsers"));
+const DepartmentsDesignations = lazy(() => import("./pages/DepartmentsDesignations"));
+const Attendance = lazy(() => import("./pages/Attendance"));
+const FaceDetection = lazy(() => import("./pages/FaceDetection"));
+const CctvAttendance = lazy(() => import("./pages/CctvAttendance"));
+const CctvCameraManager = lazy(() => import("./pages/CctvCameraManager"));
+const DvrCameraDashboard = lazy(() => import("./pages/DvrCameraDashboard"));
+const Leave = lazy(() => import("./pages/Leave"));
+const LeaveApprovals = lazy(() => import("./pages/LeaveApprovals"));
+const LeaveAllocations = lazy(() => import("./pages/LeaveAllocations"));
+const Payroll = lazy(() => import("./pages/Payroll"));
+const PayrollManagement = lazy(() => import("./pages/PayrollManagement"));
+const PayslipManagement = lazy(() => import("./pages/PayslipManagement"));
+const MyPayslips = lazy(() => import("./pages/MyPayslips"));
+const Letters = lazy(() => import("./pages/Letters"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Calendar = lazy(() => import("./pages/Calendar"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const Inbox = lazy(() => import("./pages/Inbox"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const DSR = lazy(() => import("./pages/DSR"));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth();
