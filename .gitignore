@@ -42,3 +42,10 @@ node_modules/
 # Deploy sync (local SSH credentials)
 scripts/sync_to_server.json
 scripts/sync.log
+
+# Build artifacts (generated — shipped via package script, not committed)
+deploy/
+**/frontend_build/
+**/data/face_uploads/
+**/data/resumes_data.xlsx
+**/chromadb_backup_*/
