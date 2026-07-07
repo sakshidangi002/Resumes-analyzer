@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     default_threshold: float = 0.45
     min_match_margin: float = 0.10
 
+    # If an employee is recognised at the OUT camera but has no check-in today
+    # (their entrance read was missed), record the missed check-in instead of
+    # dropping them entirely. Prevents "recognised but marked Absent".
+    attendance_checkin_on_missing_in: bool = True
+
     # ---- Face detector backend -------------------------------------------
     # "insightface" -> SCRFD detector from buffalo_l (default, no extra deps)
     # "yolo"        -> YOLOv8-face for DETECTION; ArcFace (buffalo_l) still
@@ -91,6 +96,9 @@ class Settings(BaseSettings):
     person_model_weights: str = "models/mobilenet_ssd/mobilenet_iter_73000.caffemodel"
     person_conf: float = 0.5          # person-detection confidence threshold
     person_reverify_sec: float = 5.0  # re-check a bound identity every N seconds
+    # YOLO11 + ByteTrack (preferred for office monitoring; needs `ultralytics`).
+    # Falls back to MobileNet-SSD + IoU tracking when unavailable.
+    yolo_person_model_path: str = "models/yolo11n.pt"
 
     # ---- DVR auto-start on application boot -------------------------------
     # When dvr_autostart is True and credentials are set, the app connects to
@@ -108,6 +116,9 @@ class Settings(BaseSettings):
     # channel is treated as CHECK-IN. e.g. DVR_OUT_CHANNELS="2" makes channel 2
     # the exit camera and channel 1 the entrance camera.
     dvr_out_channels: str = ""
+    # Comma-separated DVR channel IDs that are MONITOR (office) cameras — body
+    # tracking + name display, NEVER attendance. e.g. DVR_MONITOR_CHANNELS="1".
+    dvr_monitor_channels: str = ""
     # Doorway line-crossing for DVR camera workers (per-DVR, since DVR channels
     # are not CameraConfig rows). Requires person tracking to be enabled.
     dvr_crossing_enabled: bool = False

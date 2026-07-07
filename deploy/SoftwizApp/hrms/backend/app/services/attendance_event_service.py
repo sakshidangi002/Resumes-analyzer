@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 EVENT_COOLDOWN_SECONDS = 25
 
+
 def to_naive_ist(dt: datetime) -> datetime:
     """Normalise any datetime (aware or naive) to timezone-naive local IST datetime.
 
@@ -85,16 +86,37 @@ def get_latest_event_for_day(db: Session, employee_id: int, d: date) -> Attendan
     )
 
 
+def _event_direction(event_type: str | None) -> str | None:
+    """Classify an event or camera purpose as 'entry' or 'exit' (or None).
+
+    entry = IN / BREAK_IN  (check-in side)
+    exit  = OUT / BREAK_OUT (check-out side)
+    """
+    n = _normalize_event_type(event_type)
+    if n in _WORK_START_EVENTS:
+        return "entry"
+    if n in _WORK_END_EVENTS:
+        return "exit"
+    return None
+
+
 def is_within_event_cooldown(
     db: Session,
     employee_id: int,
     now_dt: datetime,
     cooldown_seconds: int = EVENT_COOLDOWN_SECONDS,
+    direction: str | None = None,
 ) -> bool:
-    """Return True only if the most recent event for THIS day is within the cooldown window.
+    """Return True only if a DUPLICATE recent event should suppress this one.
 
     Scoping to the current day prevents a late-night event from blocking
     the employee's first check-in of the following morning.
+
+    Directional: when ``direction`` ('entry'/'exit') is given, the cooldown only
+    suppresses a repeat of the SAME direction. An OPPOSITE transition (a check-in
+    shortly after a check-out, or a return from a quick <cooldown break) is a
+    real state change and is never dropped — dropping it would strand the
+    employee on the wrong side (shown outside while actually back inside).
     """
     now_naive = to_naive_ist(now_dt)
     today = now_naive.date()
@@ -110,7 +132,15 @@ def is_within_event_cooldown(
     if latest is None:
         return False
     latest_naive = to_naive_ist(latest.event_time)
-    return (now_naive - latest_naive).total_seconds() < cooldown_seconds
+    if (now_naive - latest_naive).total_seconds() >= cooldown_seconds:
+        return False
+    # Within the time window. Only suppress when the incoming event is the SAME
+    # direction as the last one (a true duplicate). Opposite transitions pass.
+    if direction is not None:
+        latest_dir = _event_direction(latest.event_type)
+        if latest_dir is not None and latest_dir != direction:
+            return False
+    return True
 
 
 def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
@@ -120,6 +150,59 @@ def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
     if last_type in _WORK_START_EVENTS:
         return "OUT"
     return "IN"
+
+
+# ── Attendance state machine ────────────────────────────────────────────────
+# State derived from the last event of the day:
+#   ABSENT   – no events yet
+#   WORKING  – last event is a work-start (CHECK_IN / BREAK_IN) → employee inside
+#   AWAY     – last event is a work-end  (BREAK_OUT / CHECK_OUT) → employee out
+def current_state(last_type: str | None) -> str:
+    if last_type is None:
+        return "ABSENT"
+    n = _normalize_event_type(last_type)
+    if n in _WORK_START_EVENTS:
+        return "WORKING"
+    if n in _WORK_END_EVENTS:
+        return "AWAY"
+    return "ABSENT"
+
+
+def resolve_camera_event(
+    camera_type: str, last_type: str | None, allow_missing_in: bool
+) -> tuple[str | None, str | None]:
+    """Decide the event type for a camera recognition, or reject it.
+
+    Returns (event_type, reject_reason). event_type is one of
+    CHECK_IN / BREAK_IN / BREAK_OUT (the final BREAK_OUT of the day is surfaced
+    as the check-out in the summary). reject_reason is set (and event_type None)
+    for an invalid transition.
+
+        IN  camera:  ABSENT  → CHECK_IN
+                     AWAY    → BREAK_IN         (returning from a break)
+                     WORKING → reject (duplicate check-in / already inside)
+        OUT camera:  WORKING → BREAK_OUT        (a departure; last one = checkout)
+                     ABSENT  → CHECK_IN if allow_missing_in else reject
+                     AWAY    → reject (duplicate break-out / already outside)
+    """
+    state = current_state(last_type)
+    cam = (camera_type or "IN").upper()
+
+    if cam == "IN":
+        if state == "ABSENT":
+            return "CHECK_IN", None
+        if state == "AWAY":
+            return "BREAK_IN", None
+        return None, "duplicate_check_in_already_working"
+
+    # OUT / check-out camera
+    if state == "WORKING":
+        return "BREAK_OUT", None
+    if state == "ABSENT":
+        if allow_missing_in:
+            return "CHECK_IN", None  # entrance was missed — record the check-in
+        return None, "check_out_without_check_in"
+    return None, "duplicate_out_already_away"
 
 
 def calculate_intervals_from_events(
@@ -188,6 +271,19 @@ def calculate_intervals_from_events(
                 "duration_formatted": format_duration(delta),
                 "event_type": cur_type,
             })
+
+    # Live open interval: if the employee is CURRENTLY working (last event is a
+    # work-start) on TODAY, count the time from that event until now, so the
+    # displayed working hours reflect reality instead of freezing at the last
+    # break-out. (Past days close naturally at the final check-out.)
+    last_ev = sorted_events[-1]
+    if _normalize_event_type(last_ev.event_type) in _WORK_START_EVENTS:
+        last_t = to_naive_ist(last_ev.event_time)
+        now = get_ist_now()
+        if last_t.date() == now.date():
+            open_secs = int((now - last_t).total_seconds())
+            if open_secs > 0:
+                total_work_seconds += open_secs
 
     work_hours = Decimal(round(total_work_seconds / 3600, 2)) if total_work_seconds else Decimal("0")
     break_hours = Decimal(round(total_break_seconds / 3600, 2)) if total_break_seconds else Decimal("0")
@@ -304,7 +400,14 @@ def add_attendance_event(
     now_dt = to_naive_ist(event_time or get_ist_now()).replace(microsecond=0)
     validate_event_time(now_dt)
 
-    if not skip_cooldown and is_within_event_cooldown(db, employee_id, now_dt, cooldown_seconds):
+    # Direction of THIS event (entry/exit), from an explicit type or the camera
+    # purpose, so the cooldown only suppresses same-direction duplicates and
+    # never drops a legitimate opposite transition.
+    incoming_direction = _event_direction(event_type if event_type is not None else camera_purpose)
+
+    if not skip_cooldown and is_within_event_cooldown(
+        db, employee_id, now_dt, cooldown_seconds, direction=incoming_direction
+    ):
         rec = get_or_create_attendance(db, employee_id, now_dt.date())
         db.refresh(rec)
         logger.info(
@@ -334,30 +437,33 @@ def add_attendance_event(
     if resolved_type not in {"IN", "OUT", "BREAK_IN", "BREAK_OUT"}:
         raise ValueError("event_type must be IN, OUT, BREAK_IN, or BREAK_OUT")
 
-    # ── Presence state machine (dedicated IN / OUT cameras) ─────────────────
-    # An employee who is simply SITTING in the camera's view (face tilting
-    # toward the lens) must NOT be checked in again. So:
-    #   * IN  camera records IN  only if the employee is NOT already present.
-    #   * OUT camera records OUT only if the employee IS currently present.
-    # Manual/explicit events (event_type given) bypass this gate.
+    # ── Attendance state machine (dedicated IN / OUT cameras) ───────────────
+    # Classify the camera recognition into CHECK_IN / BREAK_IN / BREAK_OUT based
+    # on the employee's current state, and REJECT invalid transitions (with the
+    # exact reason logged). Manual/explicit events (event_type given) bypass it.
     if from_camera_purpose and resolved_type in {"IN", "OUT"}:
         last_event = get_latest_event_for_day(db, employee_id, d)
-        last_type = _normalize_event_type(last_event.event_type) if last_event else None
-        currently_present = last_type in _WORK_START_EVENTS  # IN / BREAK_IN
-        if resolved_type == "IN" and currently_present:
+        last_type = last_event.event_type if last_event else None
+        camera_type = "IN" if resolved_type == "IN" else "OUT"
+
+        from app.core.config import get_settings
+        allow_missing = get_settings().attendance_checkin_on_missing_in
+
+        new_type, reject = resolve_camera_event(camera_type, last_type, allow_missing)
+        state = current_state(last_type)
+        if reject:
             rec = get_or_create_attendance(db, employee_id, d)
             db.refresh(rec)
             logger.info(
-                "attendance_event SKIP employee_id=%s reason=already_checked_in", employee_id
+                "attendance_event REJECTED employee_id=%s camera=%s state=%s last=%s reason=%s",
+                employee_id, camera_type, state, last_type, reject,
             )
-            return None, rec, "already_checked_in"
-        if resolved_type == "OUT" and not currently_present:
-            rec = get_or_create_attendance(db, employee_id, d)
-            db.refresh(rec)
-            logger.info(
-                "attendance_event SKIP employee_id=%s reason=not_checked_in", employee_id
-            )
-            return None, rec, "not_checked_in"
+            return None, rec, reject
+        logger.info(
+            "attendance_event STATE employee_id=%s camera=%s state=%s last=%s -> event=%s",
+            employee_id, camera_type, state, last_type, new_type,
+        )
+        resolved_type = new_type
 
     rec = get_or_create_attendance(db, employee_id, d)
     event = AttendanceEvent(

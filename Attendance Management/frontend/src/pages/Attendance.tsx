@@ -45,6 +45,7 @@ interface EmployeeInfo {
   first_name: string;
   last_name: string;
   expected_working_hours: number;
+  staff_type?: string | null;
 }
 
 function formatLocalDate(d: Date): string {
@@ -181,7 +182,14 @@ export default function Attendance() {
           setError("Failed to load attendance. Please refresh.");
         }
         if (isHrOrAdmin) {
-          if (empsResult.status === "fulfilled") setEmployees(empsResult.value.data || []);
+          if (empsResult.status === "fulfilled") {
+            // Daily attendance is for real employees only — exclude non-Employee
+            // staff (e.g. Housekeeping / Security), matching the backend rule.
+            const emps = (empsResult.value.data || []).filter(
+              (e: EmployeeInfo) => (e.staff_type ?? "Employee").toLowerCase() === "employee"
+            );
+            setEmployees(emps);
+          }
         }
       })
       .finally(() => setLoading(false));

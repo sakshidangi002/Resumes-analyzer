@@ -92,11 +92,15 @@ def _extract_faces_insightface(rgb_image: np.ndarray) -> list[dict]:
 
     faces: list[dict] = []
     for face in detected_faces:
+        kps = getattr(face, "kps", None)
         faces.append(
             {
                 "box": _bbox_to_list(face.bbox),
                 "confidence": float(face.det_score),
                 "embedding": _normalize(face.embedding),
+                # 5-point landmarks (eyes, nose, mouth corners). Used by the
+                # enrollment quality gate to reject side-profile photos.
+                "kps": kps.astype(float).tolist() if kps is not None else None,
                 "pose": {
                     "yaw": float(getattr(face, "yaw", 0.0) or 0.0),
                     "pitch": float(getattr(face, "pitch", 0.0) or 0.0),

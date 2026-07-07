@@ -36,10 +36,10 @@ type DVRStatus = {
 
 export default function DvrCameraDashboard() {
   const [dvrForm, setDvrForm] = useState({
-    ip: "192.168.29.181",
+    ip: "",
     port: "8000",
-    username: "anilchanna",
-    password: "test@123",
+    username: "",
+    password: "",
   });
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState("");
@@ -314,8 +314,8 @@ export default function DvrCameraDashboard() {
                       style={{
                         width: "100%",
                         height: "auto",
-                        maxHeight: "100vh",
-                        objectFit: "contain",
+                        // maxHeight: "100vh",
+                         objectFit: "cover",
                         display: "block",
                       }}
                       onError={(e) => {

@@ -54,6 +54,21 @@ def _mark_attendance(
         employee_id, camera_id, camera_purpose,
     )
 
+    # ── Camera-role invariant ────────────────────────────────────────────────
+    # Working-area (MONITOR) cameras detect, track and label people for LIVE
+    # MONITORING ONLY — they must NEVER create attendance. Only entry cameras
+    # (IN / OUT) mark attendance. Enforced centrally here so that no camera code
+    # path — persistent DB workers, on-demand DVR preview streams, or any future
+    # caller — can accidentally record attendance from a monitoring camera.
+    purpose = (camera_purpose or "").strip().upper()
+    if purpose == "MONITOR":
+        logger.info(
+            "STEP-7 skipped monitor_camera camera_id=%s employee_id=%s "
+            "(working-area camera never marks attendance)",
+            camera_id, employee_id,
+        )
+        return None, "monitor_camera"
+
     with SessionLocal() as db:
         employee = (
             db.query(Employee)

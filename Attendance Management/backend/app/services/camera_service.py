@@ -53,6 +53,8 @@ from app.services.person_tracker import PersonTracker, check_line_crossing
 from app.services import person_detector
 from app.services import bytetrack_engine
 
+logger = logging.getLogger(__name__)
+
 # Import HCNetSDK components (will be used when source_type="hcnetsdk")
 try:
     from app.services.hcnetsdk_camera import HCNetSDKCameraWorker
@@ -60,8 +62,6 @@ try:
 except ImportError:
     HCNETSDK_AVAILABLE = False
     logger.warning("HCNetSDK camera module not available")
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Tuning constants (all overridable via env vars)
@@ -73,9 +73,13 @@ _OPEN_TIMEOUT_MS      = int(os.getenv("CCTV_OPEN_TIMEOUT_MS",  "10000")) # 10 s
 _READ_TIMEOUT_MS      = int(os.getenv("CCTV_READ_TIMEOUT_MS",  "5000"))  # 5 s
 _JPEG_QUALITY         = int(os.getenv("CCTV_JPEG_QUALITY",     "80"))
 _FPS_WINDOW           = 30  # frames used to compute rolling FPS
-# Number of consecutive frames the SAME employee must be identified on a track
-# before attendance is recorded (stable confirmation → no false positives).
-_CONFIRM_FRAMES       = int(os.getenv("CCTV_CONFIRM_FRAMES",   "2"))
+# Number of consecutive detected+matched frames before attendance is recorded.
+# Default 1: exit cameras detect faces slowly and intermittently, so requiring 2
+# consecutive frames caused recognitions to never confirm (name showed but no
+# event). A single match is safe because the margin gate (min_match_margin)
+# already rejects ambiguous/lookalike matches, and the per-camera cooldown
+# blocks duplicates. Raise via CCTV_CONFIRM_FRAMES for stricter confirmation.
+_CONFIRM_FRAMES       = int(os.getenv("CCTV_CONFIRM_FRAMES",   "1"))
 # Target FPS for the display/encode thread. This is decoupled from recognition
 # so the live feed stays smooth even while face analysis runs in the background.
 _DISPLAY_FPS          = float(os.getenv("CCTV_DISPLAY_FPS",    "25"))
@@ -105,6 +109,10 @@ _DISPLAY_IDLE_SEC     = float(os.getenv("CCTV_DISPLAY_IDLE_SEC", "8.0"))
 # on them even when the face turns away, until they leave the frame.
 _PERSON_TRACKING      = os.getenv("CCTV_PERSON_TRACKING", "").lower() in {"1", "true", "yes"}
 _PERSON_REVERIFY_SEC  = float(os.getenv("CCTV_PERSON_REVERIFY_SEC", "5.0"))
+# Safety floor for a camera's recognition threshold. Older camera rows may still
+# hold the legacy 0.05 value, which accepts near-random faces as a match. We
+# never let a worker run below this floor regardless of the stored DB value.
+_MIN_THRESHOLD        = float(os.getenv("CCTV_MIN_THRESHOLD", "0.35"))
 
 
 # ---------------------------------------------------------------------------
@@ -379,9 +387,15 @@ def _open_capture(stream_url: str, source_type: str, camera_id: int) -> cv2.Vide
 
 
 def _check_ffmpeg() -> bool:
-    """Return True if OpenCV was built with FFmpeg support."""
+    """Return True if OpenCV was built with FFmpeg support.
+
+    OpenCV's build info reports this as "FFMPEG: YES" (uppercase). The check
+    must be case-insensitive — matching the exact string "FFmpeg" wrongly
+    reported no FFmpeg on standard opencv-python wheels and skipped ALL camera
+    startup (so no attendance cameras ran).
+    """
     build = cv2.getBuildInformation()
-    ok = "FFmpeg" in build
+    ok = "ffmpeg" in build.lower()
     if not ok:
         logger.error(
             "CRITICAL: OpenCV is built WITHOUT FFmpeg – RTSP streams will NOT work! "
@@ -390,9 +404,12 @@ def _check_ffmpeg() -> bool:
     return ok
 
 
-def _is_blurry(frame: np.ndarray, threshold: float = 80.0) -> bool:
-    """Return True when the frame is too blurry for reliable recognition."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def _is_blurry(gray: np.ndarray, threshold: float = 80.0) -> bool:
+    """Return True when the frame is too blurry for reliable recognition.
+
+    Takes a precomputed grayscale image so the recognition loop can reuse the
+    same gray for the motion gate instead of converting to gray twice per tick.
+    """
     return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < threshold
 
 
@@ -685,7 +702,11 @@ class _RecognitionThread(threading.Thread):
             if frame is None:
                 continue
 
-            if _is_blurry(frame):
+            # Grayscale is computed ONCE here and reused by both the blur check
+            # and the motion gate below (previously two full-frame conversions).
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            if _is_blurry(gray):
                 logger.debug("Camera %s: Skipping blurry frame", w.camera_id)
                 continue
 
@@ -699,7 +720,6 @@ class _RecognitionThread(threading.Thread):
                 # sit still, and an entrance camera must keep tracking a person
                 # who has stopped moving. So: never skip on a monitor camera, and
                 # never skip while any track is active.
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 static = False
                 if self._prev_gray is not None and self._prev_gray.shape == gray.shape:
                     motion = float(np.mean(cv2.absdiff(gray, self._prev_gray)))
@@ -991,7 +1011,14 @@ class CameraWorker:
         self.source_url = source_url  # Database field
         self.source_type = source_type
         self.camera_purpose = camera_purpose.upper()   # "IN" | "OUT"
-        self.threshold = threshold
+        # Clamp to the safety floor so a stale/misconfigured DB row (e.g. the
+        # legacy 0.05) can never make this camera accept near-random matches.
+        self.threshold = max(float(threshold), _MIN_THRESHOLD)
+        if float(threshold) < _MIN_THRESHOLD:
+            logger.warning(
+                "Camera %s: configured threshold %.3f below floor %.3f — using %.3f",
+                camera_id, float(threshold), _MIN_THRESHOLD, self.threshold,
+            )
         self.interval_sec = interval_sec
         self.frame_skip = frame_skip
 
@@ -1240,9 +1267,12 @@ class CameraManager:
                     worker.face_tracker.recognition_cooldown = tracking_cooldown
                 with self._lock:
                     old = self._workers.pop(model.id, None)
-                    if old:
-                        old.stop()
                     self._workers[model.id] = worker
+                # Stop the previous worker OUTSIDE the lock: stop() joins its
+                # threads (up to several seconds) and must not block every other
+                # camera status/preview call that needs this lock.
+                if old:
+                    old.stop()
                 worker.start()
                 return
         
@@ -1270,9 +1300,11 @@ class CameraManager:
         worker.face_tracker.recognition_cooldown = tracking_cooldown
         with self._lock:
             old = self._workers.pop(model.id, None)
-            if old:
-                old.stop()
             self._workers[model.id] = worker
+        # Stop the previous worker OUTSIDE the lock (see note above): joining its
+        # threads must not block other camera status/preview calls.
+        if old:
+            old.stop()
         worker.start()
 
     # ── CRUD operations ─────────────────────────────────────────────────────

@@ -169,6 +169,10 @@ export default function CctvAttendance() {
   const [selectedCamId, setSelectedCamId] = useState<number | "">("");
   const previewTimer = useRef<number | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
+  // Bumped to force the live MJPEG <img> to remount (reconnect) after a stream
+  // drop, so a broken feed doesn't freeze on the last frame looking "live".
+  const [feedNonce, setFeedNonce] = useState(0);
+  const feedRetryRef = useRef<number | null>(null);
   const [liveStat, setLiveStat] = useState<{
     status?: string;
     capture_fps?: number;
@@ -214,7 +218,10 @@ export default function CctvAttendance() {
     };
     poll();
     previewTimer.current = window.setInterval(poll, 1500);
-    return () => { if (previewTimer.current) window.clearInterval(previewTimer.current); };
+    return () => {
+      if (previewTimer.current) window.clearInterval(previewTimer.current);
+      if (feedRetryRef.current != null) { window.clearTimeout(feedRetryRef.current); feedRetryRef.current = null; }
+    };
   }, [selectedCamId]);
 
   const toggleFullscreen = () => {
@@ -448,9 +455,19 @@ export default function CctvAttendance() {
               {selectedCamId !== "" ? (
                 <div ref={feedRef} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
-                    src={camerasApi.streamUrl(selectedCamId as number)}
+                    key={`${selectedCamId}-${feedNonce}`}
+                    src={`${camerasApi.streamUrl(selectedCamId as number)}?n=${feedNonce}`}
                     alt="Live camera feed"
                     style={{ width: "100%", display: "block", objectFit: "contain", background: "#000" }}
+                    onError={() => {
+                      // Reconnect once after a short delay; guard against stacking
+                      // multiple timers if onError fires repeatedly.
+                      if (feedRetryRef.current != null) return;
+                      feedRetryRef.current = window.setTimeout(() => {
+                        feedRetryRef.current = null;
+                        setFeedNonce((n) => n + 1);
+                      }, 2000);
+                    }}
                   />
                   {/* Real-time status bar overlaid on the feed */}
                   <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>

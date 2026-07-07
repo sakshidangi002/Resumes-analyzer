@@ -501,7 +501,7 @@ export const cameras = {
   stop: (id: number) => api.post(`/cameras/${id}/stop`),
   restart: (id: number) => api.post(`/cameras/${id}/restart`),
   status: (id: number) => api.get(`/cameras/${id}/status`),
-  previewUrl: (id: number) => `/api/cameras/${id}/preview.jpg`,
+  previewUrl: (id: number) => `/api/cameras/${id}/preview`,
   streamUrl: (id: number) => `/api/cameras/${id}/stream.mjpg`,
   testConnection: (data: { source_url: string; source_type?: string }) =>
     api.post("/cameras/test-connection", data),

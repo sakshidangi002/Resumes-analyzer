@@ -2,6 +2,7 @@
 from datetime import date, time, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -34,6 +35,17 @@ from app.services.attendance_event_service import (
 )
 
 router = APIRouter()
+
+
+def _employees_only():
+    """Filter: real employees only, excluding non-Employee staff.
+
+    Staff such as Housekeeping / Security are recognised on camera but are NOT
+    part of daily attendance (mirrors the attendance-marking rule which skips
+    any staff_type other than 'Employee'). staff_type NULL is treated as a
+    normal employee (the column default).
+    """
+    return or_(Employee.staff_type.is_(None), func.lower(Employee.staff_type) == "employee")
 
 
 @router.post("/sign-in", response_model=AttendanceRecordResponse)
@@ -260,7 +272,7 @@ def daily_attendance_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
 ):
-    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     employees = q.order_by(Employee.employee_code.asc()).all()
@@ -424,7 +436,7 @@ def get_today_attendance(
     
     today = get_ist_now().date()
     
-    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     employees = q.order_by(Employee.employee_code.asc()).all()
@@ -476,7 +488,7 @@ def get_live_attendance_status(
     today = get_ist_now().date()
     
     # Get all active employees
-    employees = db.query(Employee).filter(Employee.employment_status == "Active").all()
+    employees = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only()).all()
     
     currently_working = []
     currently_outside = []

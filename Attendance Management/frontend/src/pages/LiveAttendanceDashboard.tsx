@@ -65,18 +65,19 @@ export default function LiveAttendanceDashboard() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = () => {
-    setLoading(true);
-    setError(null);
     attendance
       .liveStatus()
       .then((res) => {
         setData(res.data);
-        setLoading(false);
+        setError(null);
       })
       .catch(() => {
-        setError("Failed to load attendance data");
-        setLoading(false);
-      });
+        // Keep the last-good data on screen; a momentary network blip should
+        // not blank out an always-on wall dashboard. Only the initial load
+        // (no data yet) escalates to a full-screen error.
+        setError("Failed to refresh — showing last update");
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -89,7 +90,7 @@ export default function LiveAttendanceDashboard() {
     return <SectionLoader />;
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div style={{ textAlign: "center", padding: "3rem" }}>
         <div style={{ color: "#ef4444", marginBottom: "1rem" }}>{error}</div>
@@ -202,6 +203,22 @@ export default function LiveAttendanceDashboard() {
           Refresh
         </button>
       </div>
+
+      {error && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.6rem 1rem",
+            borderRadius: "8px",
+            background: "rgba(245,158,11,0.12)",
+            border: "1px solid rgba(245,158,11,0.3)",
+            color: "#f59e0b",
+            fontSize: "0.85rem",
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       {/* Summary Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "2rem" }}>

@@ -263,6 +263,17 @@ async def _unified_lifespan(parent_app: FastAPI):
     except Exception:
         logger.exception("Failed to capture event loop for WebSocket manager")
 
+    # --- Pre-load employee face embeddings ---------------------------------
+    # Build the recognition cache ONCE at startup so the first CCTV frames
+    # don't pay the full DB load on a recognition thread (which caused slow /
+    # missed first detections right after boot).
+    try:
+        from app.services.embedding_cache import warm_embedding_cache
+        _n = warm_embedding_cache()
+        logger.info("Embedding cache warmed: %d enrolled employee(s)", _n)
+    except Exception:
+        logger.exception("Failed to warm embedding cache – first recognitions may be slow")
+
     # --- Start CCTV camera workers -----------------------------------------
     try:
         from app.services.camera_service import camera_manager

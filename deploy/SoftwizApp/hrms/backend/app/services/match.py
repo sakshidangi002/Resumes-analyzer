@@ -4,12 +4,31 @@ import numpy as np
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0:
+    """Best cosine similarity between query `a` and reference `b`.
+
+    `b` may be a single embedding (512,) OR a stack of an employee's enrolled
+    embeddings (N, 512). Returning the MAX over the stack lets one employee be
+    matched from several angles/lighting conditions, which is the key to high
+    recognition accuracy — far better than averaging all photos into one vector.
+    """
+    q = np.asarray(a, dtype=np.float32)
+    qn = float(np.linalg.norm(q))
+    if qn == 0:
         return -1.0
-    return float(np.dot(a, b) / denom)
+
+    ref = np.asarray(b, dtype=np.float32)
+    if ref.ndim == 1:
+        ref = ref[None, :]           # treat single embedding as a 1-row stack
+    if ref.size == 0:
+        return -1.0
+
+    norms = np.linalg.norm(ref, axis=1)
+    valid = norms > 0
+    if not valid.any():
+        return -1.0
+
+    sims = (ref[valid] @ q) / (norms[valid] * qn)
+    return float(np.max(sims))
 
 
 def find_best_match(

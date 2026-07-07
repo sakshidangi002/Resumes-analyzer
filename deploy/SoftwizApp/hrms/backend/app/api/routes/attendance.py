@@ -2,6 +2,7 @@
 from datetime import date, time, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -34,6 +35,17 @@ from app.services.attendance_event_service import (
 )
 
 router = APIRouter()
+
+
+def _employees_only():
+    """Filter: real employees only, excluding non-Employee staff.
+
+    Staff such as Housekeeping / Security are recognised on camera but are NOT
+    part of daily attendance (mirrors the attendance-marking rule which skips
+    any staff_type other than 'Employee'). staff_type NULL is treated as a
+    normal employee (the column default).
+    """
+    return or_(Employee.staff_type.is_(None), func.lower(Employee.staff_type) == "employee")
 
 
 @router.post("/sign-in", response_model=AttendanceRecordResponse)
@@ -260,7 +272,7 @@ def daily_attendance_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager"])),
 ):
-    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     employees = q.order_by(Employee.employee_code.asc()).all()
@@ -424,7 +436,7 @@ def get_today_attendance(
     
     today = get_ist_now().date()
     
-    q = db.query(Employee).filter(Employee.employment_status == "Active")
+    q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     employees = q.order_by(Employee.employee_code.asc()).all()
@@ -471,12 +483,12 @@ def get_live_attendance_status(
 ):
     """Get real-time attendance status for all active employees today."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_latest_event_for_day
-    
+    from app.services.attendance_event_service import get_latest_event_for_day, _normalize_event_type
+
     today = get_ist_now().date()
     
     # Get all active employees
-    employees = db.query(Employee).filter(Employee.employment_status == "Active").all()
+    employees = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only()).all()
     
     currently_working = []
     currently_outside = []
@@ -495,14 +507,14 @@ def get_live_attendance_status(
         )
         latest_event = get_latest_event_for_day(db, emp.id, today)
         
-        # Determine current state
+        # Determine current state (normalise so CHECK_IN/BREAK_IN/BREAK_OUT map right)
         current_state = "ABSENT"
         if latest_event:
-            latest_type = latest_event.event_type.upper()
+            latest_type = _normalize_event_type(latest_event.event_type)
             if latest_type in {"IN", "BREAK_IN"}:
                 current_state = "WORKING"
             elif latest_type in {"OUT", "BREAK_OUT"}:
-                # Check if they have a check-in today
+                # Has a check-in but currently out → on break; else checked out
                 if rec and rec.sign_in_time:
                     current_state = "OUTSIDE"
                 else:
@@ -654,15 +666,17 @@ def get_attendance_timeline(
     events = get_events_for_day(db, employee_id, attendance_date)
     work_h, break_h, first_in, last_out, timeline = calculate_intervals_from_events(events)
 
-    # Determine current status
+    # Determine current status (normalise so CHECK_IN/BREAK_IN/BREAK_OUT map right)
+    from app.services.attendance_event_service import _normalize_event_type
     latest_event = events[-1] if events else None
     current_status = "ABSENT"
     if latest_event:
-        latest_type = latest_event.event_type.upper()
+        latest_type = _normalize_event_type(latest_event.event_type)
         if latest_type in {"IN", "BREAK_IN"}:
-            current_status = "CHECKED_IN"
+            current_status = "PRESENT"
         elif latest_type in {"OUT", "BREAK_OUT"}:
-            current_status = "CHECKED_OUT"
+            # 'out' with no later return = checked out; otherwise on break
+            current_status = "CHECKED_OUT" if last_out else "ON_BREAK"
 
     return {
         "employee_id": employee_id,

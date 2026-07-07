@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 EVENT_COOLDOWN_SECONDS = 25
 
+
 def to_naive_ist(dt: datetime) -> datetime:
     """Normalise any datetime (aware or naive) to timezone-naive local IST datetime.
 
@@ -85,16 +86,37 @@ def get_latest_event_for_day(db: Session, employee_id: int, d: date) -> Attendan
     )
 
 
+def _event_direction(event_type: str | None) -> str | None:
+    """Classify an event or camera purpose as 'entry' or 'exit' (or None).
+
+    entry = IN / BREAK_IN  (check-in side)
+    exit  = OUT / BREAK_OUT (check-out side)
+    """
+    n = _normalize_event_type(event_type)
+    if n in _WORK_START_EVENTS:
+        return "entry"
+    if n in _WORK_END_EVENTS:
+        return "exit"
+    return None
+
+
 def is_within_event_cooldown(
     db: Session,
     employee_id: int,
     now_dt: datetime,
     cooldown_seconds: int = EVENT_COOLDOWN_SECONDS,
+    direction: str | None = None,
 ) -> bool:
-    """Return True only if the most recent event for THIS day is within the cooldown window.
+    """Return True only if a DUPLICATE recent event should suppress this one.
 
     Scoping to the current day prevents a late-night event from blocking
     the employee's first check-in of the following morning.
+
+    Directional: when ``direction`` ('entry'/'exit') is given, the cooldown only
+    suppresses a repeat of the SAME direction. An OPPOSITE transition (a check-in
+    shortly after a check-out, or a return from a quick <cooldown break) is a
+    real state change and is never dropped — dropping it would strand the
+    employee on the wrong side (shown outside while actually back inside).
     """
     now_naive = to_naive_ist(now_dt)
     today = now_naive.date()
@@ -110,7 +132,15 @@ def is_within_event_cooldown(
     if latest is None:
         return False
     latest_naive = to_naive_ist(latest.event_time)
-    return (now_naive - latest_naive).total_seconds() < cooldown_seconds
+    if (now_naive - latest_naive).total_seconds() >= cooldown_seconds:
+        return False
+    # Within the time window. Only suppress when the incoming event is the SAME
+    # direction as the last one (a true duplicate). Opposite transitions pass.
+    if direction is not None:
+        latest_dir = _event_direction(latest.event_type)
+        if latest_dir is not None and latest_dir != direction:
+            return False
+    return True
 
 
 def determine_next_event_type(last_event: AttendanceEvent | None) -> str:
@@ -370,7 +400,14 @@ def add_attendance_event(
     now_dt = to_naive_ist(event_time or get_ist_now()).replace(microsecond=0)
     validate_event_time(now_dt)
 
-    if not skip_cooldown and is_within_event_cooldown(db, employee_id, now_dt, cooldown_seconds):
+    # Direction of THIS event (entry/exit), from an explicit type or the camera
+    # purpose, so the cooldown only suppresses same-direction duplicates and
+    # never drops a legitimate opposite transition.
+    incoming_direction = _event_direction(event_type if event_type is not None else camera_purpose)
+
+    if not skip_cooldown and is_within_event_cooldown(
+        db, employee_id, now_dt, cooldown_seconds, direction=incoming_direction
+    ):
         rec = get_or_create_attendance(db, employee_id, now_dt.date())
         db.refresh(rec)
         logger.info(
