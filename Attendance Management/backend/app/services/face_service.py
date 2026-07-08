@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import threading
 from functools import lru_cache
 
@@ -15,7 +16,13 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL_VERSION = "insightface_buffalo_l_v1"
 DETECTION_THRESHOLD = 0.32
-DETECTION_SIZE = (640, 640)
+# Detector input resolution. Larger = finds smaller / more DISTANT faces (a far
+# frontal face keeps enough pixels to be detected) at the cost of speed. 640 (the
+# default) missed faces more than a few metres out; 1024 detects them reliably.
+# Only affects DETECTION — the identity embedding is still computed from an
+# aligned 112x112 crop, so enrolled embeddings remain comparable (recognition
+# accuracy unchanged). Overridable via FACE_DETECTION_SIZE env if needed.
+DETECTION_SIZE = (int(os.getenv("FACE_DETECTION_SIZE", "1024")),) * 2
 
 _inference_lock = threading.Lock()
 
