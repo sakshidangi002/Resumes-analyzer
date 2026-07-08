@@ -299,6 +299,48 @@ def format_duration(seconds: int) -> str:
     return f"{minutes}m"
 
 
+def count_attendance_events(
+    events: list[AttendanceEvent], has_final_checkout: bool
+) -> dict:
+    """Count check-in/out events and break events for a single day.
+
+    The day's boundaries — the FIRST check-in and the FINAL check-out — are NOT
+    counted as breaks. Everything in between is a break:
+      * break-out  = every work-end (OUT / BREAK_OUT) except the final check-out
+      * break-in   = every work-start (IN / BREAK_IN) except the first check-in
+
+    ``has_final_checkout`` tells us whether the day already has a closing
+    check-out (i.e. the last event is not a work-start). When the employee is
+    still working (no final check-out yet), no work-end is excluded, so every
+    OUT so far is a genuine break-out. This mirrors how the daily summary derives
+    sign_out_time, keeping the counts consistent with the rest of the record.
+
+    Example (completed day)::
+
+        09:00 IN  12:30 OUT  12:45 IN  15:30 OUT  15:45 IN  18:00 OUT
+        -> check_in=3 check_out=3 break_in=2 break_out=2
+
+    Returns a dict with check_in_count, check_out_count, break_in_count,
+    break_out_count (all ints).
+    """
+    in_events = [e for e in events if _normalize_event_type(e.event_type) in _WORK_START_EVENTS]
+    out_events = [e for e in events if _normalize_event_type(e.event_type) in _WORK_END_EVENTS]
+
+    check_in_count = len(in_events)
+    check_out_count = len(out_events)
+    # Exclude the first check-in from break-ins; exclude the final check-out from
+    # break-outs only when that closing check-out actually exists.
+    break_in_count = max(0, check_in_count - 1)
+    break_out_count = max(0, check_out_count - (1 if has_final_checkout else 0))
+
+    return {
+        "check_in_count": check_in_count,
+        "check_out_count": check_out_count,
+        "break_in_count": break_in_count,
+        "break_out_count": break_out_count,
+    }
+
+
 def _apply_late_and_early(db: Session, rec: AttendanceRecord) -> None:
     config = get_company_config(db)
     grace_min = config.grace_time_minutes if config else 15

@@ -31,6 +31,7 @@ from app.services.attendance_event_service import (
     get_events_for_day,
     recalculate_attendance_summary,
     calculate_intervals_from_events,
+    count_attendance_events,
     format_duration,
 )
 
@@ -237,6 +238,11 @@ def get_attendance_details(
     db.refresh(rec)
     events = get_events_for_day(db, employee_id, event_date)
 
+    # Break counts exclude the first check-in and the final check-out. The final
+    # check-out exists only when the daily summary derived a sign_out_time (i.e.
+    # the employee is not still working), so reuse that as the boundary flag.
+    counts = count_attendance_events(events, has_final_checkout=rec.sign_out_time is not None)
+
     return AttendanceDetailsResponse(
         employee_id=employee_id,
         employee_name=employee.full_name,
@@ -249,6 +255,10 @@ def get_attendance_details(
         status=rec.status,
         is_late=rec.is_late,
         is_early_exit=rec.is_early_exit,
+        check_in_count=counts["check_in_count"],
+        check_out_count=counts["check_out_count"],
+        break_in_count=counts["break_in_count"],
+        break_out_count=counts["break_out_count"],
     )
 
 

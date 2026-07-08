@@ -24,6 +24,43 @@ interface ApprovalRow {
   requester_is_hr: boolean;
   rejection_reason?: string | null;
   response_comment?: string | null;
+  // Paid-Leave split preview (Paid Leave requests only).
+  pl_earned?: number | null;
+  pl_used?: number | null;
+  pl_remaining?: number | null;
+  pl_requested?: number | null;
+  pl_paid?: number | null;
+  pl_unpaid?: number | null;
+}
+
+// Paid-Leave breakdown card shown while approving (Earned / Used / Remaining /
+// Requested / Paid / Unpaid). Returns null for non-PL rows.
+function PaidLeaveBreakdown({ r }: { r: ApprovalRow }) {
+  if (r.pl_paid == null && r.pl_unpaid == null) return null;
+  const fmt = (v: number | null | undefined) => (v == null ? "-" : String(Number(v)));
+  const tiles: Array<[string, string, string?]> = [
+    ["Earned Till Date", fmt(r.pl_earned)],
+    ["Already Used", fmt(r.pl_used)],
+    ["Remaining", fmt(r.pl_remaining)],
+    ["Requested", fmt(r.pl_requested)],
+    ["Paid Leave", fmt(r.pl_paid), "#22c55e"],
+    ["Unpaid (LWP)", fmt(r.pl_unpaid), "#ef4444"],
+  ];
+  return (
+    <div style={{ marginBottom: "1rem" }}>
+      <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6, marginBottom: 6 }}>
+        Paid Leave calculation
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem" }}>
+        {tiles.map(([label, value, color]) => (
+          <div key={label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.4rem 0.55rem" }}>
+            <div style={{ fontSize: "0.6rem", opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.03em" }}>{label}</div>
+            <div style={{ fontSize: "1rem", fontWeight: 800, marginTop: 1, color: color || "#fff" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // Premium SVG Icons for Actions
@@ -350,6 +387,11 @@ export default function LeaveApprovals() {
         <div className="modal-backdrop">
           <div className="modal" style={{ maxWidth: 520 }}>
             <h3 style={{ marginTop: 0, marginBottom: '0.75rem' }}>{decision.approved ? "Approve leave" : "Reject leave"}</h3>
+            {(() => {
+              const decisionRow = rows.find((r) => r.id === decision.id);
+              // Show the paid/unpaid split only when approving a Paid Leave request.
+              return decision.approved && decisionRow ? <PaidLeaveBreakdown r={decisionRow} /> : null;
+            })()}
             <p className="text-muted" style={{ marginTop: 0 }}>
               Enter a professional message. This will be shown to the employee in “My Leave” as the response.
             </p>
@@ -438,6 +480,7 @@ export default function LeaveApprovals() {
                   {viewDetail.reason || "No reason provided."}
                 </div>
               </div>
+              <PaidLeaveBreakdown r={viewDetail} />
               {viewDetail.status !== "PENDING" && (
                 <div>
                   <label className="text-muted" style={{ fontSize: '0.8rem', display: 'block', marginBottom: '2px' }}>Response/Comment</label>

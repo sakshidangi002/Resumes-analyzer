@@ -68,6 +68,11 @@ export default function Leave() {
   const [showBalanceDialog, setShowBalanceDialog] = useState(false);
   const [loadWarn, setLoadWarn] = useState("");
   const [viewDetail, setViewDetail] = useState<any | null>(null);
+  // Monthly-earned Paid Leave summary for the signed-in user (as of today).
+  const [plSummary, setPlSummary] = useState<{
+    annual_days: number; earned: number; used_paid: number;
+    remaining: number; unpaid_used: number; balance: number;
+  } | null>(null);
 
   const fyLabel = (fy: { name?: string | null; start_date: string; end_date: string } | null) => {
     if (!fy) return "";
@@ -181,6 +186,24 @@ export default function Leave() {
       .then((r) => setAllocations(r.data ?? []))
       .catch(() => setAllocations([]));
   }, [selectedFyId, isAdminOrHr, user?.employee_id]);
+
+  // Paid-Leave summary (earned/used/remaining/unpaid). Refetches when the set of
+  // requests changes, so it reflects a just-applied or newly-decided leave.
+  useEffect(() => {
+    api.paidLeaveSummary()
+      .then((r) => {
+        // Guard against the SPA HTML fallback (e.g. before the backend has the
+        // endpoint): only accept a real JSON object with a numeric annual_days,
+        // so the card never renders NaN.
+        const d = r.data;
+        if (d && typeof d === "object" && !Number.isNaN(Number(d.annual_days))) {
+          setPlSummary(d);
+        } else {
+          setPlSummary(null);
+        }
+      })
+      .catch(() => setPlSummary(null));
+  }, [requests.length]);
 
   const handleApply = (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,6 +338,32 @@ export default function Leave() {
               <p style={{ margin: 0, color: "rgba(255, 255, 255, 0.92)", fontWeight: 800 }}>{loadWarn}</p>
             </div>
           )}
+          {plSummary && (() => {
+            const tiles: Array<[string, number, string?]> = [
+              ["Annual Paid Leave", plSummary.annual_days],
+              ["Earned Till Date", plSummary.earned, "#60a5fa"],
+              ["Paid Leave Used", plSummary.used_paid],
+              ["Paid Leave Remaining", plSummary.remaining, "#22c55e"],
+              ["Unpaid Leave Used", plSummary.unpaid_used, "#ef4444"],
+              ["Current Leave Balance", plSummary.balance, "#22c55e"],
+            ];
+            return (
+              <div className="card">
+                <h3 style={{ margin: "0 0 1rem 0" }}>
+                  Paid Leave summary{" "}
+                  <span style={{ fontSize: "0.75rem", fontWeight: 400, opacity: 0.6 }}>· earned 1/month, up to today</span>
+                </h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
+                  {tiles.map(([label, value, color]) => (
+                    <div key={label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "0.7rem 0.85rem" }}>
+                      <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6 }}>{label}</div>
+                      <div style={{ fontSize: "1.4rem", fontWeight: 800, marginTop: 3, color: color || "#fff" }}>{Number(value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
               <h3 style={{ margin: 0 }}>Leave balance</h3>

@@ -109,6 +109,12 @@ class AttendanceDetailsResponse(BaseModel):
     status: str
     is_late: bool
     is_early_exit: bool
+    # Event counts for the day. Break counts exclude the first check-in and the
+    # final check-out (see attendance_event_service.count_attendance_events).
+    check_in_count: int = 0
+    check_out_count: int = 0
+    break_in_count: int = 0
+    break_out_count: int = 0
 
 
 class DailyAttendanceReportRow(BaseModel):

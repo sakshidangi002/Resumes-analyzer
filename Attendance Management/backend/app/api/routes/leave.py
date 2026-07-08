@@ -11,6 +11,7 @@ from app.schemas.leave import (
     LeaveRequestCreate,
     LeaveRequestResponse,
     LeaveApprovalRow,
+    PaidLeaveSummaryResponse,
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.leave_service import (
@@ -21,6 +22,8 @@ from app.services.leave_service import (
     approve_leave_request,
     ensure_default_allocations_for_employee,
     count_hr_direct_paid_leave_days,
+    compute_paid_leave_split,
+    paid_leave_summary,
     _count_leave_days,
 )
 from app.services.notification_service import notify_user_for_employee, notify_users_with_roles
@@ -545,12 +548,38 @@ def list_leave_approvals(
         q = q.filter(LeaveRequest.status == status)
     rows = q.order_by(LeaveRequest.applied_at.desc()).all()
 
+    fy = get_current_financial_year(db)
     result: list[LeaveApprovalRow] = []
     for req, emp, lt, is_hr_val in rows:
         if is_hr and not is_admin:
             # HR should not approve HR leave; HR approvals are for employees only
             if is_hr_val:
                 continue
+
+        # Paid-Leave split preview so HR sees Earned / Used / Remaining / Paid /
+        # Unpaid before approving. Only meaningful for a still-PENDING full-day
+        # PL request; for an already-decided one we surface what was stored.
+        pl_fields: dict = {}
+        if lt.code == "PL" and fy:
+            if req.status == "PENDING" and not req.is_half_day:
+                split = compute_paid_leave_split(db, req, fy)
+                pl_fields = {
+                    "pl_earned": split["earned"],
+                    "pl_used": split["used"],
+                    "pl_remaining": split["remaining"],
+                    "pl_requested": split["requested"],
+                    "pl_paid": split["paid"],
+                    "pl_unpaid": split["unpaid"],
+                }
+            else:
+                pl_fields = {
+                    "pl_requested": _count_leave_days(
+                        req.start_date, req.end_date, bool(req.is_half_day)
+                    ),
+                    "pl_paid": req.paid_days,
+                    "pl_unpaid": req.unpaid_days,
+                }
+
         result.append(
             LeaveApprovalRow(
                 id=req.id,
@@ -568,6 +597,7 @@ def list_leave_approvals(
                 requester_is_hr=is_hr_val,
                 rejection_reason=req.rejection_reason,
                 response_comment=req.response_comment,
+                **pl_fields,
             )
         )
     return result
@@ -659,7 +689,14 @@ def delete_leave_request(
             days = Decimal("1")
         else:
             days = _count_leave_days(req.start_date, req.end_date, bool(req.is_half_day))
-            
+
+        # Only the PAID portion was added to used_days at approval, so only revert
+        # that. Legacy rows approved before the paid/unpaid split (both 0) fall
+        # back to the full day count to preserve the old revert behaviour.
+        paid_part = Decimal(str(req.paid_days or 0))
+        unpaid_part = Decimal(str(req.unpaid_days or 0))
+        revert_days = paid_part if (paid_part or unpaid_part) else days
+
         fy = get_current_financial_year(db)
         if fy:
             alloc = db.query(LeaveAllocation).filter(
@@ -668,7 +705,7 @@ def delete_leave_request(
                 LeaveAllocation.leave_type_id == req.leave_type_id,
             ).first()
             if alloc and not (lt and lt.code == "SL"):
-                alloc.used_days = max(Decimal("0"), alloc.used_days - days)
+                alloc.used_days = max(Decimal("0"), alloc.used_days - revert_days)
                 
         # 2. Revert Attendance
         d = req.start_date
@@ -716,3 +753,41 @@ def leave_balance(
         raise HTTPException(status_code=403, detail="Access denied")
     bal = get_leave_balance(db, eid, leave_type_id, fy.id)
     return {"balance_days": float(bal), "financial_year_id": fy.id}
+
+
+@router.get("/paid-leave-summary", response_model=PaidLeaveSummaryResponse)
+def paid_leave_summary_endpoint(
+    employee_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
+):
+    """Monthly-earned Paid-Leave figures for the 'My Leave' page (as of today).
+
+    Employees may only view their own; Admin/HR may pass any employee_id.
+    """
+    _ensure_user_employee_link(db, current_user)
+    fy = get_current_financial_year(db)
+    if not fy:
+        raise HTTPException(status_code=400, detail="No financial year configured")
+
+    role_names = [r.name for r in current_user.roles]
+    is_admin_or_hr = "Admin" in role_names or "HR" in role_names
+    eid = employee_id if (employee_id and is_admin_or_hr) else current_user.employee_id
+    if not eid:
+        raise HTTPException(status_code=400, detail="Employee required")
+    if not is_admin_or_hr and eid != current_user.employee_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Make sure the PL allocation exists so 'annual' reflects the real entitlement.
+    ensure_default_allocations_for_employee(db, eid, fy.id)
+    s = paid_leave_summary(db, eid, fy)
+    return PaidLeaveSummaryResponse(
+        employee_id=eid,
+        financial_year_id=fy.id,
+        annual_days=s["annual_days"],
+        earned=s["earned"],
+        used_paid=s["used_paid"],
+        remaining=s["remaining"],
+        unpaid_used=s["unpaid_used"],
+        balance=s["balance"],
+    )

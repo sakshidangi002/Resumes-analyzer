@@ -251,6 +251,147 @@ def _count_leave_days(start: date, end: date, is_half_day: bool) -> Decimal:
     return Decimal(delta)
 
 
+# ---------------------------------------------------------------------------
+# Monthly-earned Paid Leave (12/year, accrued 1 per month, no future months)
+# ---------------------------------------------------------------------------
+def _pl_leave_type(db: Session) -> LeaveType | None:
+    return db.query(LeaveType).filter(LeaveType.code == "PL").first()
+
+
+def earned_paid_leave_as_of(
+    db: Session,
+    employee_id: int,
+    fy: FinancialYear,
+    as_of: date,
+    annual_days: Decimal | None = None,
+) -> Decimal:
+    """Paid leave EARNED from the start of the leave year up to ``as_of``.
+
+    Policy: 1 paid leave earned per month, accruing from the later of the
+    financial-year start and the employee's joining month. Only the current and
+    all PREVIOUS months (relative to ``as_of``) count — future months are never
+    included. Capped at the annual entitlement (default 12).
+
+    Example: FY starts April, ``as_of`` in July -> Apr,May,Jun,Jul = 4 earned.
+    """
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    start = fy.start_date
+    if emp and emp.date_of_joining and emp.date_of_joining > start:
+        start = emp.date_of_joining
+    # Clamp the cutoff inside the FY so a leave dated before/after the year can
+    # never over- or under-count the accrual.
+    cutoff = min(max(as_of, fy.start_date), fy.end_date)
+    if cutoff < start:
+        return Decimal("0")
+    months = (cutoff.year - start.year) * 12 + (cutoff.month - start.month) + 1
+    if annual_days is None:
+        annual_days = Decimal("12")
+    earned = Decimal(max(0, months))
+    return min(earned, annual_days)
+
+
+def paid_leave_summary(
+    db: Session,
+    employee_id: int,
+    fy: FinancialYear,
+    as_of: date | None = None,
+    exclude_request_id: int | None = None,
+) -> dict:
+    """Monthly-earned Paid-Leave figures for one employee in one financial year.
+
+    Returns: annual_days, earned, used_paid, remaining, unpaid_used, balance.
+      * earned      – accrued up to ``as_of`` (default today), future excluded.
+      * used_paid   – PAID portion of approved PL (allocation.used_days, which
+                      now tracks only paid days) + HR-marked PAID_LEAVE days.
+      * remaining   – max(0, earned - used_paid).
+      * unpaid_used – Unpaid/LWP portion split off approved PL + approved
+                      fully-unpaid (UL) leave, within the FY.
+    """
+    as_of = as_of or date.today()
+    pl = _pl_leave_type(db)
+    zero = {
+        "annual_days": Decimal("0"), "earned": Decimal("0"), "used_paid": Decimal("0"),
+        "remaining": Decimal("0"), "unpaid_used": Decimal("0"), "balance": Decimal("0"),
+    }
+    if not pl:
+        return zero
+
+    alloc = db.query(LeaveAllocation).filter(
+        LeaveAllocation.employee_id == employee_id,
+        LeaveAllocation.financial_year_id == fy.id,
+        LeaveAllocation.leave_type_id == pl.id,
+    ).first()
+    annual = alloc.allocated_days if alloc else Decimal("12")
+    earned = earned_paid_leave_as_of(db, employee_id, fy, as_of, annual)
+    hr_direct = count_hr_direct_paid_leave_days(
+        db, employee_id, fy.start_date, fy.end_date, pl.id
+    )
+    used_paid = (alloc.used_days if alloc else Decimal("0")) + hr_direct
+
+    # Unpaid (LWP) days recorded this FY: the unpaid split of approved PL requests
+    # plus any approved fully-unpaid leave. Optionally exclude one request (the
+    # one currently being approved, so its own figures aren't double counted).
+    unpaid_used = Decimal("0")
+    approved = (
+        db.query(LeaveRequest, LeaveType)
+        .join(LeaveType, LeaveType.id == LeaveRequest.leave_type_id)
+        .filter(
+            LeaveRequest.employee_id == employee_id,
+            LeaveRequest.status == "APPROVED",
+            LeaveRequest.start_date <= fy.end_date,
+            LeaveRequest.end_date >= fy.start_date,
+        )
+        .all()
+    )
+    for req, lt in approved:
+        if exclude_request_id is not None and req.id == exclude_request_id:
+            continue
+        if lt.code == "PL":
+            unpaid_used += Decimal(str(req.unpaid_days or 0))
+        elif not lt.is_paid:
+            unpaid_used += _count_leave_days(
+                req.start_date, req.end_date, bool(req.is_half_day)
+            )
+
+    remaining = earned - used_paid
+    if remaining < 0:
+        remaining = Decimal("0")
+    return {
+        "annual_days": annual,
+        "earned": earned,
+        "used_paid": used_paid,
+        "remaining": remaining,
+        "unpaid_used": unpaid_used,
+        "balance": remaining,
+    }
+
+
+def compute_paid_leave_split(db: Session, req: LeaveRequest, fy: FinancialYear) -> dict:
+    """Split a Paid-Leave request into paid vs unpaid (LWP) days.
+
+    Uses the balance EARNED as of the leave START date, and excludes this
+    request from the "already used" figure. Returns earned, used, remaining,
+    requested, paid, unpaid.
+    """
+    summary = paid_leave_summary(
+        db, req.employee_id, fy, as_of=req.start_date, exclude_request_id=req.id
+    )
+    requested = _count_leave_days(req.start_date, req.end_date, bool(req.is_half_day))
+    remaining = summary["remaining"]
+    paid = min(requested, remaining)
+    if paid < 0:
+        paid = Decimal("0")
+    unpaid = requested - paid
+    return {
+        "earned": summary["earned"],
+        "used": summary["used_paid"],
+        "remaining": remaining,
+        "requested": requested,
+        "paid": paid,
+        "unpaid": unpaid,
+    }
+
+
 def approve_leave_request(
     db: Session,
     request_id: int,
@@ -275,19 +416,44 @@ def approve_leave_request(
         else:
             days = _count_leave_days(req.start_date, req.end_date, req.is_half_day)
         fy = get_current_financial_year(db)
+
+        # ── Monthly-earned Paid-Leave split ─────────────────────────────────
+        # For a FULL-DAY Paid Leave request, only the balance EARNED so far
+        # (accrued 1/month up to the leave start date) is paid; the excess
+        # becomes unpaid Loss-Of-Pay. Half-day PL and other leave types keep
+        # their own paid/unpaid nature (no change in behaviour).
+        is_full_day_pl = bool(lt and lt.code == "PL" and not req.is_half_day)
+        if is_full_day_pl and fy:
+            split = compute_paid_leave_split(db, req, fy)
+            paid_days = split["paid"]
+            unpaid_days = split["unpaid"]
+        elif lt and not lt.is_paid:
+            paid_days = Decimal("0")
+            unpaid_days = days
+        else:
+            paid_days = days
+            unpaid_days = Decimal("0")
+        req.paid_days = paid_days
+        req.unpaid_days = unpaid_days
+
         if fy:
             alloc = db.query(LeaveAllocation).filter(
                 LeaveAllocation.employee_id == req.employee_id,
                 LeaveAllocation.financial_year_id == fy.id,
                 LeaveAllocation.leave_type_id == req.leave_type_id,
             ).first()
-            # For monthly Short Leave we don't accumulate used_days in allocation; it's computed per-month.
+            # Only the PAID portion consumes the yearly allocation. Short Leave is
+            # monthly (computed per-month) and never accumulates in used_days.
             if alloc and not (lt and lt.code == "SL"):
-                alloc.used_days = alloc.used_days + days
-        
-        # Update Attendance Records for the leave period
+                alloc.used_days = alloc.used_days + paid_days
+
+        # Update Attendance Records for the leave period. The PAID portion is
+        # marked PAID_LEAVE and the unpaid (LWP) portion ON_LEAVE, earliest
+        # working days first — so payroll deducts only the unpaid days, and only
+        # in the month they fall in.
         from app.services.attendance_service import get_or_create_attendance
         from datetime import timedelta
+        paid_assigned = Decimal("0")
         d = req.start_date
         while d <= req.end_date:
             rec = get_or_create_attendance(db, req.employee_id, d)
@@ -298,7 +464,11 @@ def approve_leave_request(
                 elif req.is_half_day:
                     rec.status = "HALF_DAY"
                 elif lt and lt.code == "PL":
-                    rec.status = "PAID_LEAVE"
+                    if paid_assigned < paid_days:
+                        rec.status = "PAID_LEAVE"
+                        paid_assigned += Decimal("1")
+                    else:
+                        rec.status = "ON_LEAVE"  # unpaid LWP portion
                 else:
                     rec.status = "ON_LEAVE"
             d = d + timedelta(days=1)

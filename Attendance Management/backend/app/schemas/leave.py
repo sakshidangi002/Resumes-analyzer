@@ -53,8 +53,23 @@ class LeaveRequestResponse(BaseModel):
     rejection_reason: Optional[str] = None
     response_comment: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Paid vs Unpaid (LWP) split decided at approval (Paid Leave policy).
+    paid_days: Optional[Decimal] = None
+    unpaid_days: Optional[Decimal] = None
     class Config:
         from_attributes = True
+
+
+class PaidLeaveSummaryResponse(BaseModel):
+    """Monthly-earned Paid-Leave figures for the 'My Leave' page."""
+    employee_id: int
+    financial_year_id: int
+    annual_days: Decimal      # Annual Paid Leave (entitlement, e.g. 12)
+    earned: Decimal           # Earned Till Date (accrued, future excluded)
+    used_paid: Decimal        # Paid Leave Used
+    remaining: Decimal        # Paid Leave Remaining
+    unpaid_used: Decimal      # Unpaid Leave Used (LWP)
+    balance: Decimal          # Current Leave Balance (= remaining paid)
 
 
 class LeaveApprovalRow(BaseModel):
@@ -73,4 +88,12 @@ class LeaveApprovalRow(BaseModel):
     requester_is_hr: bool = False
     rejection_reason: Optional[str] = None
     response_comment: Optional[str] = None
+    # Paid-Leave split preview (populated for Paid Leave requests only), shown to
+    # HR while approving. None for non-PL leave types.
+    pl_earned: Optional[Decimal] = None
+    pl_used: Optional[Decimal] = None
+    pl_remaining: Optional[Decimal] = None
+    pl_requested: Optional[Decimal] = None
+    pl_paid: Optional[Decimal] = None
+    pl_unpaid: Optional[Decimal] = None
 

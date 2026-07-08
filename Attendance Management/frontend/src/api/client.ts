@@ -188,6 +188,8 @@ export const leave = {
     api.patch("/leave/requests/" + id, null, { params: { approved, comment } }),
   balance: (leave_type_id: number, employee_id?: number) =>
     api.get("/leave/balance", { params: { leave_type_id, employee_id } }),
+  paidLeaveSummary: (employee_id?: number) =>
+    api.get("/leave/paid-leave-summary", { params: { employee_id } }),
   deleteRequest: (id: number) => api.delete("/leave/requests/" + id),
 };
 

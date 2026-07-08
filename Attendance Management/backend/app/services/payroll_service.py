@@ -134,19 +134,40 @@ def run_payroll_for_period(
             )
             .all()
         )
+        # Per-day attendance status for THIS month only. A Paid-Leave request may
+        # have had some days split off as unpaid (LWP) by the monthly-earned
+        # policy — those days are marked ON_LEAVE at approval and must still be
+        # deducted. Scoping this query to [start, end] guarantees a future
+        # month's leave never affects the current month's salary.
+        _status_by_date = {
+            r.date: r.status
+            for r in db.query(AttendanceRecord).filter(
+                AttendanceRecord.employee_id == emp.id,
+                AttendanceRecord.date >= start,
+                AttendanceRecord.date <= end,
+            ).all()
+        }
         for req, lt in all_leave_reqs:
-            print(f"DEBUG: Emp {emp.id} Leave {req.start_date} to {req.end_date}, Type: {lt.name} (is_paid={lt.is_paid})")
             d = max(req.start_date, start)
             last = min(req.end_date, end)
             while d <= last:
                 leave_is_approved_by_date[d] = True
                 if not lt.is_paid:
                     frac = Decimal("0.5") if (req.is_half_day and req.start_date == req.end_date) else Decimal("1")
-                    leave_unpaid_fraction_by_date[d] = max(leave_unpaid_fraction_by_date.get(d, Decimal("0")), frac)
                 else:
-                    # Explicitly mark as 0 if paid, to avoid defaulting to 1 on ABSENT
-                    if d not in leave_unpaid_fraction_by_date:
-                        leave_unpaid_fraction_by_date[d] = Decimal("0")
+                    # Paid leave type: the day is paid UNLESS the paid/unpaid split
+                    # marked it ON_LEAVE (unpaid LWP) — then deduct it. HALF_DAY
+                    # stays a half deduction; everything else is fully paid.
+                    st = _status_by_date.get(d)
+                    if st == "ON_LEAVE":
+                        frac = Decimal("1")
+                    elif st == "HALF_DAY":
+                        frac = Decimal("0.5")
+                    else:
+                        frac = Decimal("0")
+                leave_unpaid_fraction_by_date[d] = max(
+                    leave_unpaid_fraction_by_date.get(d, Decimal("0")), frac
+                )
                 d = d + timedelta(days=1)
 
         # Count total weekly offs and holidays in the month (always payable)

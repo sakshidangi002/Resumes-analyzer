@@ -37,6 +37,36 @@ interface AttendanceDetails {
   status: string;
   is_late: boolean;
   is_early_exit: boolean;
+  check_in_count?: number;
+  check_out_count?: number;
+  break_in_count?: number;
+  break_out_count?: number;
+}
+
+// Event types that mean "started working" (arrival / back from break) vs
+// "stopped working" (leaving / going on break). The DB stores either the plain
+// IN/OUT (manual) or the CHECK_IN/BREAK_IN/BREAK_OUT variants (camera flow).
+const IN_LIKE = ["IN", "CHECK_IN", "BREAK_IN"];
+const OUT_LIKE = ["OUT", "CHECK_OUT", "BREAK_OUT"];
+
+// Label each event by its POSITION in the day, matching the summary counts:
+// the earliest work-start is the "Check-In", the final work-end (only when the
+// day is closed) is the "Check-Out"; everything between is a Break In/Out.
+// `events` arrive sorted ascending from the backend.
+function makeEventLabeler(events: AttendanceEventRow[], hasFinalCheckout: boolean) {
+  const ins = events.filter((e) => IN_LIKE.includes(e.event_type));
+  const outs = events.filter((e) => OUT_LIKE.includes(e.event_type));
+  const firstInId = ins.length ? ins[0].id : null;
+  const finalOutId = hasFinalCheckout && outs.length ? outs[outs.length - 1].id : null;
+  return (e: AttendanceEventRow): { label: string; kind: "in" | "out" | "other" } => {
+    if (IN_LIKE.includes(e.event_type)) {
+      return { label: e.id === firstInId ? "Check-In" : "Break In", kind: "in" };
+    }
+    if (OUT_LIKE.includes(e.event_type)) {
+      return { label: e.id === finalOutId ? "Check-Out" : "Break Out", kind: "out" };
+    }
+    return { label: e.event_type, kind: "other" };
+  };
 }
 
 interface EmployeeInfo {
@@ -113,6 +143,9 @@ export default function Attendance() {
   const [dialogYear, setDialogYear] = useState(now.getFullYear());
   const [dialogRecords, setDialogRecords] = useState<AttendanceRow[]>([]);
   const [dialogLoading, setDialogLoading] = useState(false);
+  // Employee self-service: the signed-in user's own day summary + timeline.
+  const [myDetails, setMyDetails] = useState<AttendanceDetails | null>(null);
+  const [myDetailsLoading, setMyDetailsLoading] = useState(false);
 
   const formatCompactDuration = (hours: number | null | undefined) => {
     if (hours == null) return "-";
@@ -225,6 +258,20 @@ export default function Attendance() {
       .finally(() => setDetailsLoading(false));
   }, [detailsEmployee, selectedDate]);
 
+  // Employee self-service view: load the signed-in user's OWN day summary +
+  // timeline for the selected date (own record only; backend enforces this).
+  useEffect(() => {
+    if (isHrOrAdmin || !user?.employee_id) {
+      setMyDetails(null);
+      return;
+    }
+    setMyDetailsLoading(true);
+    api.details(user.employee_id, selectedDate)
+      .then((res) => setMyDetails(res.data))
+      .catch(() => setMyDetails(null))
+      .finally(() => setMyDetailsLoading(false));
+  }, [isHrOrAdmin, user?.employee_id, selectedDate]);
+
   const openEdit = (employee_id: number, date: string, dialogOverride?: boolean) => {
     let rec = records.find((r) => r.employee_id === employee_id && r.date === date);
     if (dialogOverride) {
@@ -309,13 +356,108 @@ export default function Attendance() {
     if (d.getFullYear() !== year) setYear(d.getFullYear());
   };
 
+  // Shared renderer: day summary card + labeled event timeline. Used by BOTH the
+  // HR "Attendance Details" modal and the employee "My Attendance" view, so the
+  // two stay identical. Events are labeled by position (Check-In / Break Out /
+  // Break In / Check-Out), consistent with the backend break counts.
+  const renderDaySummary = (d: AttendanceDetails | null, loading: boolean) => {
+    if (loading) return <SectionLoader size="sm" />;
+    const labelFor = makeEventLabeler(d?.events || [], !!d?.sign_out_time);
+    const metric = (label: string, value: React.ReactNode, color?: string) => (
+      <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", padding: "0.55rem 0.7rem" }}>
+        <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6 }}>{label}</div>
+        <div style={{ fontSize: "1.05rem", fontWeight: 800, marginTop: 2, color: color || "#fff" }}>{value}</div>
+      </div>
+    );
+    return (
+      <>
+        {/* Summary card */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.6rem", marginBottom: "1.1rem" }}>
+          {metric("First Check-In", formatTime12h(d?.sign_in_time), "#22c55e")}
+          {metric("Last Check-Out", formatTime12h(d?.sign_out_time), "#f59e0b")}
+          {metric("Working Hours", formatCompactDuration(d?.total_work_hours))}
+          {metric("Break Time", formatCompactDuration(d?.total_break_hours))}
+          {metric("Break Outs", d?.break_out_count ?? 0)}
+          {metric("Break Ins", d?.break_in_count ?? 0)}
+        </div>
+
+        {/* Detailed timeline */}
+        <div style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6, margin: "0 0 0.4rem 2px" }}>Timeline</div>
+        <div style={{
+          background: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          borderRadius: "10px",
+          padding: "0.4rem 1rem",
+          maxHeight: "240px",
+          overflowY: "auto",
+        }}>
+          {(d?.events?.length || 0) === 0 ? (
+            <div style={{ opacity: 0.65, textAlign: "center", padding: "0.6rem 0" }}>No attendance events recorded for this date.</div>
+          ) : (
+            d?.events.map((evt) => {
+              const { label, kind } = labelFor(evt);
+              const color = kind === "in" ? "#22c55e" : kind === "out" ? "#f59e0b" : "#94a3b8";
+              return (
+                <div key={evt.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.4rem 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatEventTime12h(evt.event_time)}</span>
+                  <span style={{ fontWeight: 700, color }}>{label}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div style={{ marginTop: "0.9rem", fontSize: "0.85rem" }}>
+          Status: <strong>{formatStatusLabel(d?.status || "ABSENT", d?.total_work_hours)}</strong>
+        </div>
+      </>
+    );
+  };
+
   if (!isHrOrAdmin) {
+    const empDateObj = new Date(selectedDate);
+    const empDateLabel = empDateObj.toLocaleString("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric" });
+    const navBtn: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "0.85rem", height: "42px", padding: "0 1rem", color: "#fff", cursor: "pointer" };
     return (
       <>
         <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h1 className="page-title">My Attendance</h1>
           <GlobalHeaderControls />
         </div>
+
+        {/* Daily summary + timeline for the selected date */}
+        <div className="card" style={{ padding: "1.5rem", marginBottom: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.25rem", flexWrap: "wrap", gap: "1rem" }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>Daily Summary</h3>
+              <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>{empDateLabel}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: "0.6rem", flexWrap: "wrap" }}>
+              <input
+                type="date"
+                value={selectedDate}
+                min="2026-01-01"
+                max={todayIso}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="date-input-white"
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "8px", padding: "0 12px", color: "#fff", fontSize: "0.85rem", width: "150px", height: "42px" }}
+              />
+              <button type="button" onClick={() => changeDay(-1)} style={navBtn} title="Previous Day">Prev</button>
+              <button type="button" onClick={() => setSelectedDate(todayIso)} style={navBtn} title="Today">Today</button>
+              <button
+                type="button"
+                onClick={() => changeDay(1)}
+                disabled={selectedDate >= todayIso}
+                style={{ ...navBtn, opacity: selectedDate >= todayIso ? 0.3 : 1, cursor: selectedDate >= todayIso ? "not-allowed" : "pointer" }}
+                title="Next Day"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          {renderDaySummary(myDetails, myDetailsLoading)}
+        </div>
+
         <div className="card">
           <MonthlyAttendanceGrid month={month} year={year} setMonth={setMonth} setYear={setYear} records={records} loading={loading} />
         </div>
@@ -690,46 +832,7 @@ export default function Attendance() {
                 Employee: <strong>{detailsEmployee.first_name} {detailsEmployee.last_name}</strong>
                 <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "4px" }}>{dayLabelFull}</div>
               </div>
-              {detailsLoading ? (
-                <SectionLoader size="sm" />
-              ) : (
-                <>
-                  <div style={{
-                    background: "rgba(255,255,255,0.04)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: "10px",
-                    padding: "1rem",
-                    marginBottom: "1rem",
-                    maxHeight: "240px",
-                    overflowY: "auto",
-                  }}>
-                    {(detailsData?.events?.length || 0) === 0 ? (
-                      <div style={{ opacity: 0.65, textAlign: "center" }}>No attendance events recorded for this date.</div>
-                    ) : (
-                      detailsData?.events.map((evt) => (
-                        <div key={evt.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                          <span>{formatEventTime12h(evt.event_time)}</span>
-                          <span style={{
-                            fontWeight: 700,
-                            color: evt.event_type === "IN" ? "#22c55e" : "#f59e0b",
-                          }}>
-                            {evt.event_type}
-                          </span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", fontSize: "0.9rem" }}>
-                    <div>First Check-In: <strong>{formatTime12h(detailsData?.sign_in_time)}</strong></div>
-                    <div>Last Check-Out: <strong>{formatTime12h(detailsData?.sign_out_time)}</strong></div>
-                    <div>Total Working Hours: <strong>{formatCompactDuration(detailsData?.total_work_hours)}</strong></div>
-                    <div>Total Break Time: <strong>{formatCompactDuration(detailsData?.total_break_hours)}</strong></div>
-                    <div style={{ gridColumn: "1 / -1" }}>
-                      Status: <strong>{formatStatusLabel(detailsData?.status || "ABSENT", detailsData?.total_work_hours)}</strong>
-                    </div>
-                  </div>
-                </>
-              )}
+              {renderDaySummary(detailsData, detailsLoading)}
               <div className="modal-actions" style={{ marginTop: "1.25rem", justifyContent: "flex-end" }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setDetailsEmployee(null)}>Close</button>
               </div>

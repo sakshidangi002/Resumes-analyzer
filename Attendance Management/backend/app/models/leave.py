@@ -50,6 +50,12 @@ class LeaveRequest(Base):
     is_half_day = Column(Boolean, default=False)
     reason = Column(String(500), nullable=True)
     status = Column(String(20), default="PENDING")  # PENDING, APPROVED, REJECTED, CANCELLED
+    # Paid vs Unpaid (LWP) split, decided at APPROVAL time by the monthly-earned
+    # Paid-Leave policy (see leave_service.compute_paid_leave_split). For a Paid
+    # Leave request the earned-but-unused balance is paid; the excess becomes
+    # unpaid Loss-Of-Pay. Non-PL types just mirror their own paid/unpaid nature.
+    paid_days = Column(Numeric(5, 2), default=0)
+    unpaid_days = Column(Numeric(5, 2), default=0)
     applied_at = Column(DateTime, default=get_ist_now)
     manager_approver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     hr_approver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
