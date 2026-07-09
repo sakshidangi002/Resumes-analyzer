@@ -565,8 +565,50 @@ async def lifespan(app: FastAPI):
         loop = asyncio.get_event_loop()
         loop.run_in_executor(executor, _preload_extract)
 
+    # 6. Optional: auto-poll a mailbox for resume emails (EMAIL_IMPORT_AUTOSTART=1).
+    #    Runs the same importer as the manual "Sync Email" button, on an interval.
+    email_scheduler = None
+    if os.getenv("EMAIL_IMPORT_AUTOSTART", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+
+            try:
+                from .email_resume_pipeline import import_resumes_from_email, make_shim_request
+            except ImportError:  # pragma: no cover
+                from email_resume_pipeline import import_resumes_from_email, make_shim_request  # type: ignore
+
+            poll_minutes = float(os.getenv("EMAIL_IMPORT_POLL_MINUTES", "10") or "10")
+
+            def _email_poll_tick():
+                # Runs in a scheduler thread: own DB session, a shim request
+                # (inline extraction), and never lets an error kill the job.
+                db = SessionLocal()
+                try:
+                    asyncio.run(import_resumes_from_email(
+                        request=make_shim_request(executor=None),
+                        db=db,
+                        upload_resume_callable=upload_resume,
+                    ))
+                except Exception:
+                    logger.exception("Email auto-poll tick failed")
+                finally:
+                    db.close()
+
+            email_scheduler = BackgroundScheduler(daemon=True)
+            email_scheduler.add_job(_email_poll_tick, "interval", minutes=poll_minutes,
+                                    id="email_resume_import", max_instances=1, coalesce=True)
+            email_scheduler.start()
+            logger.info("Email resume auto-import scheduler started (every %.1f min)", poll_minutes)
+        except Exception as exc:
+            logger.warning("Email auto-import scheduler not started: %s", exc)
+
     yield
 
+    if email_scheduler is not None:
+        try:
+            email_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
     executor.shutdown(wait=False)
 
 
@@ -820,17 +862,13 @@ def _resume_to_dict(r: ResumeDB) -> dict:
             for s in (_safe_get(r, "experience_tags") or "").split(",")
             if s.strip()
         ],
-        "key_skills": [
-            s.strip()
-            for s in (_safe_get(r, "key_skills") or "").split(",")
-            if s.strip()
-        ],
+        # key_skills / other_skills are stored as JSON arrays (like `skills`), so
+        # parse them the same way. Splitting on "," would shred a JSON string
+        # into fragments ('["Frontend"', '"Tailwind"') that then bypass the
+        # frontend's skill de-duplication and show up as duplicate chips.
+        "key_skills": _parse_text_list(_safe_get(r, "key_skills")),
         "primary_skills": primary_list,
-        "other_skills": [
-            s.strip()
-            for s in (_safe_get(r, "other_skills") or "").split(",")
-            if s.strip()
-        ],
+        "other_skills": _parse_text_list(_safe_get(r, "other_skills")),
         "current_salary": getattr(r, "current_salary", "") or "",
         "expected_salary": getattr(r, "expected_salary", "") or "",
         "notice_period": getattr(r, "notice_period", "") or "",
@@ -1567,6 +1605,28 @@ async def upload_resume(
 # ---------------------------------------------------------------------------
 # Skills-only extraction (no DB write)
 # ---------------------------------------------------------------------------
+
+@app.post("/email/sync", tags=["Email Import"])
+async def sync_email_resumes(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Manual "Sync Email" trigger for the intelligent resume importer.
+
+    Fetches new emails from the configured mailbox/label, validates attachments
+    by content (not subject/filename), and imports valid resumes through the
+    SAME upload pipeline as a manual upload (with built-in duplicate detection).
+    Returns a per-attachment decision summary (Imported / Duplicate / Needs
+    Review / Ignored).
+    """
+    try:
+        from .email_resume_pipeline import import_resumes_from_email
+    except ImportError:  # pragma: no cover
+        from email_resume_pipeline import import_resumes_from_email  # type: ignore
+    return await import_resumes_from_email(
+        request=request, db=db, upload_resume_callable=upload_resume,
+    )
+
 
 @app.post("/extract/skills", tags=["Resumes"])
 async def extract_skills_only(

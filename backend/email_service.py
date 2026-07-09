@@ -125,6 +125,19 @@ def _imap_ok(status: str) -> bool:
     return (status or "").upper() == "OK"
 
 
+def _quote_mailbox(name: str) -> str:
+    """Quote a mailbox/label name for IMAP SELECT.
+
+    imaplib does NOT quote mailbox names, so any name containing a space
+    (e.g. ``[Gmail]/All Mail``) must be wrapped in double quotes or the server
+    rejects the command. Names already quoted or without spaces pass through.
+    """
+    name = (name or "INBOX").strip()
+    if " " in name and not (name.startswith('"') and name.endswith('"')):
+        return '"%s"' % name
+    return name
+
+
 def _iter_attachments(msg: Message) -> Iterable[tuple[str, bytes, str]]:
     """
     Yield (filename, bytes, content_type) for attachments.
@@ -256,6 +269,203 @@ def extract_indeed_view_urls(msg: Message) -> list[str]:
     return out[:10]
 
 
+@dataclass(frozen=True)
+class EmailAttachment:
+    """A single decoded email attachment held in memory."""
+    filename: str
+    content_type: str
+    disposition: str  # "attachment" | "inline" | ""
+    size: int
+    content: bytes
+
+
+def _extract_body_text(msg: Message) -> str:
+    """Concatenated plain-text + html body of an email (best effort, for scoring only)."""
+    chunks: list[str] = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        ctype = (part.get_content_type() or "").lower().strip()
+        if ctype not in {"text/plain", "text/html"}:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            chunks.append(payload.decode(charset, errors="ignore"))
+        except Exception:
+            continue
+    return "\n".join(chunks)
+
+
+def _iter_all_attachments(msg: Message) -> Iterable[EmailAttachment]:
+    """Yield every real (named) attachment with metadata + bytes.
+
+    Unlike :func:`_iter_attachments`, this does NOT filter by type — the resume
+    import pipeline applies its own Layer-1 filtering so it can log a reason for
+    every skip. Inline parts are still yielded (with disposition='inline') so the
+    caller can decide; parts without a filename are ignored (body, not an attachment).
+    """
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        filename = _decode_mime_header(part.get_filename() or "")
+        if not filename:
+            continue
+        cd = (part.get_content_disposition() or "").lower().strip()
+        ctype = (part.get_content_type() or "").lower().strip()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        yield EmailAttachment(
+            filename=filename, content_type=ctype, disposition=cd,
+            size=len(payload), content=payload,
+        )
+
+
+def fetch_new_emails(
+    *,
+    cfg: ImapConfig,
+    already_processed: set[str] | None = None,
+    unread_only: bool = True,
+    max_to_process: int = 50,
+    mark_seen: bool = False,
+    subject_keywords: list[str] | None = None,
+    since_date: str | None = None,
+) -> dict:
+    """Read NEW emails from a configurable mailbox/label with their attachments.
+
+    Source-agnostic (Layer 0): whatever mailbox/folder/label is set in ``cfg``
+    (Gmail label, Outlook folder, dedicated careers@ inbox, generic IMAP) is
+    scanned. NO subject filtering is applied — resume detection is done by the
+    pipeline from attachment content, not metadata.
+
+    Idempotent: skips any UID already in ``already_processed``; the caller owns
+    the processed-UID store and records UIDs only after handling them.
+
+    Returns: {mailbox, emails: [{uid, message_id, subject, from, body_text,
+    attachments: [EmailAttachment]}], searched, fetched_uids}.
+    """
+    already_processed = already_processed or set()
+    emails: list[dict] = []
+    fetched_uids: list[str] = []
+    client: Optional[imaplib.IMAP4] = None
+    try:
+        client = _connect_imap(cfg)
+        status, _ = client.select(_quote_mailbox(cfg.mailbox), readonly=not mark_seen)
+        if not _imap_ok(status):
+            # Actionable error: list the mailboxes/labels that DO exist so the
+            # operator can fix IMAP_MAILBOX (or create the Gmail label first).
+            available: list[str] = []
+            try:
+                _typ, _data = client.list()
+                for raw in (_data or []):
+                    line = raw.decode(errors="ignore") if isinstance(raw, bytes) else str(raw)
+                    names = re.findall(r'"([^"]*)"', line)
+                    if names:
+                        available.append(names[-1])
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Mailbox/label {cfg.mailbox!r} does not exist on the server. "
+                f"Create it in Gmail (or set IMAP_MAILBOX to an existing one). "
+                f"Available: {', '.join(available) or 'INBOX'}"
+            )
+
+        # Server-side date floor: IMAP SINCE dd-Mon-yyyy (e.g. 01-Jan-2026) means
+        # the server only ever returns mail on/after that date — old mail is never
+        # downloaded. Prepended to every branch below.
+        since = ["SINCE", since_date] if since_date else []
+        base = (["UNSEEN"] if unread_only else ["ALL"]) + since
+        if subject_keywords:
+            # Subject-based detection (no label needed): union the UIDs of every
+            # message whose SUBJECT contains a resume keyword. Server-side search
+            # keeps this cheap even on a large inbox. This is a cheap PRE-FILTER
+            # only — the content validator still has the final say on each file.
+            matched: set[str] = set()
+            for kw in subject_keywords:
+                kw = (kw or "").strip()
+                if not kw:
+                    continue
+                args = (["UNSEEN"] if unread_only else []) + since + ["SUBJECT", '"' + kw + '"']
+                st, data = client.uid("SEARCH", None, *args)
+                if _imap_ok(st):
+                    matched.update((data[0] or b"").decode(errors="ignore").split())
+            # Newest-first: highest UID = most recent. Ensures the LATEST resumes
+            # are always handled within the max_to_process cap (never starved by
+            # older mail).
+            uids = sorted(
+                (u for u in matched if u and u not in already_processed),
+                key=lambda x: int(x) if x.isdigit() else 0,
+                reverse=True,
+            )
+            logger.info(
+                "fetch_new_emails: mailbox=%r unread_only=%s subject-match -> %d candidate UID(s)",
+                cfg.mailbox, unread_only, len(uids),
+            )
+        else:
+            status, data = client.uid("SEARCH", None, *base)
+            if not _imap_ok(status):
+                raise RuntimeError("IMAP SEARCH failed")
+            raw = (data[0] or b"").decode(errors="ignore").strip()
+            # Newest-first (highest UID = most recent) so the latest mail is never
+            # cut off by the max_to_process cap.
+            uids = sorted(
+                (u for u in raw.split() if u and u not in already_processed),
+                key=lambda x: int(x) if x.isdigit() else 0,
+                reverse=True,
+            )
+            logger.info(
+                "fetch_new_emails: mailbox=%r unread_only=%s -> %d candidate UID(s)",
+                cfg.mailbox, unread_only, len(uids),
+            )
+
+        for uid in uids[: max(1, max_to_process)]:
+            status, msg_data = client.uid("FETCH", uid, "(RFC822)")
+            if not _imap_ok(status) or not msg_data or not msg_data[0]:
+                continue
+            try:
+                msg = BytesParser(policy=policy.default).parsebytes(msg_data[0][1])
+            except Exception as exc:
+                logger.warning("fetch_new_emails: corrupt email uid=%s: %s", uid, exc)
+                continue
+            try:
+                indeed_urls = extract_indeed_view_urls(msg)
+            except Exception:
+                indeed_urls = []
+            emails.append({
+                "uid": uid,
+                "message_id": _decode_mime_header(str(msg.get("Message-ID", ""))) or uid,
+                "subject": _decode_mime_header(str(msg.get("Subject", ""))),
+                "from": _decode_mime_header(str(msg.get("From", ""))),
+                "body_text": _extract_body_text(msg),
+                "attachments": list(_iter_all_attachments(msg)),
+                # Indeed "View resume" links (for emails whose resume is behind a
+                # login-required Indeed URL instead of an attachment).
+                "indeed_urls": indeed_urls,
+            })
+            fetched_uids.append(uid)
+            if mark_seen:
+                try:
+                    client.uid("STORE", uid, "+FLAGS", r"(\Seen)")
+                except Exception:
+                    pass
+
+        return {
+            "mailbox": cfg.mailbox,
+            "emails": emails,
+            "searched": "UNSEEN" if unread_only else "ALL",
+            "fetched_uids": fetched_uids,
+        }
+    except imaplib.IMAP4.error as exc:
+        raise PermissionError(f"IMAP login failed: {exc}") from exc
+    finally:
+        try:
+            if client is not None:
+                client.logout()
+        except Exception:
+            pass
+
+
 def fetch_resumes_via_imap(
     *,
     cfg: ImapConfig,
@@ -289,7 +499,7 @@ def fetch_resumes_via_imap(
     client: Optional[imaplib.IMAP4] = None
     try:
         client = _connect_imap(cfg)
-        status, _ = client.select(cfg.mailbox, readonly=False)
+        status, _ = client.select(_quote_mailbox(cfg.mailbox), readonly=False)
         if not _imap_ok(status):
             raise RuntimeError(f"Could not select mailbox: {cfg.mailbox}")
 

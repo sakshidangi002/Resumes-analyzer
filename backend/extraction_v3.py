@@ -1798,6 +1798,54 @@ def _name_confidence_from_header(text: str, name: str) -> float:
     return 0.45
 
 
+def extract_stated_total_experience(text: str) -> float:
+    """Return the total experience the candidate EXPLICITLY states, e.g.
+    "5 years of experience", "Total Experience: 3.5 years", "6+ yrs experience",
+    "18 months of work experience".
+
+    Only matches a duration that sits next to the word 'experience', so it won't
+    pick up unrelated numbers like "3 years bachelor" or "2 years ago". Returns
+    0.0 when the candidate does not state an explicit total (then the caller
+    falls back to calculating from the job date ranges).
+    """
+    if not text:
+        return 0.0
+    low = text.lower()
+    candidates: list[float] = []
+
+    # "<n> [+] years [of] [work/professional/total] experience"
+    for m in re.finditer(
+        r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)\s*(?:of\s+)?"
+        r"(?:professional\s+|work\s+|industry\s+|relevant\s+|total\s+|overall\s+|hands[- ]on\s+)?"
+        r"experience",
+        low,
+    ):
+        candidates.append(float(m.group(1)))
+
+    # "[total/overall/work] experience [:/-] [of] <n> [+] years"
+    for m in re.finditer(
+        r"(?:total\s+|overall\s+|work\s+|professional\s+)?experience\s*[:\-–]?\s*(?:of\s+)?"
+        r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)",
+        low,
+    ):
+        candidates.append(float(m.group(1)))
+
+    # "<n> months [of] [work] experience" -> years
+    for m in re.finditer(
+        r"(\d+)\s*(?:months?|mos?)\s*(?:of\s+)?(?:professional\s+|work\s+)?experience",
+        low,
+    ):
+        v = int(m.group(1))
+        if 0 < v < 120:
+            candidates.append(round(v / 12.0, 2))
+
+    candidates = [c for c in candidates if 0 < c < 40]
+    if not candidates:
+        return 0.0
+    # If several totals are stated (summary + header), the largest is the headline.
+    return round(max(candidates), 2)
+
+
 def extract_explicit_experience(text: str) -> float:
     if not text:
         return 0.0
@@ -1891,15 +1939,24 @@ def deterministic_extract_pipeline(text: str, tech_vocab: set | None = None) -> 
     logger.info(f"V3 Extraction - Total skills found: {len(skills)}")
 
     experience_text = sections.get("experience", "") or sections.get("projects", "")
-    experience_years = extract_experience_years(experience_text)
+    # PRIORITY 1: if the candidate EXPLICITLY states their total experience
+    # ("5 years of experience", "Total Experience: 3 years"), trust that number
+    # directly — do NOT recompute it from date ranges.
+    experience_years = extract_stated_total_experience(text)
+    exp_source = "stated"
+    # PRIORITY 2: no explicit total stated -> CALCULATE from the job date ranges
+    # in the experience section.
     if experience_years == 0.0:
-        # Prefer the dedicated experience block so a summary mention and the
-        # role heading don't get counted twice. Fall back to the full document
-        # only if the section itself doesn't contain an explicit duration.
+        experience_years = extract_experience_years(experience_text)
+        exp_source = "calculated"
+    # PRIORITY 3: last-resort loose scan (a bare "X years" with no context).
+    if experience_years == 0.0:
         experience_years = extract_explicit_experience(experience_text)
+        exp_source = "loose_section"
     if experience_years == 0.0:
         experience_years = extract_explicit_experience(text)
-    logger.info(f"V3 Extraction - Experience years: {experience_years}")
+        exp_source = "loose_full"
+    logger.info(f"V3 Extraction - Experience years: {experience_years} (source={exp_source})")
 
     return {
         "name": name,

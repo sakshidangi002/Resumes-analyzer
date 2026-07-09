@@ -79,6 +79,40 @@ def _format_extracted_phone(raw_phone: str, text: str = "", location: str = "") 
     if len(digits) >= 10:
         return digits
     return raw
+
+
+def _extract_contact_phone(text: str) -> str:
+    """Extract a real phone number from resume text.
+
+    Guards against the two failure modes seen in production:
+      1. Digits embedded in an email address (e.g. ``ajay161651@gmail.com`` ->
+         phone "161651") — emails and URLs are stripped before matching.
+      2. Short fragments — a valid number must have 10-13 digits, so tokens
+         like "6671" or "2003" are rejected outright.
+    A clean 10-digit Indian mobile (starting 6-9) is preferred; then a
+    country-coded 11-13 digit number; otherwise the first valid candidate.
+    """
+    if not text:
+        return ""
+    # Remove emails and URLs so their embedded digits are never candidates.
+    scrub = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", " ", text)
+    scrub = re.sub(r"https?://\S+|www\.\S+", " ", scrub)
+
+    candidates: list[tuple[str, str]] = []
+    # A run of digits with common separators (space/dot/hyphen/parens), no
+    # newlines — 10-18 chars so it can only normalise to 10-13 digits.
+    for m in re.finditer(r"\+?\d[\d .()\-]{8,16}\d", scrub):
+        raw = m.group(0).strip()
+        d = re.sub(r"\D+", "", raw)
+        if 10 <= len(d) <= 13:
+            candidates.append((raw, d))
+    for raw, d in candidates:                       # clean Indian mobile
+        if len(d) == 10 and d[0] in "6789":
+            return raw
+    for raw, d in candidates:                       # country-coded
+        if len(d) in (12, 13) and d.startswith(("91", "091", "1")):
+            return raw
+    return candidates[0][0] if candidates else ""
 # ---------------------------------------------------------------------------
 # Chat model ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ lazy singleton
 
@@ -1335,6 +1369,18 @@ _HEADER_BAD_NAMES = {
     "bootstrap",
     "angular latest",
     "angular",
+    # Generic single-word / section-header tokens frequently mis-picked as a name.
+    "platform", "technology", "technologies", "tech", "tech overview", "overview",
+    "expertise", "objective", "career objective", "about", "about me",
+    "info", "information", "personal information", "details", "personal details",
+    "contact details", "contact information", "projects", "project",
+    "certifications", "certification", "achievements", "achievement",
+    "declaration", "references", "reference", "hobbies", "interests",
+    "languages", "language", "technical skills", "key skills",
+    "core competencies", "work experience", "professional experience",
+    "employment history", "qualification", "qualifications", "academic",
+    "developer", "engineer", "designer", "consultant", "analyst", "architect",
+    "portfolio", "introduction", "strengths", "responsibilities",
 }
 
 
@@ -1351,7 +1397,7 @@ def _is_rejected_person_name_label(candidate: str) -> bool:
         return True
     if norm.startswith("contact"):
         return True
-    if any(tok in norm for tok in ("portfolio", "website", "linkedin", "github", "behance", "dribbble", "http", "www")):
+    if any(tok in norm for tok in ("portfolio", "website", "linkedin", "linkdin", "linkd", "lnked", "linkin", "github", "gitlab", "behance", "dribbble", "twitter", "instagram", "http", "www")):
         return True
     if re.search(r"\b(latest|bootstrap|angular|react|vue|django|flask)\b", norm):
         return True
@@ -1391,7 +1437,8 @@ def _is_plausible_person_name(candidate: str) -> bool:
         return False
     if _is_rejected_person_name_label(c):
         return False
-    if any(tok in norm for tok in ("portfolio", "website", "linkedin", "github", "behance", "dribbble", "http", "www")):
+    # Social/profile labels (incl. common misspellings like "linkdin") are never names.
+    if any(tok in norm for tok in ("portfolio", "website", "linkedin", "linkdin", "linkd", "lnked", "linkin", "github", "gitlab", "behance", "dribbble", "twitter", "instagram", "http", "www")):
         return False
     # Never treat section headers as person names (even if ALL-CAPS).
     if norm in _COMMON_SECTION_HEADERS or norm in _SKILLS_SECTION_HEADERS:
@@ -3339,11 +3386,7 @@ def extract_resume(resume_text: str) -> dict:
     # Email and phone first (needed for name candidate scoring)
     email = _extract_contact_email(base_text)
 
-    phone_match = re.search(r"(?:\+\d{1,3}[\s.-]*)?(?:\(?\d{2,5}\)?[\s.-]*){1,4}\d{2,4}", base_text)
-    if not phone_match:
-        phone_match = re.search(r"(?<!\d)(?:\d[\s.-]?){10,14}\d(?!\d)", base_text)
-    if phone_match:
-        phone = _format_extracted_phone(phone_match.group(0), base_text)
+    phone = _extract_contact_phone(base_text)
 
     # Production name extraction: candidate-based scoring (no hardcoded bad-name list)
     def _name_has_header_support(candidate: str, text: str, email_value: str) -> bool:
@@ -3785,7 +3828,12 @@ def extract_resume(resume_text: str) -> dict:
                                     if not email:
                                         email = llm_result["email"]
                                 if llm_result.get("phone", "").strip():
-                                    phone = llm_result["phone"]
+                                    # Only accept the LLM phone if it is a real
+                                    # 10-13 digit number; never let it overwrite a
+                                    # valid regex phone with a shorter fragment.
+                                    _llm_digits = re.sub(r"\D+", "", llm_result["phone"])
+                                    if 10 <= len(_llm_digits) <= 13:
+                                        phone = llm_result["phone"]
                                 if isinstance(llm_result.get("location"), str) and llm_result.get("location", "").strip():
                                     location = llm_result["location"].strip()
                                 if llm_result.get("skills"):

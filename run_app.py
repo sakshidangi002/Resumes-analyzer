@@ -85,8 +85,19 @@ def main() -> None:
     extra_pp = os.pathsep.join([str(hrms_backend), str(repo_root)])
     env["PYTHONPATH"] = os.pathsep.join(p for p in (extra_pp, existing_pp) if p)
 
+    # Always run the server with the project's OWN virtualenv interpreter when it
+    # exists — even if this launcher was started with a system `python` on PATH.
+    # The .venv has every dependency (insightface, ultralytics, apscheduler,
+    # transformers, chromadb…); the system Python usually does not, which silently
+    # breaks face recognition and the resume DB/email import. Falls back to the
+    # current interpreter only when no .venv is present.
+    _venv_py = repo_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    interpreter = str(_venv_py) if _venv_py.exists() else sys.executable
+    if interpreter != sys.executable:
+        print(f"  Using project venv interpreter: {interpreter}")
+
     cmd = [
-        sys.executable, "-m", "uvicorn",
+        interpreter, "-m", "uvicorn",
         "app.main:app",
         "--host", args.host,
         "--port", str(port),
