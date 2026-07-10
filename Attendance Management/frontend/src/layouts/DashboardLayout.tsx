@@ -107,6 +107,9 @@ export default function DashboardLayout() {
             <NavLink to="/inbox" onClick={closeSidebar}>
               <Icons.Inbox /> Inbox
             </NavLink>
+            <NavLink to="/policies" onClick={closeSidebar}>
+              <Icons.Documents /> Company Policies
+            </NavLink>
             <NavLink to="/onboarding" onClick={closeSidebar}>
               <Icons.Tasks /> Task Hub
             </NavLink>

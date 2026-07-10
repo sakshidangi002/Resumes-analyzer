@@ -13,7 +13,9 @@ from app.models import (
     LeaveType,
     CompanyConfig,
     Holiday,
+    SalaryAdvance,
 )
+from app.core.datetime_utils import get_ist_now
 from app.services.leave_service import get_current_financial_year
 
 
@@ -85,6 +87,17 @@ def run_payroll_for_period(
     payslips = []
     config = _get_company_config(db)
     weekly_off_days = config.weekly_off_days if config else None
+    # Salary-advance recovery is idempotent across re-runs: release any advances
+    # this period recovered on a previous run so they are re-evaluated below.
+    db.query(SalaryAdvance).filter(SalaryAdvance.deducted_period_id == period.id).update(
+        {
+            SalaryAdvance.status: "PENDING",
+            SalaryAdvance.deducted_period_id: None,
+            SalaryAdvance.deducted_at: None,
+        },
+        synchronize_session=False,
+    )
+    db.flush()
     for emp in employees:
         struct = get_salary_structure_for_date(db, emp.id, date(year, month, 1))
         if not struct:
@@ -332,7 +345,27 @@ def run_payroll_for_period(
         per_day = gross / Decimal("30")
         total_earnings = per_day * paid_days
         total_deductions = (struct.deductions / Decimal("30")) * paid_days
+        # Recover pending salary advances in full on this payroll run. Advances
+        # deducted by this period were released to PENDING above, so re-runs are
+        # consistent. Employees with no advances are unaffected (advance = 0).
+        pending_advances = (
+            db.query(SalaryAdvance)
+            .filter(
+                SalaryAdvance.employee_id == emp.id,
+                SalaryAdvance.status == "PENDING",
+                SalaryAdvance.date_taken <= month_end,
+            )
+            .all()
+        )
+        advance_deduction = sum(
+            (Decimal(str(a.amount)) for a in pending_advances), Decimal("0")
+        )
+        total_deductions = total_deductions + advance_deduction
         net = total_earnings - total_deductions
+        for a in pending_advances:
+            a.status = "DEDUCTED"
+            a.deducted_period_id = period.id
+            a.deducted_at = get_ist_now()
         per_hour = (gross / Decimal("30")) / expected_hours
         breakdown = json.dumps({
             "basic": float(struct.basic),
@@ -342,6 +375,7 @@ def run_payroll_for_period(
             "miscellaneous": float(struct.miscellaneous),
             "allowances": float(struct.allowances),
             "deductions": float(struct.deductions),
+            "advance_deduction": float(advance_deduction),
             "paid_days": float(paid_days),
             "lop_days": float(lop_days),
             "lop_dates": [d.isoformat() for d, v in day_unpaid_frac.items() if v > 0],
@@ -373,7 +407,6 @@ def run_payroll_for_period(
             db.add(slip)
         payslips.append(slip)
     period.status = "PROCESSED"
-    from app.core.datetime_utils import get_ist_now
     period.is_processed = True
     period.processed_at = get_ist_now()
     db.commit()

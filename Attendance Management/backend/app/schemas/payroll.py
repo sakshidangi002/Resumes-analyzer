@@ -95,3 +95,27 @@ class PayslipUpdate(BaseModel):
     paid_days: Optional[Decimal] = None
     lop_days: Optional[Decimal] = None
     component_breakdown: Optional[str] = None
+
+
+# ---------- Salary advances ----------
+class SalaryAdvanceCreate(BaseModel):
+    employee_id: int
+    amount: Decimal
+    date_taken: date
+    reason: Optional[str] = None
+
+
+class SalaryAdvanceResponse(BaseModel):
+    id: int
+    employee_id: int
+    amount: Decimal
+    date_taken: date
+    reason: Optional[str] = None
+    status: str
+    deducted_period_id: Optional[int] = None
+    deducted_at: Optional[datetime] = None
+    created_by_name: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

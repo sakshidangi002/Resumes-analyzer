@@ -21,11 +21,9 @@ if not exist "frontend\dist\index.html" (
     echo.
 )
 
-:: --- Start Face Detection service (required for employee photo upload) ---
-echo [*] Starting Face Detection service on port 8000...
-start "Face Detection" "%~dp0..\Face_detection\start.bat"
-
-echo.
+:: NOTE: The old standalone Face_detection service is no longer needed.
+:: Face detection now runs in-process in the HRMS backend
+:: (app/services/face_service.py, insightface). See archive/Face_detection/.
 
 :: --- Start Backend (serves both API + Frontend) ---
 echo [*] Starting server on port 5001...

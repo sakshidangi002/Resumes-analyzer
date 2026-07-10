@@ -35,6 +35,7 @@ const Notifications = lazy(() => import("./pages/Notifications"));
 const Inbox = lazy(() => import("./pages/Inbox"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const DSR = lazy(() => import("./pages/DSR"));
+const Policies = lazy(() => import("./pages/Policies"));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth();
@@ -88,6 +89,7 @@ export default function App() {
         <Route path="calendar" element={<Calendar />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="inbox" element={<Inbox />} />
+        <Route path="policies" element={<Policies />} />
         <Route path="onboarding" element={<Onboarding />} />
         <Route path="dsr" element={<DSR />} />
       </Route>

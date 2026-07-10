@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, type CSSProperties } from "react";
-import { payroll as payrollApi, employees as employeesApi, attendance as attendanceApi } from "../api/client";
+import { payroll as payrollApi, employees as employeesApi, attendance as attendanceApi, type SalaryAdvanceRow } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SalaryFormulaView from "../components/SalaryFormulaView";
 import ConfirmModal from "../components/ConfirmModal";
@@ -105,6 +105,177 @@ const Icons = {
     </svg>
   ),
 };
+
+// Salary Advances (Feature 6). Self-contained: manages its own fetch/state.
+// An advance is recovered in full on the next payroll run.
+function SalaryAdvancesPanel({
+  employees,
+  canEdit,
+}: {
+  employees: EmployeeOption[];
+  canEdit: boolean;
+}) {
+  const emptyForm = {
+    employee_id: "",
+    amount: "",
+    date_taken: new Date().toISOString().slice(0, 10),
+    reason: "",
+  };
+  const [advances, setAdvances] = useState<SalaryAdvanceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const empName = (id: number) => {
+    const e = employees.find((x) => x.id === id);
+    return e ? `${e.full_name} (${e.employee_code})` : `#${id}`;
+  };
+  const money = (v: number) => "₹ " + Number(v).toLocaleString("en-IN");
+
+  const load = () => {
+    setLoading(true);
+    payrollApi
+      .advances()
+      .then((r) => setAdvances(r.data))
+      .catch(() => setAdvances([]))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.employee_id) {
+      setError("Select an employee");
+      return;
+    }
+    const amt = Number(form.amount);
+    if (!amt || amt <= 0) {
+      setError("Enter a valid amount");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    payrollApi
+      .createAdvance({
+        employee_id: Number(form.employee_id),
+        amount: amt,
+        date_taken: form.date_taken,
+        reason: form.reason || null,
+      })
+      .then(() => {
+        setForm(emptyForm);
+        setShowForm(false);
+        load();
+      })
+      .catch((e: any) => setError(e?.response?.data?.detail || "Failed to save advance"))
+      .finally(() => setBusy(false));
+  };
+
+  const remove = (id: number) => {
+    payrollApi.deleteAdvance(id).then(load).catch(() => load());
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: "1rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Salary Advances</h3>
+          <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: 2 }}>
+            Recovered in full from the employee's next payroll run.
+          </div>
+        </div>
+        {canEdit && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => { setError(""); setShowForm((s) => !s); }}>
+            {showForm ? "Cancel" : "Add Advance"}
+          </button>
+        )}
+      </div>
+
+      {error && <div className="alert alert-error" style={{ marginTop: "0.75rem" }}>{error}</div>}
+
+      {canEdit && showForm && (
+        <form onSubmit={submit} style={{ marginTop: "1rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+            <div className="form-group">
+              <label>Employee</label>
+              <CustomSelect
+                value={form.employee_id}
+                onChange={(v) => setForm({ ...form, employee_id: String(v) })}
+                placeholder="Select employee"
+                options={[
+                  { value: "", label: "Select employee" },
+                  ...employees.map((e) => ({ value: String(e.id), label: `${e.full_name} (${e.employee_code})` })),
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Amount (₹)</label>
+              <input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+            </div>
+            <div className="form-group">
+              <label>Date Taken</label>
+              <input type="date" value={form.date_taken} onChange={(e) => setForm({ ...form, date_taken: e.target.value })} required />
+            </div>
+            <div className="form-group">
+              <label>Reason (optional)</label>
+              <input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Medical emergency" />
+            </div>
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Saving…" : "Save Advance"}</button>
+        </form>
+      )}
+
+      <div style={{ marginTop: "1rem" }}>
+        {loading ? (
+          <p className="text-muted">Loading advances…</p>
+        ) : advances.length === 0 ? (
+          <p className="text-muted">No advances recorded.</p>
+        ) : (
+          <div className="table-wrap table-wrap--dark">
+            <table className="table-modern table-modern--dark">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th style={{ textAlign: "right" }}>Amount</th>
+                  <th>Date Taken</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  {canEdit && <th></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {advances.map((a) => (
+                  <tr key={a.id}>
+                    <td>{empName(a.employee_id)}</td>
+                    <td style={{ textAlign: "right" }}>{money(a.amount)}</td>
+                    <td>{a.date_taken}</td>
+                    <td>{a.reason || "—"}</td>
+                    <td>
+                      <span style={{ fontWeight: 700, color: a.status === "DEDUCTED" ? "#22c55e" : "#f59e0b" }}>
+                        {a.status === "DEDUCTED" ? "Recovered" : a.status === "PENDING" ? "Pending" : a.status}
+                      </span>
+                    </td>
+                    {canEdit && (
+                      <td style={{ textAlign: "right" }}>
+                        {a.status === "PENDING" && (
+                          <button type="button" className="btn btn-secondary btn-sm" style={{ color: "#f87171" }} onClick={() => remove(a.id)}>
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function PayrollManagement() {
   const { hasRole } = useAuth();
@@ -390,6 +561,8 @@ export default function PayrollManagement() {
         </div>
         <GlobalHeaderControls />
       </div>
+
+      <SalaryAdvancesPanel employees={employees} canEdit={canEdit} />
 
       <div className="card" style={{ marginBottom: "1rem" }}>
         <div className="payroll-filter-bar">

@@ -25,6 +25,7 @@ from app.services.attendance_service import (
     get_or_create_attendance,
     calculate_work_hours,
     apply_status_from_hours,
+    monthly_attendance_summary,
 )
 from app.services.attendance_event_service import (
     add_attendance_event,
@@ -790,8 +791,11 @@ def get_monthly_attendance_summary(
         avg_seconds = total_seconds // len(check_out_times)
         avg_check_out = time(avg_seconds // 3600, (avg_seconds % 3600) // 60).isoformat()
 
-    total_working_days = len(records)
-    attendance_percentage = (total_present / total_working_days * 100) if total_working_days > 0 else 0
+    # Calendar-accurate breakdown (Total Calendar Days / Working Days / Present /
+    # Leave / Absent / Holiday / %) reusing the shared service so the calculation
+    # lives in one place. Merged additively — all legacy keys above are kept so
+    # existing callers keep working.
+    breakdown = monthly_attendance_summary(db, employee_id, month, year)
 
     return {
         "employee_id": employee_id,
@@ -807,7 +811,17 @@ def get_monthly_attendance_summary(
         "average_check_out_time": avg_check_out,
         "late_arrivals": late_arrivals,
         "early_exits": early_exits,
-        "attendance_percentage": round(attendance_percentage, 2),
+        # Monthly summary breakdown (Feature 3):
+        "total_calendar_days": breakdown["total_calendar_days"],
+        "working_days": breakdown["working_days"],
+        "present": breakdown["present"],
+        "half_day": breakdown["half_day"],
+        "leave": breakdown["leave"],
+        "absent": breakdown["absent"],
+        "holiday": breakdown["holiday"],
+        "weekly_off": breakdown["weekly_off"],
+        # Percentage now comes from the shared, calendar-aware calculation.
+        "attendance_percentage": breakdown["attendance_percentage"],
     }
 
 

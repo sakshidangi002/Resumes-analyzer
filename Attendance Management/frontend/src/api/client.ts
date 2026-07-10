@@ -12,6 +12,12 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   if (token) config.headers.Authorization = "Bearer " + token;
+  // For file uploads (FormData), drop the default application/json header so the
+  // browser sets multipart/form-data with the correct boundary; otherwise the
+  // backend can't parse the form fields (HTTP 422).
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    config.headers.delete("Content-Type");
+  }
   return config;
 });
 
@@ -93,6 +99,45 @@ export const employees = {
   ) => api.put(`/employees/${id}/bank`, data),
   departments: () => api.get("/employees/departments"),
   designations: () => api.get("/employees/designations"),
+  // Position & Salary increment history (Feature 1)
+  careerHistory: (id: number) => api.get<CareerHistoryBundle>(`/employees/${id}/career-history`),
+  addCareerHistory: (
+    id: number,
+    data: {
+      designation_id?: number | null;
+      department_id?: number | null;
+      salary?: number | null;
+      effective_date: string;
+      reason?: string | null;
+      change_type?: string | null;
+      apply_to_live?: boolean;
+    }
+  ) => api.post(`/employees/${id}/career-history`, data),
+};
+
+export type CareerHistoryRow = {
+  id: number;
+  employee_id: number;
+  designation_id?: number | null;
+  department_id?: number | null;
+  position_title?: string | null;
+  department_name?: string | null;
+  salary?: number | null;
+  effective_date: string;
+  reason?: string | null;
+  change_type: string;
+  updated_by_name?: string | null;
+  created_at: string;
+};
+
+export type CareerHistoryBundle = {
+  current: {
+    position_title?: string | null;
+    department_name?: string | null;
+    salary?: number | null;
+    effective_date?: string | null;
+  };
+  history: CareerHistoryRow[];
 };
 
 export const attendance = {
@@ -211,6 +256,25 @@ export const payroll = {
   createPayslip: (data: object) => api.post("/payroll/payslips", data),
   updatePayslip: (id: number, data: object) => api.patch("/payroll/payslips/" + id, data),
   deletePayslip: (id: number) => api.delete("/payroll/payslips/" + id),
+  // Salary advances (Feature 6) — recovered on next payroll run.
+  advances: (params?: { employee_id?: number; status?: string }) =>
+    api.get<SalaryAdvanceRow[]>("/payroll/advances", { params }),
+  createAdvance: (data: { employee_id: number; amount: number; date_taken: string; reason?: string | null }) =>
+    api.post<SalaryAdvanceRow>("/payroll/advances", data),
+  deleteAdvance: (id: number) => api.delete("/payroll/advances/" + id),
+};
+
+export type SalaryAdvanceRow = {
+  id: number;
+  employee_id: number;
+  amount: number;
+  date_taken: string;
+  reason: string | null;
+  status: string; // PENDING | DEDUCTED | CANCELLED
+  deducted_period_id: number | null;
+  deducted_at: string | null;
+  created_by_name: string | null;
+  created_at: string;
 };
 
 export const letters = {
@@ -525,6 +589,70 @@ export const dvr = {
   stopAll: () => api.post("/dvr/cameras/stop-all"),
   previewUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/preview`,
   streamUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/stream`,
+};
+
+// ---- Employee ↔ HR Queries (Feature 2) ----
+export type HRQueryReplyRow = {
+  id: number;
+  query_id: number;
+  user_id: number | null;
+  author_name: string | null;
+  author_role: string | null;
+  message: string;
+  created_at: string;
+};
+
+export type HRQueryRow = {
+  id: number;
+  employee_id: number;
+  employee_name: string | null;
+  subject: string;
+  message: string;
+  category: string | null;
+  status: string; // OPEN | PENDING | RESOLVED
+  created_at: string;
+  updated_at: string | null;
+  replies: HRQueryReplyRow[];
+};
+
+// ---- Company Policies (Feature 4) ----
+export type PolicyVersion = {
+  id: number;
+  name: string;
+  title: string | null;
+  category: string | null;
+  content: string | null;
+  effective_date: string;
+  version: number;
+  attachment_name: string | null;
+  published_by_name: string | null;
+  created_at: string;
+};
+export type PolicyGroupRow = {
+  name: string;
+  category: string | null;
+  current: PolicyVersion;
+  versions_count: number;
+};
+export type PolicyHistoryRow = { name: string; versions: PolicyVersion[] };
+
+export const policies = {
+  list: () => api.get<PolicyGroupRow[]>("/policies"),
+  history: (name: string) => api.get<PolicyHistoryRow>("/policies/history", { params: { name } }),
+  create: (data: FormData) => api.post<PolicyVersion>("/policies", data),
+  remove: (id: number) => api.delete("/policies/" + id),
+  attachment: (id: number) => api.get(`/policies/${id}/attachment`, { responseType: "blob" }),
+};
+
+export const queries = {
+  list: (status?: string) => api.get<HRQueryRow[]>("/queries", { params: { status } }),
+  get: (id: number) => api.get<HRQueryRow>("/queries/" + id),
+  create: (data: { subject: string; message: string; category?: string | null }) =>
+    api.post<HRQueryRow>("/queries", data),
+  reply: (id: number, message: string) =>
+    api.post<HRQueryReplyRow>(`/queries/${id}/replies`, { message }),
+  setStatus: (id: number, status: string) =>
+    api.patch<HRQueryRow>("/queries/" + id, { status }),
 };
 
 

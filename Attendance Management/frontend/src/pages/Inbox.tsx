@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { activity, type AppNotificationRow } from "../api/client";
 import ConfirmModal from "../components/ConfirmModal";
+import QueriesPanel from "../components/QueriesPanel";
 import { SectionLoader } from "../components/LoadingState";
 import { formatDate, formatTimeIST } from "../utils/dateFormatter";
 
@@ -26,6 +27,7 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 
 export default function Inbox() {
   const navigate = useNavigate();
+  const [tab, setTab] = useState<"notifications" | "queries">("notifications");
   const [items, setItems] = useState<AppNotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
@@ -93,6 +95,32 @@ export default function Inbox() {
         <GlobalHeaderControls />
       </div>
 
+      {/* Tabs: Notifications (existing feed) + Queries (employee ↔ HR) */}
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+        {(["notifications", "queries"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className="btn btn-secondary btn-sm"
+            style={{
+              background: "transparent",
+              border: "none",
+              borderBottom: tab === t ? "2px solid var(--brand-400)" : "2px solid transparent",
+              borderRadius: 0,
+              fontWeight: tab === t ? 800 : 500,
+              color: tab === t ? "#fff" : "rgba(255,255,255,0.6)",
+            }}
+          >
+            {t === "notifications" ? "Notifications" : "Queries"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "queries" ? (
+        <QueriesPanel />
+      ) : (
+      <>
       {items.length > 0 && (<div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginBottom: "1rem" }}>
         <button type="button" className="btn btn-secondary btn-sm" onClick={load} title="Refresh Notification List" style={{ backgroundColor: "var(--brand-500)" }}>
           Refresh
@@ -164,6 +192,8 @@ export default function Inbox() {
             </li>
           ))}
         </ul>
+      )}
+      </>
       )}
 
       <ConfirmModal

@@ -109,6 +109,88 @@ const Icons = {
 };
 
 
+// Monthly Attendance Summary (Feature 3) — reads the existing attendance
+// monthly-summary endpoint (no new calculation), shown under the daily view.
+type MonthSummary = {
+  total_calendar_days: number;
+  working_days: number;
+  present: number;
+  half_day: number;
+  leave: number;
+  absent: number;
+  holiday: number;
+  weekly_off: number;
+  attendance_percentage: number;
+};
+
+function MonthlySummaryCard({ employeeId, month, year }: { employeeId: number; month: number; year: number }) {
+  const [summary, setSummary] = useState<MonthSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    setLoading(true);
+    api
+      .monthlySummary(employeeId, year, month)
+      .then((r) => setSummary(r.data as MonthSummary))
+      .catch(() => setSummary(null))
+      .finally(() => setLoading(false));
+  }, [employeeId, month, year]);
+
+  const monthName = new Date(year, month - 1, 1).toLocaleString("en-US", { month: "long" });
+  const rows: { label: string; value: React.ReactNode }[] = summary
+    ? [
+        { label: "Total Calendar Days", value: summary.total_calendar_days },
+        { label: "Working Days", value: summary.working_days },
+        { label: "Present", value: summary.present },
+        { label: "Half Day", value: summary.half_day },
+        { label: "Leave", value: summary.leave },
+        { label: "Absent", value: summary.absent },
+        { label: "Holiday", value: summary.holiday },
+        { label: "Weekly Off", value: summary.weekly_off },
+        { label: "Attendance %", value: `${summary.attendance_percentage}%` },
+      ]
+    : [];
+
+  return (
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 700 }}>
+        {monthName} {year} — Month Summary
+      </h3>
+      {loading ? (
+        <div className="text-muted">Loading summary…</div>
+      ) : !summary ? (
+        <div className="text-muted">Summary unavailable.</div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: "0.75rem",
+          }}
+        >
+          {rows.map((r) => (
+            <div
+              key={r.label}
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 10,
+                padding: "0.7rem 0.8rem",
+              }}
+            >
+              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6 }}>
+                {r.label}
+              </div>
+              <div style={{ fontSize: "1.15rem", fontWeight: 800, marginTop: 2 }}>{r.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Attendance() {
   const { hasRole, user } = useAuth();
   const isAdmin = hasRole("Admin");
@@ -461,6 +543,10 @@ export default function Attendance() {
         <div className="card">
           <MonthlyAttendanceGrid month={month} year={year} setMonth={setMonth} setYear={setYear} records={records} loading={loading} />
         </div>
+
+        {user?.employee_id && (
+          <MonthlySummaryCard employeeId={user.employee_id} month={month} year={year} />
+        )}
       </>
     );
   }

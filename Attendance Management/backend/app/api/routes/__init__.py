@@ -17,6 +17,8 @@ from app.api.routes import (
     push,
     recognition,
     cameras,
+    queries,
+    policies,
 )
 
 api_router = APIRouter()
@@ -39,3 +41,5 @@ api_router.include_router(
 api_router.include_router(push.router, prefix="/push", tags=["push"])
 api_router.include_router(recognition.router, prefix="", tags=["recognition"])
 api_router.include_router(cameras.router, prefix="", tags=["cameras"])
+api_router.include_router(queries.router, prefix="/queries", tags=["queries"])
+api_router.include_router(policies.router, prefix="/policies", tags=["policies"])

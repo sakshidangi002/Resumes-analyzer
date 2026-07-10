@@ -6,11 +6,15 @@ from app.models.company import CompanyConfig, FinancialYear, Holiday
 from app.models.attendance import AttendanceRecord, AttendanceCorrectionRequest, AttendanceEvent
 from app.models.leave import LeaveType, LeaveAllocation, LeaveRequest
 from app.models.payroll import SalaryStructure, PayrollPeriod, Payslip
+from app.models.salary_advance import SalaryAdvance
+from app.models.career_history import EmployeePositionSalaryHistory
 from app.models.audit import AuditLog
 from app.models.email_log import EmailLog
 from app.models.letter import LetterTemplate, LetterInstance, LetterReply
 from app.models.event import Event
 from app.models.in_app_notification import AppNotification
+from app.models.hr_query import HRQuery, HRQueryReply
+from app.models.company_policy import CompanyPolicy
 from app.models.onboarding import OnboardingTask
 from app.models.dsr import DailyStatusReport
 from app.models.push_subscription import PushSubscription
@@ -37,6 +41,8 @@ __all__ = [
     "SalaryStructure",
     "PayrollPeriod",
     "Payslip",
+    "SalaryAdvance",
+    "EmployeePositionSalaryHistory",
     "LetterTemplate",
     "LetterInstance",
     "LetterReply",
@@ -44,6 +50,9 @@ __all__ = [
     "EmailLog",
     "Event",
     "AppNotification",
+    "HRQuery",
+    "HRQueryReply",
+    "CompanyPolicy",
     "OnboardingTask",
     "DailyStatusReport",
     "PushSubscription",

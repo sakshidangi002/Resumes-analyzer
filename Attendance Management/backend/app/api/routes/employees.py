@@ -1,4 +1,5 @@
 ﻿"""Employee master CRUD and bank details."""
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +19,7 @@ from app.models import (
     LeaveAllocation,
     LeaveRequest,
     Event,
+    EmployeePositionSalaryHistory,
 )
 from app.models.employee import EmploymentStatus
 from app.schemas.employee import (
@@ -33,8 +35,13 @@ from app.schemas.employee import (
     DesignationCreate,
     DesignationUpdate,
     DesignationResponse,
+    CareerHistoryCreate,
+    CareerHistoryResponse,
+    CareerHistoryBundle,
+    CareerCurrentSnapshot,
 )
 from app.api.deps import get_current_user, require_roles
+from app.services.payroll_service import get_salary_structure_for_date
 from app.services.embedding_cache import embedding_to_blob, invalidate_embedding_cache
 from app.services.employee_face_service import (
     process_face_uploads,
@@ -469,6 +476,161 @@ def update_employee(
     return emp
 
 
+# ---------- Position & Salary increment history (Feature 1) ----------
+def _structure_gross(s: SalaryStructure | None) -> float | None:
+    """Gross salary = sum of earning components (matches payroll_service)."""
+    if s is None:
+        return None
+    return float(
+        (s.basic or 0) + (s.hra or 0) + (s.medical or 0) + (s.travelling or 0)
+        + (s.miscellaneous or 0) + (s.allowances or 0)
+    )
+
+
+def _can_view_employee(current_user: User, employee_id: int) -> bool:
+    role_names = [r.name for r in current_user.roles]
+    privileged = any(r in role_names for r in ("Admin", "HR", "Manager"))
+    return privileged or current_user.employee_id == employee_id
+
+
+@router.get("/{employee_id}/career-history", response_model=CareerHistoryBundle)
+def get_career_history(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
+):
+    """Current position/salary + full chronological promotion & increment history."""
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if not _can_view_employee(current_user, employee_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    rows = (
+        db.query(EmployeePositionSalaryHistory)
+        .filter(EmployeePositionSalaryHistory.employee_id == employee_id)
+        .order_by(
+            EmployeePositionSalaryHistory.effective_date.asc(),
+            EmployeePositionSalaryHistory.id.asc(),
+        )
+        .all()
+    )
+
+    # Current live position (from employee master) + current salary (from the
+    # salary structure effective today — the payroll source of truth).
+    current_struct = get_salary_structure_for_date(db, employee_id, date.today())
+    current = CareerCurrentSnapshot(
+        position_title=emp.designation.title if emp.designation else None,
+        department_name=emp.department.name if emp.department else None,
+        salary=_structure_gross(current_struct),
+        effective_date=current_struct.effective_from if current_struct else None,
+    )
+    return CareerHistoryBundle(current=current, history=rows)
+
+
+@router.post("/{employee_id}/career-history", response_model=CareerHistoryResponse)
+def add_career_history(
+    employee_id: int,
+    data: CareerHistoryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Record a promotion / salary increment.
+
+    Writes an append-only history snapshot and (by default) updates the live
+    position on the employee and creates a new salary structure so payroll picks
+    up the new figure. Existing rows are never overwritten.
+    """
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    # Resolve target designation/department (default: keep current).
+    target_designation_id = data.designation_id if data.designation_id is not None else emp.designation_id
+    target_department_id = data.department_id if data.department_id is not None else emp.department_id
+
+    designation = (
+        db.query(Designation).filter(Designation.id == target_designation_id).first()
+        if target_designation_id else None
+    )
+    department = (
+        db.query(Department).filter(Department.id == target_department_id).first()
+        if target_department_id else None
+    )
+
+    # Resolve salary (default: keep current gross).
+    current_struct = get_salary_structure_for_date(db, employee_id, data.effective_date)
+    current_salary = _structure_gross(current_struct)
+    new_salary = data.salary if data.salary is not None else current_salary
+
+    # Derive change type if the caller didn't specify one.
+    position_changed = data.designation_id is not None and data.designation_id != emp.designation_id
+    salary_changed = data.salary is not None and data.salary != current_salary
+    if data.change_type:
+        change_type = data.change_type
+    elif not db.query(EmployeePositionSalaryHistory).filter_by(employee_id=employee_id).first():
+        change_type = "INITIAL"
+    elif position_changed:
+        change_type = "PROMOTION"
+    elif salary_changed:
+        change_type = "INCREMENT"
+    else:
+        change_type = "UPDATE"
+
+    history = EmployeePositionSalaryHistory(
+        employee_id=employee_id,
+        designation_id=target_designation_id,
+        department_id=target_department_id,
+        position_title=designation.title if designation else None,
+        department_name=department.name if department else None,
+        salary=new_salary,
+        effective_date=data.effective_date,
+        reason=data.reason,
+        change_type=change_type,
+        updated_by_user_id=current_user.id,
+        updated_by_name=current_user.username,
+    )
+    db.add(history)
+
+    if data.apply_to_live:
+        # Update live position on the employee master.
+        if data.designation_id is not None:
+            emp.designation_id = data.designation_id
+        if data.department_id is not None:
+            emp.department_id = data.department_id
+
+        # If a salary was supplied, create a new salary structure so payroll uses
+        # it. Close the previous open-ended structure at the day before this one
+        # so the effective-dated timeline stays clean (payroll already picks the
+        # latest effective_from, so this is a correctness nicety, not a fix).
+        if data.salary is not None:
+            prev = (
+                db.query(SalaryStructure)
+                .filter(
+                    SalaryStructure.employee_id == employee_id,
+                    SalaryStructure.effective_from < data.effective_date,
+                    SalaryStructure.effective_to == None,  # noqa: E711
+                )
+                .order_by(SalaryStructure.effective_from.desc())
+                .first()
+            )
+            if prev is not None:
+                prev.effective_to = data.effective_date - timedelta(days=1)
+            db.add(
+                SalaryStructure(
+                    employee_id=employee_id,
+                    basic=data.salary,
+                    hra=0, medical=0, travelling=0, miscellaneous=0,
+                    allowances=0, deductions=0,
+                    effective_from=data.effective_date,
+                )
+            )
+
+    db.commit()
+    db.refresh(history)
+    return history
+
+
 # ---------- Bank details (restricted) ----------
 @router.get("/{employee_id}/bank", response_model=EmployeeBankDetailResponse)
 def get_employee_bank(
@@ -511,6 +673,10 @@ def delete_employee(
     # Payroll & leave data
     db.query(SalaryStructure).filter(SalaryStructure.employee_id == employee_id).delete()
     db.query(Payslip).filter(Payslip.employee_id == employee_id).delete()
+    # Position/salary history
+    db.query(EmployeePositionSalaryHistory).filter(
+        EmployeePositionSalaryHistory.employee_id == employee_id
+    ).delete()
     db.query(LeaveAllocation).filter(LeaveAllocation.employee_id == employee_id).delete()
     db.query(LeaveRequest).filter(LeaveRequest.employee_id == employee_id).delete()
     # Calendar events linked to this employee (if any)
