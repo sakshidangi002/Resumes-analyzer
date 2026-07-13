@@ -112,10 +112,18 @@ _MOTION_THRESHOLD     = float(os.getenv("CCTV_MOTION_THRESHOLD", "3.0"))
 # If nobody has viewed a camera's stream for this long, stop encoding preview
 # JPEGs (recognition/attendance keep running). Saves CPU for background work.
 _DISPLAY_IDLE_SEC     = float(os.getenv("CCTV_DISPLAY_IDLE_SEC", "8.0"))
-# Body/person tracking (opt-in; requires the MobileNet-SSD model files). When
-# active, a recognised face binds to the person's body track so the name stays
-# on them even when the face turns away, until they leave the frame.
+# Body/person tracking. When active, a recognised face binds to the person's body
+# track so the name stays on them even when the face turns away, until they leave
+# the frame. Engine: YOLO11+ByteTrack (models/yolo11n.pt) → MobileNet-SSD.
+# Global switch: turns body tracking on for EVERY camera (incl. IN/OUT). Leave off
+# — it adds body-detector inference to the attendance cameras and slows them.
 _PERSON_TRACKING      = os.getenv("CCTV_PERSON_TRACKING", "").lower() in {"1", "true", "yes"}
+# MONITOR-only switch (default ON). Working-area/room cameras see people from
+# behind, from the side and seated — where the face-only pipeline detects nobody.
+# Body tracking lets them box EVERY person and keep a name bound to that person
+# once their face is seen even briefly. Scoped to MONITOR so the IN/OUT attendance
+# cameras stay on the fast face-only path.
+_MONITOR_PERSON_TRACKING = os.getenv("CCTV_MONITOR_PERSON_TRACKING", "true").lower() in {"1", "true", "yes"}
 _PERSON_REVERIFY_SEC  = float(os.getenv("CCTV_PERSON_REVERIFY_SEC", "5.0"))
 # Safety floor for a camera's recognition threshold. Older camera rows may still
 # hold the legacy 0.05 value, which accepts near-random faces as a match. We
@@ -1076,22 +1084,21 @@ class CameraWorker:
             identity_max_misses=_hold_frames,
         )
 
-        # Body/person tracking is OPT-IN via CCTV_PERSON_TRACKING=true. When it is
-        # off (the default) EVERY camera — including MONITOR — uses the pure
-        # face-detection pipeline: faces are detected and recognised directly, no
-        # YOLO/MobileNet body detector runs. MONITOR cameras still never mark
-        # attendance (enforced in the face pipeline via `not w.is_monitor`), they
-        # simply label the faces they can see. Turning person tracking off also
-        # frees the (heavy) body-detector inference, speeding up face recognition.
-        # Trade-off: on an overhead/wide monitor view where faces are small or
-        # turned away, face-only mode will box/label fewer people than body
-        # tracking did. Set CCTV_PERSON_TRACKING=true to bring body tracking back.
-        # Engine preference (only when enabled): YOLO11+ByteTrack → MobileNet-SSD.
+        # Body/person tracking.
+        #   * MONITOR (working-area) cameras use it by DEFAULT — a room camera sees
+        #     people from behind/side and seated, where the face-only pipeline finds
+        #     nobody. Body tracking boxes EVERY person and, once their face is seen
+        #     even briefly, binds their name to that body track so the label sticks
+        #     while they stay in frame. Disable with CCTV_MONITOR_PERSON_TRACKING=false.
+        #   * IN/OUT attendance cameras stay on the pure face-detection pipeline
+        #     (fast — no body-detector inference) unless CCTV_PERSON_TRACKING=true.
+        # MONITOR cameras still NEVER mark attendance (enforced in _mark_attendance).
+        # Engine preference: YOLO11+ByteTrack (models/yolo11n.pt) → MobileNet-SSD.
         _body_misses = max(3, _hold_frames)
         self.bytetrack_engine = None
         self.person_tracker: Optional[PersonTracker] = None
         self.use_person_tracking = False
-        if _PERSON_TRACKING:
+        if _PERSON_TRACKING or (self.is_monitor and _MONITOR_PERSON_TRACKING):
             if bytetrack_engine.is_available():
                 self.bytetrack_engine = bytetrack_engine.ByteTrackEngine(
                     conf=float(os.getenv("PERSON_CONF", "0.35")), max_misses=_body_misses,

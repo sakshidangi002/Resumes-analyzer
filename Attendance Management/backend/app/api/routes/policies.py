@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import User, CompanyPolicy
-from app.schemas.policy import PolicyVersionResponse, PolicyGroup, PolicyHistory
+from app.schemas.policy import PolicyVersionResponse, PolicyGroup, PolicyHistory, PolicyUpdate
 from app.api.deps import require_roles
 
 router = APIRouter()
@@ -128,6 +128,25 @@ def create_policy_version(
         published_by_name=current_user.username,
     )
     db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.patch("/{policy_id}", response_model=PolicyVersionResponse)
+def update_policy_version(
+    policy_id: int,
+    data: PolicyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Edit an existing policy version in place (title/category/content/date)."""
+    policy = db.query(CompanyPolicy).filter(CompanyPolicy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    patch = data.model_dump(exclude_unset=True)
+    for field, value in patch.items():
+        setattr(policy, field, value)
     db.commit()
     db.refresh(policy)
     return policy

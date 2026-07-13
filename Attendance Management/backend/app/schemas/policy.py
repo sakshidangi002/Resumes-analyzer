@@ -18,6 +18,14 @@ class PolicyVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PolicyUpdate(BaseModel):
+    """Edit an existing policy version in place (fixes without a new version)."""
+    title: Optional[str] = None
+    category: Optional[str] = None
+    content: Optional[str] = None
+    effective_date: Optional[date] = None
+
+
 class PolicyGroup(BaseModel):
     """One named policy: its current (latest) version + how many versions exist."""
     name: str

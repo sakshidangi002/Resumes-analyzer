@@ -113,6 +113,20 @@ export const employees = {
       apply_to_live?: boolean;
     }
   ) => api.post(`/employees/${id}/career-history`, data),
+  updateCareerHistory: (
+    id: number,
+    historyId: number,
+    data: {
+      designation_id?: number | null;
+      department_id?: number | null;
+      salary?: number | null;
+      effective_date?: string;
+      reason?: string | null;
+      change_type?: string | null;
+    }
+  ) => api.patch(`/employees/${id}/career-history/${historyId}`, data),
+  deleteCareerHistory: (id: number, historyId: number) =>
+    api.delete(`/employees/${id}/career-history/${historyId}`),
 };
 
 export type CareerHistoryRow = {
@@ -640,6 +654,8 @@ export const policies = {
   list: () => api.get<PolicyGroupRow[]>("/policies"),
   history: (name: string) => api.get<PolicyHistoryRow>("/policies/history", { params: { name } }),
   create: (data: FormData) => api.post<PolicyVersion>("/policies", data),
+  update: (id: number, data: { title?: string; category?: string; content?: string; effective_date?: string }) =>
+    api.patch<PolicyVersion>("/policies/" + id, data),
   remove: (id: number) => api.delete("/policies/" + id),
   attachment: (id: number) => api.get(`/policies/${id}/attachment`, { responseType: "blob" }),
 };

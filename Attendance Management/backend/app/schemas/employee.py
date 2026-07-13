@@ -191,6 +191,17 @@ class CareerHistoryCreate(BaseModel):
     apply_to_live: bool = True
 
 
+class CareerHistoryUpdate(BaseModel):
+    """Correct an existing history row in place (audit record only — does not
+    re-apply to the employee's live position or salary structure)."""
+    designation_id: Optional[int] = None
+    department_id: Optional[int] = None
+    salary: Optional[float] = None
+    effective_date: Optional[date] = None
+    reason: Optional[str] = None
+    change_type: Optional[str] = None
+
+
 class CareerHistoryResponse(BaseModel):
     id: int
     employee_id: int

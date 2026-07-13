@@ -36,6 +36,7 @@ from app.schemas.employee import (
     DesignationUpdate,
     DesignationResponse,
     CareerHistoryCreate,
+    CareerHistoryUpdate,
     CareerHistoryResponse,
     CareerHistoryBundle,
     CareerCurrentSnapshot,
@@ -629,6 +630,74 @@ def add_career_history(
     db.commit()
     db.refresh(history)
     return history
+
+
+@router.patch("/{employee_id}/career-history/{history_id}", response_model=CareerHistoryResponse)
+def update_career_history(
+    employee_id: int,
+    history_id: int,
+    data: CareerHistoryUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Correct a history row in place. Audit-only: it does NOT change the
+    employee's live designation or create/modify salary structures."""
+    row = (
+        db.query(EmployeePositionSalaryHistory)
+        .filter(
+            EmployeePositionSalaryHistory.id == history_id,
+            EmployeePositionSalaryHistory.employee_id == employee_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="History record not found")
+
+    patch = data.model_dump(exclude_unset=True)
+    if "designation_id" in patch:
+        row.designation_id = patch["designation_id"]
+        des = (
+            db.query(Designation).filter(Designation.id == patch["designation_id"]).first()
+            if patch["designation_id"] else None
+        )
+        row.position_title = des.title if des else None
+    if "department_id" in patch:
+        row.department_id = patch["department_id"]
+        dep = (
+            db.query(Department).filter(Department.id == patch["department_id"]).first()
+            if patch["department_id"] else None
+        )
+        row.department_name = dep.name if dep else None
+    for field in ("salary", "effective_date", "reason", "change_type"):
+        if field in patch:
+            setattr(row, field, patch[field])
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/{employee_id}/career-history/{history_id}")
+def delete_career_history(
+    employee_id: int,
+    history_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Delete a history row (audit record only; live position/salary unaffected)."""
+    row = (
+        db.query(EmployeePositionSalaryHistory)
+        .filter(
+            EmployeePositionSalaryHistory.id == history_id,
+            EmployeePositionSalaryHistory.employee_id == employee_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="History record not found")
+    db.delete(row)
+    db.commit()
+    return {"message": "Deleted"}
 
 
 # ---------- Bank details (restricted) ----------

@@ -13,6 +13,7 @@ import {
   attendance as attendanceApi,
   recognition as recognitionApi,
   type CareerHistoryBundle,
+  type CareerHistoryRow,
 } from "../api/client";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
@@ -374,6 +375,9 @@ function CareerHistorySection({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [form, setForm] = useState(emptyForm);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState(emptyForm);
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -384,6 +388,47 @@ function CareerHistorySection({
       .finally(() => setLoading(false));
   };
   useEffect(load, [employeeId]);
+
+  const startEdit = (h: CareerHistoryRow) => {
+    setErr("");
+    setShowForm(false);
+    setEditId(h.id);
+    setEditForm({
+      designation_id: h.designation_id ? String(h.designation_id) : "",
+      department_id: h.department_id ? String(h.department_id) : "",
+      salary: h.salary != null ? String(h.salary) : "",
+      effective_date: h.effective_date,
+      reason: h.reason || "",
+      change_type: h.change_type || "",
+    });
+  };
+
+  const saveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editId == null) return;
+    setEditSaving(true);
+    setErr("");
+    employeesApi
+      .updateCareerHistory(employeeId, editId, {
+        designation_id: editForm.designation_id ? Number(editForm.designation_id) : null,
+        department_id: editForm.department_id ? Number(editForm.department_id) : null,
+        salary: editForm.salary !== "" ? Number(editForm.salary) : null,
+        effective_date: editForm.effective_date,
+        reason: editForm.reason || null,
+        change_type: editForm.change_type || null,
+      })
+      .then(() => {
+        setEditId(null);
+        load();
+      })
+      .catch((e: any) => setErr(e?.response?.data?.detail || "Failed to update"))
+      .finally(() => setEditSaving(false));
+  };
+
+  const removeRow = (h: CareerHistoryRow) => {
+    if (!window.confirm("Delete this history record? This cannot be undone.")) return;
+    employeesApi.deleteCareerHistory(employeeId, h.id).then(load).catch(() => load());
+  };
 
   const money = (v: number | null | undefined) =>
     v == null ? "—" : "₹ " + Number(v).toLocaleString("en-IN");
@@ -516,6 +561,91 @@ function CareerHistorySection({
         </form>
       )}
 
+      {/* Edit an existing history row (Admin/HR) */}
+      {canEdit && editId != null && (
+        <form onSubmit={saveEdit} className="emp-detail-section" style={{ marginTop: "1rem" }}>
+          <div style={{ fontWeight: 700, marginBottom: "0.5rem" }}>Edit history record</div>
+          {err && <p style={{ color: "#f87171", marginTop: 0 }}>{err}</p>}
+          <div className="emp-detail-section__grid">
+            <div className="form-group">
+              <label>Position</label>
+              <CustomSelect
+                value={editForm.designation_id}
+                onChange={(v) => setEditForm({ ...editForm, designation_id: String(v) })}
+                placeholder="—"
+                options={[
+                  { value: "", label: "—" },
+                  ...desigs.map((d) => ({ value: String(d.id), label: d.title })),
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Department</label>
+              <CustomSelect
+                value={editForm.department_id}
+                onChange={(v) => setEditForm({ ...editForm, department_id: String(v) })}
+                placeholder="—"
+                options={[
+                  { value: "", label: "—" },
+                  ...depts.map((d) => ({ value: String(d.id), label: d.name })),
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Salary (₹, gross)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={editForm.salary}
+                onChange={(e) => setEditForm({ ...editForm, salary: e.target.value })}
+              />
+            </div>
+            <div className="form-group">
+              <label>Effective Date</label>
+              <input
+                type="date"
+                value={editForm.effective_date}
+                onChange={(e) => setEditForm({ ...editForm, effective_date: e.target.value })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Type</label>
+              <CustomSelect
+                value={editForm.change_type}
+                onChange={(v) => setEditForm({ ...editForm, change_type: String(v) })}
+                placeholder="Type"
+                options={[
+                  { value: "INITIAL", label: "Initial" },
+                  { value: "PROMOTION", label: "Promotion" },
+                  { value: "INCREMENT", label: "Salary Increment" },
+                  { value: "UPDATE", label: "Update" },
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Reason</label>
+              <input
+                value={editForm.reason}
+                onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })}
+              />
+            </div>
+          </div>
+          <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem" }}>
+            <button className="btn btn-primary" type="submit" disabled={editSaving}>
+              {editSaving ? "Saving…" : "Save Changes"}
+            </button>
+            <button className="btn btn-secondary" type="button" onClick={() => setEditId(null)}>
+              Cancel
+            </button>
+          </div>
+          <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
+            Corrects this history record only — it does not change the employee's current position or salary structure.
+          </div>
+        </form>
+      )}
+
       {/* History (chronological) */}
       <div style={{ marginTop: "1rem" }}>
         {loading ? (
@@ -536,6 +666,7 @@ function CareerHistorySection({
                   <th>Type</th>
                   <th>Reason</th>
                   <th>Updated By</th>
+                  {canEdit && <th style={{ textAlign: "right" }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -585,6 +716,26 @@ function CareerHistorySection({
                       </td>
                       <td>{h.reason || "—"}</td>
                       <td>{h.updated_by_name || "—"}</td>
+                      {canEdit && (
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginRight: 6 }}
+                            onClick={() => startEdit(h)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ color: "#f87171" }}
+                            onClick={() => removeRow(h)}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

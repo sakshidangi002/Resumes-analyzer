@@ -8,7 +8,24 @@ import {
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { SectionLoader } from "../components/LoadingState";
 import ConfirmModal from "../components/ConfirmModal";
+import RichTextEditor from "../components/RichTextEditor";
 import { formatDate } from "../utils/dateFormatter";
+
+// Policy text is authored by Admin/HR as rich HTML (bold/size). Strip anything
+// executable before rendering it to viewers.
+function sanitizeHtml(html: string): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html || "";
+  tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta").forEach((n) => n.remove());
+  tpl.content.querySelectorAll("*").forEach((el) => {
+    Array.from(el.attributes).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on")) el.removeAttribute(attr.name);
+      if ((name === "href" || name === "src") && /^\s*javascript:/i.test(attr.value)) el.removeAttribute(attr.name);
+    });
+  });
+  return tpl.innerHTML;
+}
 
 const emptyForm = {
   name: "",
@@ -35,11 +52,13 @@ function VersionCard({
   isCurrent,
   canEdit,
   onDelete,
+  onEdit,
 }: {
   v: PolicyVersion;
   isCurrent: boolean;
   canEdit: boolean;
   onDelete: (id: number) => void;
+  onEdit?: (v: PolicyVersion) => void;
 }) {
   return (
     <div
@@ -63,11 +82,21 @@ function VersionCard({
           {v.published_by_name ? ` · by ${v.published_by_name}` : ""}
         </div>
       </div>
-      {v.content && <div style={{ whiteSpace: "pre-wrap", marginTop: "0.5rem", color: "rgba(255,255,255,0.85)" }}>{v.content}</div>}
+      {v.content && (
+        <div
+          style={{ marginTop: "0.5rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.5 }}
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(v.content) }}
+        />
+      )}
       <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.6rem", alignItems: "center" }}>
         {v.attachment_name && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => downloadAttachment(v)}>
             ⬇ {v.attachment_name}
+          </button>
+        )}
+        {canEdit && onEdit && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onEdit(v)}>
+            Edit
           </button>
         )}
         {canEdit && (
@@ -91,7 +120,6 @@ export default function Policies() {
 
   const [groups, setGroups] = useState<PolicyGroupRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [historyMap, setHistoryMap] = useState<Record<string, PolicyVersion[]>>({});
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -99,6 +127,10 @@ export default function Policies() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [selected, setSelected] = useState<PolicyGroupRow | null>(null);
+  const [editing, setEditing] = useState<PolicyVersion | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", category: "", content: "", effective_date: "" });
+  const [editBusy, setEditBusy] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -113,17 +145,13 @@ export default function Policies() {
     load();
   }, [load]);
 
-  const toggleHistory = (name: string) => {
-    if (expanded === name) {
-      setExpanded(null);
-      return;
-    }
-    setExpanded(name);
-    if (!historyMap[name]) {
+  const openPolicy = (g: PolicyGroupRow) => {
+    setSelected(g);
+    if (!historyMap[g.name]) {
       policiesApi
-        .history(name)
-        .then((r) => setHistoryMap((prev) => ({ ...prev, [name]: r.data.versions })))
-        .catch(() => setHistoryMap((prev) => ({ ...prev, [name]: [] })));
+        .history(g.name)
+        .then((r) => setHistoryMap((prev) => ({ ...prev, [g.name]: r.data.versions })))
+        .catch(() => setHistoryMap((prev) => ({ ...prev, [g.name]: [] })));
     }
   };
 
@@ -154,7 +182,6 @@ export default function Policies() {
         setFile(null);
         setShowForm(false);
         setHistoryMap({});
-        setExpanded(null);
         load();
       })
       .catch((e: any) => setError(e?.response?.data?.detail || "Failed to publish policy"))
@@ -169,10 +196,54 @@ export default function Policies() {
       .then(() => {
         setConfirmDelete(null);
         setHistoryMap({});
-        setExpanded(null);
+        setSelected(null);
         load();
       })
       .catch(() => setConfirmDelete(null));
+  };
+
+  const openEdit = (v: PolicyVersion) => {
+    setError("");
+    setEditing(v);
+    setEditForm({
+      title: v.title || "",
+      category: v.category || "",
+      content: v.content || "",
+      effective_date: v.effective_date,
+    });
+  };
+
+  const saveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    setEditBusy(true);
+    setError("");
+    policiesApi
+      .update(editing.id, {
+        title: editForm.title || undefined,
+        category: editForm.category || undefined,
+        content: editForm.content || undefined,
+        effective_date: editForm.effective_date || undefined,
+      })
+      .then((r) => {
+        const updated = r.data;
+        // Update in place so the modal + grid reflect the edit without a full reload.
+        setHistoryMap((prev) => ({
+          ...prev,
+          [updated.name]: (prev[updated.name] || []).map((x) => (x.id === updated.id ? updated : x)),
+        }));
+        setSelected((prev) =>
+          prev && prev.current.id === updated.id
+            ? { ...prev, current: updated, category: updated.category }
+            : prev
+        );
+        setGroups((prev) =>
+          prev.map((g) => (g.current.id === updated.id ? { ...g, current: updated, category: updated.category } : g))
+        );
+        setEditing(null);
+      })
+      .catch((e: any) => setError(e?.response?.data?.detail || "Failed to save changes"))
+      .finally(() => setEditBusy(false));
   };
 
   return (
@@ -229,7 +300,11 @@ export default function Policies() {
           </div>
           <div className="form-group">
             <label>Policy Text</label>
-            <textarea rows={6} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} placeholder="Type the policy here (optional if attaching a file)" />
+            <RichTextEditor
+              value={form.content}
+              onChange={(html) => setForm({ ...form, content: html })}
+              placeholder="Type the policy here (optional if attaching a file)"
+            />
           </div>
           <div className="form-group">
             <label>Attachment (optional — PDF/DOC)</label>
@@ -244,32 +319,143 @@ export default function Policies() {
       ) : groups.length === 0 ? (
         <div className="card" style={{ color: "rgba(255,255,255,0.92)" }}>No company policies published yet.</div>
       ) : (
-        groups.map((g) => (
-          <div key={g.name} className="card" style={{ marginBottom: "0.75rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: "1.1rem", fontWeight: 800 }}>{g.name}</div>
-                {g.category && <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)" }}>{g.category}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1rem" }}>
+          {groups.map((g) => (
+            <div
+              key={g.name}
+              className="card"
+              onClick={() => openPolicy(g)}
+              style={{ cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.5rem", transition: "border-color 0.15s" }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem" }}>
+                <div style={{ fontSize: "1.05rem", fontWeight: 800 }}>{g.name}</div>
+                <span style={{ fontSize: "0.68rem", fontWeight: 800, color: "#22c55e", whiteSpace: "nowrap" }}>v{g.current.version}</span>
               </div>
-              {g.versions_count > 1 && (
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleHistory(g.name)}>
-                  {expanded === g.name ? "Hide history" : `View history (${g.versions_count} versions)`}
-                </button>
+              {g.category && (
+                <div style={{ fontSize: "0.72rem", color: "var(--brand-400)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {g.category}
+                </div>
               )}
+              <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.55)" }}>
+                Effective {formatDate(g.current.effective_date)}
+              </div>
+              {g.current.content && (
+                <div
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "rgba(255,255,255,0.75)",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}
+                >
+                  {g.current.content}
+                </div>
+              )}
+              <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "0.4rem" }}>
+                <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.5)" }}>
+                  {g.versions_count} version{g.versions_count === 1 ? "" : "s"}
+                  {g.current.attachment_name ? " · 📎 file" : ""}
+                </span>
+                <span style={{ fontSize: "0.78rem", color: "var(--brand-400)", fontWeight: 800 }}>View →</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Full-policy detail modal */}
+      {selected && (
+        <div
+          onClick={() => setSelected(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "3rem 1rem",
+            overflowY: "auto",
+          }}
+        >
+          <div
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 760, width: "100%", maxHeight: "85vh", overflowY: "auto" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+              <div>
+                <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{selected.name}</div>
+                {selected.category && (
+                  <div style={{ fontSize: "0.75rem", color: "var(--brand-400)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 2 }}>
+                    {selected.category}
+                  </div>
+                )}
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelected(null)}>✕ Close</button>
             </div>
 
-            {/* Current version */}
-            <VersionCard v={g.current} isCurrent canEdit={canEdit} onDelete={setConfirmDelete} />
+            {editing ? (
+              /* Edit an existing version in place */
+              <form onSubmit={saveEdit} style={{ marginTop: "0.75rem" }}>
+                {error && <div className="alert alert-error">{error}</div>}
+                <div className="form-group">
+                  <label>Version Title</label>
+                  <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} placeholder="Title" />
+                </div>
+                <div className="form-group">
+                  <label>Category</label>
+                  <input value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} placeholder="Category" />
+                </div>
+                <div className="form-group">
+                  <label>Effective Date</label>
+                  <input type="date" value={editForm.effective_date} onChange={(e) => setEditForm({ ...editForm, effective_date: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Policy Text</label>
+                  <RichTextEditor
+                    key={editing.id}
+                    value={editForm.content}
+                    onChange={(html) => setEditForm({ ...editForm, content: html })}
+                    placeholder="Policy text"
+                  />
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button type="submit" className="btn btn-primary" disabled={editBusy}>{editBusy ? "Saving…" : "Save Changes"}</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+                </div>
+                <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                  Editing v{editing.version} in place — this corrects the version without creating a new one.
+                </div>
+              </form>
+            ) : (
+              <>
+                {/* Current version (full content) */}
+                <div style={{ marginTop: "0.5rem" }}>
+                  <VersionCard v={selected.current} isCurrent canEdit={canEdit} onDelete={setConfirmDelete} onEdit={openEdit} />
+                </div>
 
-            {/* Previous versions */}
-            {expanded === g.name &&
-              (historyMap[g.name] || [])
-                .filter((v) => v.id !== g.current.id)
-                .map((v) => (
-                  <VersionCard key={v.id} v={v} isCurrent={false} canEdit={canEdit} onDelete={setConfirmDelete} />
-                ))}
+                {/* Previous versions */}
+                {selected.versions_count > 1 && (
+                  <div style={{ marginTop: "1rem" }}>
+                    <div style={{ fontSize: "0.8rem", fontWeight: 800, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Previous versions
+                    </div>
+                    {(historyMap[selected.name] || [])
+                      .filter((v) => v.id !== selected.current.id)
+                      .map((v) => (
+                        <VersionCard key={v.id} v={v} isCurrent={false} canEdit={canEdit} onDelete={setConfirmDelete} onEdit={openEdit} />
+                      ))}
+                    {!historyMap[selected.name] && <p className="text-muted" style={{ marginTop: "0.5rem" }}>Loading previous versions…</p>}
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        ))
+        </div>
       )}
 
       <ConfirmModal
