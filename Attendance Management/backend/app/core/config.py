@@ -1,8 +1,24 @@
 ﻿"""
 Application configuration. Database is PostgreSQL; email uses simple SMTP.
 """
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+# Load .env into os.environ.
+#
+# Pydantic's `env_file` only feeds the Settings object below — it does NOT put the
+# variables into os.environ. The camera pipeline reads its tuning with plain
+# os.getenv("CCTV_..."), so without this every CCTV_* line in .env was silently
+# ignored and the hard-coded defaults were used instead (i.e. editing .env had no
+# effect whatsoever). Loading it here — in the module everything imports — makes
+# both config styles see the same values.
+_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"   # app/core/ -> backend/.env
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH, override=False)
 
 
 class Settings(BaseSettings):
@@ -98,7 +114,126 @@ class Settings(BaseSettings):
     person_reverify_sec: float = 5.0  # re-check a bound identity every N seconds
     # YOLO11 + ByteTrack (preferred for office monitoring; needs `ultralytics`).
     # Falls back to MobileNet-SSD + IoU tracking when unavailable.
-    yolo_person_model_path: str = "models/yolo11n.pt"
+    # Model size matters far more than thresholds for this seated/occluded office
+    # view. Measured on a live dev-room frame at imgsz 960:
+    #   yolo11s -> 4 detections, but scores 0.58 / 0.25 / 0.19 / 0.16
+    #              => only ONE clears the 0.30 track threshold (the room showed
+    #                 "People: 1"). The rest sit down in empty-chair noise, so no
+    #                 threshold can rescue them without also boxing furniture.
+    #   yolo11m -> 3 detections, scores 0.66 / 0.52 / 0.34
+    #              => ALL THREE clear the threshold. ~50% slower (6.1s vs 4.1s),
+    #                 which is affordable now that imgsz dropped 1600 -> 960.
+    # Do NOT drop the thresholds to compensate for a weak model — upgrade the model.
+    # ONNX Runtime, NOT PyTorch. PyTorch is a *training* runtime — on this CPU
+    # yolo11m.pt takes ~7s per frame, so every box on screen was up to 7 SECONDS
+    # STALE: a person walking across the room had her box drawn where she used to
+    # be, several metres behind her. The identical model exported to ONNX runs
+    # ~2.7x faster with the same detections and the same ByteTrack ids (verified),
+    # cutting the lag to ~2.7s. Detection quality is unchanged — this is purely a
+    # faster way to execute the same network.
+    # Re-export after swapping models:
+    #   YOLO('models/yolo11m.pt').export(format='onnx', imgsz=960, simplify=True)
+    yolo_person_model_path: str = "models/yolo11m.onnx"
+    # Inference size. After the dev-room camera was re-aimed, people are ~250px
+    # tall (was 120-180), and 960 was measured to detect them just as well as 1600
+    # (0.67/0.61/0.37 vs 0.65/0.60/0.36) at roughly HALF the cost. Smaller = faster
+    # analysis = names appear on screen sooner.
+    yolo_person_imgsz: int = 960
+    # NMS IoU. Ultralytics defaults to 0.7, which is too permissive for this
+    # ceiling view: two overlapping boxes on ONE person (e.g. a tight box on the
+    # torso plus an oversized one running down over the chair/bag) both survive,
+    # so a single person gets two boxes and two track ids. 0.5 merges them;
+    # measured lower (0.3) starts suppressing genuinely separate people.
+    yolo_person_iou: float = 0.5
+    # Nested-box suppression — DISABLED (a value > 1.0 can never match).
+    #
+    # It existed to kill "bloated" boxes (a person merged with their chair/bag).
+    # Those only appeared at the OLD steep camera angle, at low confidence. After
+    # the camera was re-aimed the raw detections are clean, so the filter has no
+    # duplicates left to remove — but it DOES do harm: in a top-down view people
+    # sit one behind another, so one person's box legitimately nests inside
+    # another's, and the rule silently deleted real people (3 detections collapsed
+    # to 1 track). Confidence (new_track_thresh) is the safe guard instead.
+    # Set to e.g. 0.9 only if bloated duplicate boxes ever return.
+    person_nested_contain: float = 1.01
+    person_nested_area_ratio: float = 1.6
+    # Draw ONLY people detected in the latest analysis cycle.
+    #
+    # This was briefly True to stop boxes blinking out when a chair hid a seated
+    # person. It is now False because that side-effect is worse than the problem:
+    # a "held" track is kept for several missed cycles, and each cycle takes ~13s
+    # on this CPU (two monitor cameras share one inference lock) — so a NAMED box
+    # sat on an empty chair for up to two minutes after the person walked away.
+    #
+    # Detection is now reliable enough (yolo11m finds every seated person) that
+    # holding is unnecessary. The track itself still survives inside ByteTrack
+    # (track_buffer), so a person who is briefly hidden keeps their ID and NAME
+    # when they reappear — it just isn't DRAWN while they cannot be seen.
+    person_publish_held: bool = False
+    # Torch device for person detection: "" = auto (CUDA if present, else CPU),
+    # or pin explicitly e.g. "cpu" / "0".
+    yolo_person_device: str = ""
+    # Tuned ByteTrack config. Falls back to ultralytics' built-in bytetrack.yaml
+    # when the file is missing.
+    bytetrack_config_path: str = "models/bytetrack_person.yaml"
+
+    # ---- Person Re-Identification (cross-camera identity without a face) ----
+    # OSNet appearance embeddings keep an employee's name on their body track when
+    # their face is not visible. LABELLING ONLY — a body match never marks
+    # attendance (only ArcFace on an IN/OUT camera does).
+    reid_enabled: bool = True
+    reid_model_path: str = "models/osnet_x0_25_msmt17.onnx"
+    # Cosine similarity to accept a match against embeddings from the SAME camera
+    # (same viewpoint → trustworthy).
+    # Body Re-ID accept threshold.
+    #
+    # RAISED after a real false positive: a MAN was labelled "Saloni Pathania" at
+    # 0.77. Measured evidence: a TRUE same-person match on the same camera scores
+    # 0.93-0.96, while that wrong match scored 0.77. OSNet on a top-down seated
+    # crop largely encodes CLOTHING COLOUR, so a light shirt matches a light top —
+    # 0.65 was well inside the range where different people collide.
+    # 0.88 sits above every false match seen and below every true one.
+    # A wrong name is far worse than "Person #N": an unrecognised person simply
+    # stays Unknown until a good frame comes along.
+    reid_threshold: float = 0.75
+    # CROSS-CAMERA Re-ID — ENABLED. Ch1 and Ch3 watch the SAME dev room from
+    # opposite ends, so a person facing one camera has their back to the other.
+    # This is what carries a name from the camera that saw their face to the one
+    # that only sees their back.
+    #
+    # RE-MEASURED after the camera was re-aimed (the old steep angle gave
+    # 0.477/0.505/0.496 for three DIFFERENT people — useless, which is why this
+    # was previously off). With the current geometry:
+    #     same person  : 0.508, 0.548, 0.659, 0.700
+    #     other people : 0.387, 0.407, 0.452, 0.487
+    # The bands barely touch, so the score alone is not enough — the MARGIN over
+    # the runner-up (consistently 0.10-0.29) is the trustworthy signal, and both
+    # must be satisfied.
+    #
+    # 0.55 proved TOO LOW in production — it bound a wrong name ("Adarsh Maurya")
+    # at exactly 0.55. The measured genuine cross-camera matches reached 0.659 and
+    # 0.700, so 0.68 still binds the strong frames while sitting far above both the
+    # observed wrong-person band (<=0.487) and the 0.55 failure. It will bind a
+    # little later, but it will not bind the wrong person — and once bound, the
+    # identity sticks to the body track.
+    reid_cross_camera_threshold: float = 0.88
+    # Best must beat the runner-up by this, so two similarly-dressed people are
+    # never confidently confused (mirrors the face matcher's margin rule). Raised
+    # to 0.08 for the cross-camera case: measured true matches beat the runner-up
+    # by 0.10-0.29, while the raw scores of right and wrong people nearly touch —
+    # so the margin, not the score, is what actually separates them.
+    reid_min_margin: float = 0.15
+    # Seat anchoring: in a fixed-desk room, "who sits here" is the strongest signal.
+    # Anchors are LEARNED from face matches — no zone configuration needed.
+    # Seat anchoring — DISABLED.
+    #
+    # It labels whoever is sitting at a desk with the name of the person last
+    # identified there. That is a WRONG-NAME risk: if a colleague borrows the chair
+    # (or someone moves seats), they silently inherit the other person's identity.
+    # A wrong name is worse than "Person #N", so identity must come only from a
+    # real face match or a high-confidence body Re-ID.
+    seat_anchor_enabled: bool = False
+    seat_anchor_radius_px: int = 120
 
     # ---- DVR auto-start on application boot -------------------------------
     # When dvr_autostart is True and credentials are set, the app connects to

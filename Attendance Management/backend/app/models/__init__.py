@@ -19,6 +19,7 @@ from app.models.onboarding import OnboardingTask
 from app.models.dsr import DailyStatusReport
 from app.models.push_subscription import PushSubscription
 from app.models.camera import CameraConfig
+from app.models.body_embedding import BodyEmbedding
 
 __all__ = [
     "Base",
@@ -57,4 +58,5 @@ __all__ = [
     "DailyStatusReport",
     "PushSubscription",
     "CameraConfig",
+    "BodyEmbedding",
 ]

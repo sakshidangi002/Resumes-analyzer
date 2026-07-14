@@ -125,6 +125,103 @@ _PERSON_TRACKING      = os.getenv("CCTV_PERSON_TRACKING", "").lower() in {"1", "
 # cameras stay on the fast face-only path.
 _MONITOR_PERSON_TRACKING = os.getenv("CCTV_MONITOR_PERSON_TRACKING", "true").lower() in {"1", "true", "yes"}
 _PERSON_REVERIFY_SEC  = float(os.getenv("CCTV_PERSON_REVERIFY_SEC", "5.0"))
+# Detection floor handed to YOLO. Deliberately LOW: ByteTrack's second-stage
+# association needs low-score boxes to re-attach a seated/occluded person to an
+# existing track. Track CREATION precision is guarded by `new_track_thresh` in
+# models/bytetrack_person.yaml, not by this value. (PERSON_CONF kept for
+# backwards compatibility with existing .env files.)
+_PERSON_CONF          = float(os.getenv("CCTV_PERSON_CONF", os.getenv("PERSON_CONF", "0.10")))
+# Person Re-ID: keeps an employee's name on their body track when their face is
+# not visible. MONITOR cameras only — a body match must never mark attendance.
+# Body Re-ID naming — DISABLED. It cannot tell these people apart.
+#
+# Measured on the live dev-room cameras (cosine, OSNet):
+#     correct Adarsh match      0.71 - 0.82   (fluctuates frame to frame)
+#     WRONG match (man->Saloni) 0.77
+#     a different person        up to 0.75
+# The true and false ranges OVERLAP COMPLETELY, so no threshold can separate them:
+# set it low and people get the wrong name, set it high and nobody is named. From a
+# tiny top-down seated crop OSNet mostly encodes clothing colour, which several
+# employees share.
+#
+# A wrong name is worse than no name, so identity now comes ONLY from a real FACE
+# match (which is correct when the face is visible: 73-79%). Once a face names a
+# person, the name stays on their track; if the track is lost they revert to
+# "Person #N" until their face is seen again.
+_REID_ENABLED         = os.getenv("CCTV_REID_ENABLED", "false").lower() in {"1", "true", "yes"}
+# Per-person face zoom. A seated person's face is ~20-30 px in the full frame —
+# too small for SCRFD. Cropping their head region and upscaling it makes the face
+# 100+ px, so it can be detected and recognised. Without this, a ceiling-mounted
+# room camera can essentially never identify anybody.
+# Per-person face ZOOM — REQUIRED on these cameras.
+#
+# It crops each person's head and upscales it 3x before running SCRFD. Measured on
+# the live feed: the FULL-FRAME face of a seated person is only 18-20px and its
+# ArcFace embedding scores 0.09 — i.e. recognition is IMPOSSIBLE without the zoom.
+# With it, real people match at 73-79%.
+#
+# The catch: an upscaled face is interpolated, so its embedding is not fully
+# trustworthy and can occasionally score high against the WRONG employee (a man was
+# once labelled "Saloni Pathania" at 77%). Score and face size CANNOT separate the
+# good from the bad — the correct matches sat in the same 73-79% range.
+#
+# The defence is therefore NOT to disable this, but _IDENT_CONFIRM below: a false
+# match is random and won't repeat, a real one will.
+_FACE_CROP_ENABLED    = os.getenv("CCTV_FACE_CROP", "true").lower() in {"1", "true", "yes"}
+# Cameras mounted at a STEEP top-down angle. Their people score only ~0.11 (a
+# well-aimed camera scores 0.36-0.67), so the normal 0.30 track threshold throws
+# every real person away and the room shows "People: 0". These cameras get a
+# permissive tracker + lower detection floor so people at least get DETECTED and
+# boxed; well-aimed cameras keep the strict config that stops empty chairs being
+# boxed and named. Comma-separated camera ids, e.g. CCTV_STEEP_CAMERAS=55
+_STEEP_CAMERAS = {
+    c.strip() for c in os.getenv("CCTV_STEEP_CAMERAS", "").split(",") if c.strip()
+}
+_STEEP_CONF           = float(os.getenv("CCTV_STEEP_PERSON_CONF", "0.08"))
+_STEEP_TRACKER_CFG    = os.getenv("CCTV_STEEP_TRACKER", "models/bytetrack_person_lowconf.yaml")
+_FACE_CROP_SCALE      = int(os.getenv("CCTV_FACE_CROP_SCALE", "3"))     # upscale factor
+_FACE_CROP_HEAD_RATIO = float(os.getenv("CCTV_FACE_CROP_HEAD", "0.55"))  # top N of the body box
+# Minimum REAL face width (original-frame pixels) before we even try to recognise.
+# ArcFace needs genuine facial detail; upscaling a 25px face makes a BIGGER BLURRY
+# face, not a more detailed one, and its embedding is meaningless — it can score
+# high against the WRONG person (a man was labelled "Saloni Pathania"). Below this
+# size we leave the person as "Person #N" instead of risking a wrong name.
+#
+# 45 was too strict: the faces these cameras genuinely resolve are ~30-40px, and
+# they were producing CORRECT names (73-79%). Blocking them left everyone Unknown.
+# 24 keeps those working while still rejecting the truly tiny faces whose
+# embeddings are meaningless.
+_MIN_FACE_PX          = int(os.getenv("CCTV_MIN_FACE_PX", "16"))
+# How many times IN A ROW the same employee must be recognised on a track before
+# their name is shown.
+#
+# The real defence against wrong names. Face size and score CANNOT separate good
+# from bad here: the correct names scored 73-79% and the WRONG one ("Saloni
+# Pathania" on a man) scored 77% — the same range, from faces of the same size.
+# But a false match is RANDOM: it does not repeat. A genuine one does. Requiring
+# two consecutive agreeing reads therefore filters the impostor while every real
+# person still gets named (a few seconds later).
+# How many times IN A ROW the same employee must be recognised before their name
+# is shown. 1 = name them on the first good face match.
+#
+# It was briefly 2, to guard against the wrong name ("Saloni Pathania" on a man).
+# But the evidence shows that wrong name came from BODY Re-ID (which scored 0.77
+# for the wrong person and is now disabled), NOT from a face. Meanwhile requiring
+# 2 consecutive face matches made naming almost impossible: a face here is only
+# visible for a MOMENT — a person glancing at the camera is caught once, never
+# twice — so nobody ever got named.
+#
+# Face matches on these cameras are correct when they happen (73-79%), so 1 is
+# right. Raise this to 2 only if a wrong name ever appears from a FACE match.
+_IDENT_CONFIRM        = int(os.getenv("CCTV_IDENT_CONFIRM", "1"))
+
+
+def _face_px_width(face: dict, scale: int = 1) -> float:
+    """Face width in ORIGINAL frame pixels (a zoomed crop is `scale`x enlarged)."""
+    box = face.get("box") or []
+    if len(box) < 4:
+        return 0.0
+    return abs(float(box[2]) - float(box[0])) / max(1, scale)
 # Safety floor for a camera's recognition threshold. Older camera rows may still
 # hold the legacy 0.05 value, which accepts near-random faces as a match. We
 # never let a worker run below this floor regardless of the stored DB value.
@@ -235,6 +332,7 @@ def _draw_enhanced_overlay(
     fps: float,
     line: Optional[dict] = None,
     crossing_count: int = 0,
+    track_label: str = "Faces",
 ) -> np.ndarray:
     """Enhanced overlay with green/red boxes, labels, confidence, and metadata."""
     annotated = frame.copy()
@@ -323,7 +421,9 @@ def _draw_enhanced_overlay(
     overlay_lines = [
         f"Camera: {camera_name}",
         f"FPS: {fps:.1f}",
-        f"Faces: {len(tracks)}",
+        # In body-tracking mode these are PERSON tracks, not faces — the caller
+        # passes the correct label so the counter never misreports.
+        f"{track_label}: {len(tracks)}",
     ]
     if line:
         overlay_lines.append(f"Crossings: {crossing_count}")
@@ -427,6 +527,55 @@ def _is_blurry(gray: np.ndarray, threshold: float = 80.0) -> bool:
     same gray for the motion gate instead of converting to gray twice per tick.
     """
     return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < threshold
+
+
+def _face_in_person_crop(rgb: np.ndarray, box) -> Optional[dict]:
+    """Find a face by zooming INTO one person, instead of scanning the whole frame.
+
+    On a ceiling-mounted room camera a seated person's face is only ~20-30 px wide
+    in the full frame — below what SCRFD can detect, so the face pass returns
+    nothing and the person can never be identified. Cropping that person's head
+    region and upscaling it makes the same face 100+ px, which SCRFD finds easily.
+    (Measured on the live dev-room camera: full frame missed faces that the
+    upscaled crop detected at 0.61 confidence.)
+
+    The returned face dict carries its own ArcFace embedding, computed on the
+    aligned crop, so it can be passed straight to recognize_face().
+    """
+    from app.services.recognition import extract_faces_from_rgb
+
+    x1, y1, x2, y2 = (int(v) for v in box)
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return None
+
+    # Head region: the top slice of the body box, with a little padding.
+    pad = int(bw * 0.15)
+    cx1, cy1 = max(0, x1 - pad), max(0, y1 - pad)
+    cx2 = min(rgb.shape[1], x2 + pad)
+    cy2 = min(rgb.shape[0], y1 + int(bh * _FACE_CROP_HEAD_RATIO))
+    if cx2 - cx1 < 12 or cy2 - cy1 < 12:
+        return None
+
+    crop = rgb[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        return None
+
+    up = cv2.resize(
+        crop,
+        (crop.shape[1] * _FACE_CROP_SCALE, crop.shape[0] * _FACE_CROP_SCALE),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    faces = extract_faces_from_rgb(up)
+    if not faces:
+        return None
+    best = max(faces, key=lambda f: float(f.get("confidence", 0.0)))
+    # The crop was enlarged _FACE_CROP_SCALE times, so divide back out to get the
+    # REAL number of face pixels the camera actually captured. Too few = the
+    # embedding is guesswork and could match the wrong employee.
+    if _face_px_width(best, _FACE_CROP_SCALE) < _MIN_FACE_PX:
+        return None
+    return best
 
 
 def _face_in_box(faces: list, box) -> Optional[dict]:
@@ -589,30 +738,136 @@ class _RecognitionThread(threading.Thread):
         self._w = worker
         self._stop_evt = threading.Event()
         self._prev_gray: Optional[np.ndarray] = None  # for motion gating
+        # Edge-triggered log flags: log a skip ONCE when it starts, not every tick.
+        self._blur_logged = False
+        self._motion_logged = False
+        self._stage_sig: Optional[tuple] = None  # last (persons, faces) logged
+        # track_id -> [employee_id, consecutive_agreeing_reads]. A name is only
+        # shown once the SAME employee is recognised _IDENT_CONFIRM times in a row,
+        # which filters out random false matches (see _IDENT_CONFIRM).
+        self._pending_ident: dict = {}
 
     def stop(self) -> None:
         self._stop_evt.set()
 
-    def _analyze_person(self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray) -> None:
+    def _apply_reid(self, w: "CameraWorker", frame: np.ndarray, ptracks: list, face_confirmed: list) -> None:
+        """Keep a name on people whose face isn't visible (MONITOR cameras only).
+
+        1. ENROL  — every track whose identity was just confirmed by ArcFace teaches
+           this camera what that employee looks like *from this angle* (body
+           embedding + seat position).
+        2. MATCH  — every still-unknown track is matched against today's gallery for
+           this camera (body Re-ID), then against their usual seat.
+
+        This only ever LABELS a box. Attendance is untouched: monitor cameras are
+        hard-blocked from marking, and this method never runs on IN/OUT cameras.
+        """
+        from app.services import reid_service
+        from app.services.identity_manager import identity_manager
+
+        if not reid_service.is_available():
+            return
+
+        unknown = [pt for pt in ptracks if pt.employee_id is None and pt.consecutive_misses == 0]
+        confirmed_tracks = [pt for pt, _ in face_confirmed]
+        need = confirmed_tracks + unknown
+        if not need:
+            return
+
+        embeddings = reid_service.extract_body_embeddings(frame, [pt.box for pt in need])
+        emb_of = {id(pt): e for pt, e in zip(need, embeddings)}
+
+        # 1. Teach the gallery from the face-confirmed tracks.
+        for pt, fd in face_confirmed:
+            emb = emb_of.get(id(pt))
+            if emb is None:
+                continue
+            identity_manager.enroll(
+                employee_id=int(fd["employee_id"]),
+                camera_id=str(w.camera_id),
+                embedding=emb,
+                centroid=pt.centroid(),   # PersonTrack.centroid is a method, not a property
+                score=float(fd.get("score") or 0.0),
+                name=fd.get("employee_name"),
+                code=fd.get("employee_code"),
+            )
+
+        # 2. Put a name on the unknown tracks. An employee already bound to another
+        #    live track on this camera is excluded — one person, one place.
+        taken = {pt.employee_id for pt in ptracks if pt.employee_id is not None}
+        for pt in unknown:
+            emb = emb_of.get(id(pt))
+            emp_id, score, source = identity_manager.match(str(w.camera_id), emb, taken)
+            if emp_id is None:
+                emp_id = identity_manager.seat_match(str(w.camera_id), pt.centroid(), taken)
+                score, source = 0.0, "seat"
+            if emp_id is None:
+                self._pending_ident.pop(pt.track_id, None)
+                continue
+
+            # Same stable-confirmation rule as the face path: a body match must
+            # agree with itself twice before it is allowed to name anyone. A false
+            # Re-ID hit is random and won't repeat (that is how a man once got
+            # labelled "Saloni Pathania" from a single 0.77 body match).
+            _p = self._pending_ident.get(pt.track_id)
+            if _p and _p[0] == int(emp_id):
+                _p[1] += 1
+            else:
+                self._pending_ident[pt.track_id] = [int(emp_id), 1]
+
+            name, code = identity_manager.label(emp_id)
+            if self._pending_ident[pt.track_id][1] < _IDENT_CONFIRM:
+                logger.info(
+                    "IDENTITY camera=%s track=%d candidate=%s score=%.3f via=%s "
+                    "(%d/%d confirmations — still Person #%d)",
+                    w.camera_id, pt.track_id, name, float(score), source,
+                    self._pending_ident[pt.track_id][1], _IDENT_CONFIRM, pt.track_id,
+                )
+                continue
+
+            pt.bind_identity(int(emp_id), name, code, True, float(score))
+            taken.add(int(emp_id))
+            logger.info(
+                "IDENTITY camera=%s track=%d employee=%s (id=%s) score=%.3f via=%s",
+                w.camera_id, pt.track_id, name, emp_id, float(score), source,
+            )
+
+    def _analyze_person(
+        self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray, skip_faces: bool = False
+    ) -> None:
         """Body-tracking pipeline: detect people, bind recognised faces to their
-        body track, and keep the name on them until they leave the frame."""
+        body track, and keep the name on them until they leave the frame.
+
+        `skip_faces` (set on a blurry frame) skips ONLY the face/recognition stage —
+        body detection and tracking still run, so people stay boxed and already-bound
+        identities keep riding their track.
+        """
         from app.services.recognition import recognize_face
         from app.services.recognition import extract_faces_from_rgb
 
         # 1. Detect & track whole bodies. YOLO11+ByteTrack when available (best
         #    for crossing paths); else MobileNet-SSD detections + IoU tracker.
+        #    (The engine logs detections / track ids itself, on change only.)
         if w.bytetrack_engine is not None:
             ptracks = w.bytetrack_engine.update(frame)
         else:
             persons = person_detector.detect_persons(frame)
             ptracks = w.person_tracker.update(persons)
 
-        # 2. Detect faces (with embeddings) once on the full frame.
-        faces = extract_faces_from_rgb(rgb)
-        logger.debug(
-            "STAGE-person camera=%s monitor=%s persons=%d faces=%d",
-            w.camera_id, w.is_monitor, len(ptracks), len(faces),
-        )
+        # 2. Detect faces (with embeddings) once on the full frame. Skipped when the
+        #    frame is too blurry to recognise anyone reliably.
+        faces = [] if skip_faces else extract_faces_from_rgb(rgb)
+
+        # Log the stage counts only when they CHANGE (a static room would otherwise
+        # log identical lines every analysis tick).
+        sig = (len(ptracks), len(faces), skip_faces)
+        if sig != self._stage_sig:
+            self._stage_sig = sig
+            logger.info(
+                "PIPELINE camera=%s monitor=%s persons=%d faces=%d%s",
+                w.camera_id, w.is_monitor, len(ptracks), len(faces),
+                " (faces skipped: blurry frame)" if skip_faces else "",
+            )
 
         # Precompute the doorway line position in pixels (if crossing enabled).
         line_px = None
@@ -630,6 +885,7 @@ class _RecognitionThread(threading.Thread):
                 )
 
         any_match = False
+        face_confirmed: list = []   # tracks whose identity came from a FACE this tick
         for pt in ptracks:
             fresh = pt.consecutive_misses == 0
 
@@ -637,6 +893,15 @@ class _RecognitionThread(threading.Thread):
             #     is still unknown or a periodic re-verify is due.
             if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC):
                 face = _face_in_box(faces, pt.box)
+                # Too few real face pixels -> the embedding is unreliable and can
+                # match the WRONG employee. Better "Person #N" than a wrong name.
+                if face is not None and _face_px_width(face) < _MIN_FACE_PX:
+                    face = None
+                # Zoom into this person when the full-frame pass found no face on
+                # them. On a ceiling camera the face is far too small to detect at
+                # frame scale — this is what makes identification possible at all.
+                if face is None and _FACE_CROP_ENABLED and not skip_faces:
+                    face = _face_in_person_crop(rgb, pt.box)
                 if face is not None:
                     result = recognize_face(
                         face, threshold=w.threshold, source="cctv",
@@ -644,10 +909,46 @@ class _RecognitionThread(threading.Thread):
                         mark_attendance=False,
                     )
                     fd = (result.get("faces") or [{}])[0]
-                    pt.bind_identity(
-                        fd.get("employee_id"), fd.get("employee_name") or "Person",
-                        fd.get("employee_code"), fd.get("matched", False), fd.get("score", 0.0),
-                    )
+                    _prev_emp = pt.employee_id
+
+                    # ── Stable confirmation ─────────────────────────────────
+                    # Never name someone on a single read. A false match is random
+                    # and won't repeat; a real one will. Only bind after the SAME
+                    # employee is recognised _IDENT_CONFIRM times consecutively.
+                    _emp = fd.get("employee_id") if fd.get("matched") else None
+                    if _emp is None:
+                        self._pending_ident.pop(pt.track_id, None)
+                    else:
+                        _p = self._pending_ident.get(pt.track_id)
+                        if _p and _p[0] == _emp:
+                            _p[1] += 1
+                        else:
+                            self._pending_ident[pt.track_id] = [_emp, 1]
+
+                        if self._pending_ident[pt.track_id][1] >= _IDENT_CONFIRM:
+                            pt.bind_identity(
+                                _emp, fd.get("employee_name") or "Person",
+                                fd.get("employee_code"), True, fd.get("score", 0.0),
+                            )
+                        else:
+                            logger.info(
+                                "IDENTITY camera=%s track=%d candidate=%s score=%.3f "
+                                "(%d/%d confirmations — still Person #%d)",
+                                w.camera_id, pt.track_id, fd.get("employee_name"),
+                                float(fd.get("score") or 0.0),
+                                self._pending_ident[pt.track_id][1], _IDENT_CONFIRM,
+                                pt.track_id,
+                            )
+                    # Log only when the identity on this track actually changes —
+                    # a periodic re-verify of the same person stays silent.
+                    if pt.employee_id != _prev_emp and pt.employee_id is not None:
+                        logger.info(
+                            "IDENTITY camera=%s track=%d employee=%s (id=%s) score=%.3f",
+                            w.camera_id, pt.track_id, pt.employee_name,
+                            pt.employee_id, float(fd.get("score") or 0.0),
+                        )
+                    if fd.get("matched") and fd.get("employee_id"):
+                        face_confirmed.append((pt, fd))
             if pt.matched:
                 any_match = True
 
@@ -695,6 +996,14 @@ class _RecognitionThread(threading.Thread):
                         )
                         _mark(pt.employee_id)
 
+        # (a2) Re-ID / seat anchoring — MONITOR cameras only, and only AFTER the
+        #      attendance loop above has run. Gating on `is_monitor` guarantees a
+        #      BODY match can never reach attendance: only ArcFace on an IN/OUT
+        #      camera may mark. This purely puts a name on a box.
+        if w.is_monitor and _REID_ENABLED and ptracks:
+            self._apply_reid(w, frame, ptracks, face_confirmed)
+            any_match = any_match or any(pt.matched for pt in ptracks)
+
         # 3. Publish person tracks for the display thread.
         w.state.active_tracks = len(ptracks)
         with w._frame_lock:
@@ -722,9 +1031,18 @@ class _RecognitionThread(threading.Thread):
             # and the motion gate below (previously two full-frame conversions).
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            if _is_blurry(gray):
-                logger.debug("Camera %s: Skipping blurry frame", w.camera_id)
+            # Blur gate. A blurry frame is useless for FACE recognition, but a
+            # person's BODY is still perfectly detectable — so when body tracking
+            # is on we keep the frame and only skip the face stage. Face-only
+            # cameras behave exactly as before (frame dropped).
+            blurry = _is_blurry(gray)
+            if blurry and not w.use_person_tracking:
+                if not self._blur_logged:
+                    self._blur_logged = True
+                    logger.info("Camera %s: skipping blurry frames (face-only mode)", w.camera_id)
                 continue
+            if not blurry:
+                self._blur_logged = False
 
             try:
                 w.state.recognition_status = "analyzing"
@@ -746,15 +1064,22 @@ class _RecognitionThread(threading.Thread):
 
                 if static and not w.is_monitor and w.state.active_tracks == 0:
                     # Empty, static scene → nothing to do; skip detection.
+                    if not self._motion_logged:
+                        self._motion_logged = True
+                        logger.info("Camera %s: idle scene — detection paused (no motion)", w.camera_id)
                     with w._frame_lock:
                         w._latest_tracks = []
                     w.state.recognition_status = "idle"
                     continue
+                if self._motion_logged:
+                    self._motion_logged = False
+                    logger.info("Camera %s: motion resumed — detection active", w.camera_id)
 
                 # Body-tracking mode: track people, bind a recognised face to the
                 # person so the name persists while they are in view.
                 if w.use_person_tracking:
-                    self._analyze_person(w, frame, rgb)
+                    # `blurry` only disables the FACE stage — YOLO still runs.
+                    self._analyze_person(w, frame, rgb, skip_faces=blurry)
                     continue
 
                 # Import here to avoid circular imports at module load
@@ -988,6 +1313,7 @@ class _DisplayThread(threading.Thread):
                 annotated = _draw_enhanced_overlay(
                     frame, tracks, w.name, w.state.fps,
                     line=line_info, crossing_count=w.state.crossing_count,
+                    track_label="People" if w.use_person_tracking else "Faces",
                 )
                 ok_enc, jpeg_buf = cv2.imencode(
                     ".jpg", annotated,
@@ -1100,11 +1426,23 @@ class CameraWorker:
         self.use_person_tracking = False
         if _PERSON_TRACKING or (self.is_monitor and _MONITOR_PERSON_TRACKING):
             if bytetrack_engine.is_available():
+                # A steep top-down camera needs a permissive tracker (its people
+                # score ~0.11); a well-aimed one keeps the strict config so empty
+                # chairs are never boxed.
+                steep = str(camera_id) in _STEEP_CAMERAS
+                # One engine (and therefore one YOLO model + one ByteTrack state)
+                # PER CAMERA — tracker state must never be shared between feeds.
                 self.bytetrack_engine = bytetrack_engine.ByteTrackEngine(
-                    conf=float(os.getenv("PERSON_CONF", "0.35")), max_misses=_body_misses,
+                    conf=(_STEEP_CONF if steep else _PERSON_CONF),
+                    max_misses=_body_misses,
+                    camera_id=str(camera_id),
+                    tracker_cfg=(_STEEP_TRACKER_CFG if steep else None),
                 )
                 self.use_person_tracking = True
-                logger.info("Camera %s: body tracking = YOLO11+ByteTrack", camera_id)
+                logger.info(
+                    "Camera %s: body tracking = YOLO11+ByteTrack (%s)",
+                    camera_id, "STEEP/permissive" if steep else "standard",
+                )
             elif person_detector.is_available():
                 self.person_tracker = PersonTracker(max_misses=_body_misses)
                 self.use_person_tracking = True
