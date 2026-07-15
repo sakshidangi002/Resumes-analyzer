@@ -375,8 +375,23 @@ def admin_set_attendance(
     rec = get_or_create_attendance(db, data.employee_id, data.date)
     rec.sign_in_time = data.sign_in_time
     rec.sign_out_time = data.sign_out_time
-    rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
-    apply_status_from_hours(db, rec)
+    # Pin the sides HR filled in so a later camera detection cannot overwrite
+    # them. Clearing a field releases its pin, handing that side back to the
+    # camera.
+    rec.sign_in_manual = data.sign_in_time is not None
+    rec.sign_out_manual = data.sign_out_time is not None
+    if data.break_hours is not None:
+        if data.break_hours < 0:
+            raise HTTPException(status_code=400, detail="Break time cannot be negative")
+        rec.total_break_hours = data.break_hours
+        rec.break_manual = True
+    else:
+        rec.break_manual = False
+    db.flush()
+
+    # One code path computes hours/status/late for both camera and manual entry,
+    # so a manual edit is netted of break time exactly like a camera day is.
+    rec = recalculate_attendance_summary(db, data.employee_id, data.date)
 
     if rec.sign_in_time is None and rec.sign_out_time is None:
         if rec.is_weekly_off:

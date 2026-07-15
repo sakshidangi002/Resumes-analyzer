@@ -2,6 +2,7 @@
 import calendar as _calendar
 from datetime import date, time, datetime, timedelta
 from decimal import Decimal
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import AttendanceRecord, CompanyConfig, Holiday
 
@@ -42,11 +43,15 @@ def apply_weekly_off_and_holiday(db: Session, record: AttendanceRecord) -> None:
             record.status = "HOLIDAY"
 
 
-def get_or_create_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord:
-    rec = db.query(AttendanceRecord).filter(
+def _find_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord | None:
+    return db.query(AttendanceRecord).filter(
         AttendanceRecord.employee_id == employee_id,
         AttendanceRecord.date == d,
     ).first()
+
+
+def get_or_create_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord:
+    rec = _find_attendance(db, employee_id, d)
     if rec:
         return rec
     config = get_company_config(db)
@@ -66,8 +71,19 @@ def get_or_create_attendance(db: Session, employee_id: int, d: date) -> Attendan
         is_holiday=is_hol,
         source="AUTO",
     )
-    db.add(rec)
-    db.flush()
+    # Concurrent camera workers can reach this point for the same employee/day
+    # at once. The uq_attendance_employee_date constraint makes the loser fail;
+    # roll back only the failed INSERT (savepoint) and take the winner's row.
+    try:
+        with db.begin_nested():
+            db.add(rec)
+            db.flush()
+    except IntegrityError:
+        db.expire_all()
+        existing = _find_attendance(db, employee_id, d)
+        if existing is None:
+            raise
+        return existing
     return rec
 
 

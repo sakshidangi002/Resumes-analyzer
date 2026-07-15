@@ -15,6 +15,7 @@ from app.models.event import Event
 from app.models.in_app_notification import AppNotification
 from app.models.hr_query import HRQuery, HRQueryReply
 from app.models.company_policy import CompanyPolicy
+from app.models.interview_question import InterviewQuestion
 from app.models.onboarding import OnboardingTask
 from app.models.dsr import DailyStatusReport
 from app.models.push_subscription import PushSubscription
@@ -54,6 +55,7 @@ __all__ = [
     "HRQuery",
     "HRQueryReply",
     "CompanyPolicy",
+    "InterviewQuestion",
     "OnboardingTask",
     "DailyStatusReport",
     "PushSubscription",

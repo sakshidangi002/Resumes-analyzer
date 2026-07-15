@@ -27,6 +27,176 @@ function sanitizeHtml(html: string): string {
   return tpl.innerHTML;
 }
 
+// Card excerpts must show readable prose, not the raw HTML the editor stores.
+function toPlainText(html: string): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html || "";
+  return (tpl.content.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function PolicyCard({ g, onOpen }: { g: PolicyGroupRow; onOpen: () => void }) {
+  const [hover, setHover] = useState(false);
+  const excerpt = toPlainText(g.current.content || "");
+
+  return (
+    <div
+      onClick={onOpen}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 200,
+        padding: "1.15rem",
+        borderRadius: 14,
+        background: hover
+          ? "linear-gradient(160deg, rgba(59,130,246,0.10), rgba(255,255,255,0.03))"
+          : "rgba(255,255,255,0.025)",
+        border: `1px solid ${hover ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.08)"}`,
+        boxShadow: hover ? "0 10px 28px rgba(0,0,0,0.35)" : "0 1px 2px rgba(0,0,0,0.2)",
+        transform: hover ? "translateY(-3px)" : "translateY(0)",
+        transition: "transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div
+          style={{
+            flexShrink: 0,
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(59,130,246,0.14)",
+            border: "1px solid rgba(59,130,246,0.28)",
+            color: "#60a5fa",
+          }}
+        >
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6M9 13h6M9 17h4" />
+          </svg>
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              fontSize: "1.02rem",
+              fontWeight: 700,
+              lineHeight: 1.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={g.name}
+          >
+            {g.name}
+          </div>
+          <div style={{ fontSize: "0.74rem", color: "rgba(255,255,255,0.45)", marginTop: 3 }}>
+            Effective {formatDate(g.current.effective_date)}
+          </div>
+        </div>
+        <span
+          style={{
+            flexShrink: 0,
+            alignSelf: "flex-start",
+            fontSize: "0.68rem",
+            fontWeight: 700,
+            color: "#4ade80",
+            background: "rgba(34,197,94,0.12)",
+            border: "1px solid rgba(34,197,94,0.3)",
+            borderRadius: 999,
+            padding: "2px 8px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          v{g.current.version}
+        </span>
+      </div>
+
+      {g.category && (
+        <div
+          style={{
+            alignSelf: "flex-start",
+            marginTop: "0.85rem",
+            fontSize: "0.66rem",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "var(--brand-400)",
+            background: "rgba(59,130,246,0.10)",
+            borderRadius: 6,
+            padding: "3px 8px",
+          }}
+        >
+          {g.category}
+        </div>
+      )}
+
+      {excerpt && (
+        <p
+          style={{
+            margin: "0.85rem 0 0",
+            fontSize: "0.85rem",
+            lineHeight: 1.55,
+            color: "rgba(255,255,255,0.62)",
+            display: "-webkit-box",
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {excerpt}
+        </p>
+      )}
+
+      <div
+        style={{
+          marginTop: "auto",
+          paddingTop: "0.9rem",
+          borderTop: "1px solid rgba(255,255,255,0.07)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "0.5rem",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)" }}>
+          {g.versions_count} version{g.versions_count === 1 ? "" : "s"}
+          {g.current.attachment_name && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                color: "rgba(255,255,255,0.6)",
+                background: "rgba(255,255,255,0.06)",
+                borderRadius: 5,
+                padding: "1px 6px",
+              }}
+            >
+              📎 file
+            </span>
+          )}
+        </span>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: "0.77rem",
+            fontWeight: 700,
+            color: hover ? "#93c5fd" : "var(--brand-400)",
+          }}
+        >
+          View
+          <span style={{ transform: hover ? "translateX(3px)" : "none", transition: "transform .18s ease" }}>→</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const emptyForm = {
   name: "",
   title: "",
@@ -319,48 +489,9 @@ export default function Policies() {
       ) : groups.length === 0 ? (
         <div className="card" style={{ color: "rgba(255,255,255,0.92)" }}>No company policies published yet.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1.1rem" }}>
           {groups.map((g) => (
-            <div
-              key={g.name}
-              className="card"
-              onClick={() => openPolicy(g)}
-              style={{ cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.5rem", transition: "border-color 0.15s" }}
-            >
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem" }}>
-                <div style={{ fontSize: "1.05rem", fontWeight: 800 }}>{g.name}</div>
-                <span style={{ fontSize: "0.68rem", fontWeight: 800, color: "#22c55e", whiteSpace: "nowrap" }}>v{g.current.version}</span>
-              </div>
-              {g.category && (
-                <div style={{ fontSize: "0.72rem", color: "var(--brand-400)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  {g.category}
-                </div>
-              )}
-              <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.55)" }}>
-                Effective {formatDate(g.current.effective_date)}
-              </div>
-              {g.current.content && (
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "rgba(255,255,255,0.75)",
-                    display: "-webkit-box",
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                  }}
-                >
-                  {g.current.content}
-                </div>
-              )}
-              <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "0.4rem" }}>
-                <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.5)" }}>
-                  {g.versions_count} version{g.versions_count === 1 ? "" : "s"}
-                  {g.current.attachment_name ? " · 📎 file" : ""}
-                </span>
-                <span style={{ fontSize: "0.78rem", color: "var(--brand-400)", fontWeight: 800 }}>View →</span>
-              </div>
-            </div>
+            <PolicyCard key={g.name} g={g} onOpen={() => openPolicy(g)} />
           ))}
         </div>
       )}

@@ -205,6 +205,11 @@ export default function Attendance() {
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [records, setRecords] = useState<AttendanceRow[]>([]);
   const [employees, setEmployees] = useState<EmployeeInfo[]>([]);
+  // Non-Employee staff (Housekeeping, Security, …). They are recognised on
+  // camera and their attendance is recorded, but it is reported in its own tab
+  // and never mixed into employee counts or reports.
+  const [staffMembers, setStaffMembers] = useState<EmployeeInfo[]>([]);
+  const [rosterTab, setRosterTab] = useState<"employees" | "staff">("employees");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -214,6 +219,7 @@ export default function Attendance() {
     date: string;
     sign_in_time: string;
     sign_out_time: string;
+    break_minutes: string;   // blank = leave the break to the camera
     status: string;
   } | null>(null);
 
@@ -298,12 +304,11 @@ export default function Attendance() {
         }
         if (isHrOrAdmin) {
           if (empsResult.status === "fulfilled") {
-            // Daily attendance is for real employees only — exclude non-Employee
-            // staff (e.g. Housekeeping / Security), matching the backend rule.
-            const emps = (empsResult.value.data || []).filter(
-              (e: EmployeeInfo) => (e.staff_type ?? "Employee").toLowerCase() === "employee"
-            );
-            setEmployees(emps);
+            const all: EmployeeInfo[] = empsResult.value.data || [];
+            const isEmployee = (e: EmployeeInfo) =>
+              (e.staff_type ?? "Employee").toLowerCase() === "employee";
+            setEmployees(all.filter(isEmployee));
+            setStaffMembers(all.filter((e) => !isEmployee(e)));
           }
         }
       })
@@ -359,21 +364,25 @@ export default function Attendance() {
     if (dialogOverride) {
       rec = dialogRecords.find((r) => r.employee_id === employee_id && r.date === date);
     }
+    const breakHours = Number(rec?.total_break_hours ?? 0);
     setEditCell({
       employee_id,
       date,
       sign_in_time: rec?.sign_in_time || "",
       sign_out_time: rec?.sign_out_time || "",
+      break_minutes: breakHours > 0 ? String(Math.round(breakHours * 60)) : "",
       status: rec?.status || "PRESENT",
     });
   };
 
 
-  // Auto-calculate status from time-in/time-out vs expected working hours
+  // Auto-calculate status from time-in/time-out vs expected working hours.
+  // Break time is time away from work, so it never counts toward hours worked.
   const calcStatusFromTimes = (
     signIn: string,
     signOut: string,
-    employeeId: number
+    employeeId: number,
+    breakMinutes: string | number = 0
   ): { status: string; hoursWorked: number } => {
     const emp = employees.find(e => e.id === employeeId);
     const expected = emp?.expected_working_hours || 9;
@@ -382,7 +391,8 @@ export default function Attendance() {
     const [oh, om] = signOut.split(":").map(Number);
     const inMins = ih * 60 + im;
     const outMins = oh * 60 + om;
-    const workedMins = outMins - inMins;
+    const breakMins = Math.max(0, Number(breakMinutes) || 0);
+    const workedMins = outMins - inMins - breakMins;
     if (workedMins <= 0) return { status: "ABSENT", hoursWorked: 0 };
     const hoursWorked = workedMins / 60;
     const expectedMins = expected * 60;
@@ -398,11 +408,15 @@ export default function Attendance() {
     // If status is "PRESENT" and we just added times, let backend decide if it's Full/Short/Half
     // unless the user specifically changed the status.
     const normalizedStatus = editCell.status;
+    // Blank break = leave it to the camera; a typed value pins it and is
+    // deducted from working hours.
+    const breakEntered = editCell.break_minutes.trim() !== "";
     api.adminSet({
       employee_id: editCell.employee_id,
       date: editCell.date,
       sign_in_time: editCell.sign_in_time || null,
       sign_out_time: editCell.sign_out_time || null,
+      break_hours: breakEntered ? Number(editCell.break_minutes) / 60 : null,
       status: normalizedStatus,
     })
       .then(() => {
@@ -559,7 +573,9 @@ export default function Attendance() {
 
   const selectedIsWeekend = [0, 6].includes(selectedDateObj.getDay());
 
-  const employeeRows = [...employees]
+  const activeRoster = rosterTab === "staff" ? staffMembers : employees;
+
+  const employeeRows = [...activeRoster]
     .sort((a, b) => (Number(a.employee_code) || 0) - (Number(b.employee_code) || 0))
     .map(e => ({ info: e, rec: records.find(r => r.employee_id === e.id && r.date === selectedDate) }));
 
@@ -610,11 +626,42 @@ export default function Attendance() {
       {error && !editCell && <div className="alert alert-error">{error}</div>}
 
       <div className="card" style={{ padding: "1.5rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>
+          {([
+            { key: "employees", label: "Employees", count: employees.length },
+            { key: "staff", label: "Non-Employee Staff", count: staffMembers.length },
+          ] as const).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => { setRosterTab(tab.key); setAttendanceSearch(""); }}
+              style={{
+                background: rosterTab === tab.key ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${rosterTab === tab.key ? "rgba(59,130,246,0.55)" : "rgba(255,255,255,0.1)"}`,
+                color: rosterTab === tab.key ? "#60a5fa" : "rgba(255,255,255,0.65)",
+                borderRadius: "8px",
+                padding: "0.5rem 1rem",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {tab.label} <span style={{ opacity: 0.7 }}>({tab.count})</span>
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>Daily Attendance</h3>
-              <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>{dayLabelFull}</div>
+              <h3 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>
+                {rosterTab === "staff" ? "Non-Employee Staff Attendance" : "Daily Attendance"}
+              </h3>
+              <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>
+                {rosterTab === "staff"
+                  ? `${dayLabelFull} · not counted in employee reports`
+                  : dayLabelFull}
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: "0.75rem" }}>
@@ -833,11 +880,16 @@ export default function Attendance() {
               <h3>Update Attendance - {editCell.date}</h3>
               {error && <div className="alert alert-error" style={{ marginBottom: "1rem", padding: "0.75rem" }}>{error}</div>}
               <form onSubmit={handleSaveCell}>
-                <div className="modal-form-grid">
+                {/* Four fields on one row (the shared .modal-form-grid is 3-up,
+                    which pushed Status onto its own line). */}
+                <div
+                  className="modal-form-grid"
+                  style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", alignItems: "start", gap: "0.85rem" }}
+                >
                   <div className="form-group"><label>Time In</label><input type="time" value={editCell.sign_in_time} onChange={e => {
                     const newIn = e.target.value;
                     if (editCell.sign_out_time) {
-                      const { status } = calcStatusFromTimes(newIn, editCell.sign_out_time, editCell.employee_id);
+                      const { status } = calcStatusFromTimes(newIn, editCell.sign_out_time, editCell.employee_id, editCell.break_minutes);
                       setEditCell({ ...editCell, sign_in_time: newIn, status });
                     } else {
                       setEditCell({ ...editCell, sign_in_time: newIn });
@@ -848,22 +900,31 @@ export default function Attendance() {
                     <input type="time" value={editCell.sign_out_time} onChange={e => {
                       const newOut = e.target.value;
                       if (editCell.sign_in_time && newOut) {
-                        const { status } = calcStatusFromTimes(editCell.sign_in_time, newOut, editCell.employee_id);
+                        const { status } = calcStatusFromTimes(editCell.sign_in_time, newOut, editCell.employee_id, editCell.break_minutes);
                         setEditCell({ ...editCell, sign_out_time: newOut, status });
                       } else {
                         setEditCell({ ...editCell, sign_out_time: newOut });
                       }
                     }} />
-                    {editCell.sign_in_time && editCell.sign_out_time && (() => {
-                      const { hoursWorked } = calcStatusFromTimes(editCell.sign_in_time, editCell.sign_out_time, editCell.employee_id);
-                      const h = Math.floor(hoursWorked);
-                      const m = Math.round((hoursWorked - h) * 60);
-                      return hoursWorked > 0 ? (
-                        <div style={{ fontSize: '0.75rem', marginTop: '4px', color: '#60a5fa', fontWeight: 600 }}>
-                          ⏱ {h}h {m}m worked · status auto-set
-                        </div>
-                      ) : null;
-                    })()}
+                  </div>
+                  <div className="form-group">
+                    <label>Break Time (minutes)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={5}
+                      placeholder="e.g. 60"
+                      value={editCell.break_minutes}
+                      onChange={e => {
+                        const newBreak = e.target.value;
+                        if (editCell.sign_in_time && editCell.sign_out_time) {
+                          const { status } = calcStatusFromTimes(editCell.sign_in_time, editCell.sign_out_time, editCell.employee_id, newBreak);
+                          setEditCell({ ...editCell, break_minutes: newBreak, status });
+                        } else {
+                          setEditCell({ ...editCell, break_minutes: newBreak });
+                        }
+                      }}
+                    />
                   </div>
                   <div className="form-group">
                     <label>Status</label>
@@ -881,6 +942,20 @@ export default function Attendance() {
                       ]}
                     />
                   </div>
+                  <div style={{ gridColumn: "1 / -1", fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '-0.15rem' }}>
+                    Break is deducted from working hours — leave it blank to use the break the camera recorded.
+                  </div>
+                  {editCell.sign_in_time && editCell.sign_out_time && (() => {
+                    const { hoursWorked } = calcStatusFromTimes(editCell.sign_in_time, editCell.sign_out_time, editCell.employee_id, editCell.break_minutes);
+                    const h = Math.floor(hoursWorked);
+                    const m = Math.round((hoursWorked - h) * 60);
+                    const brk = Math.max(0, Number(editCell.break_minutes) || 0);
+                    return hoursWorked > 0 ? (
+                      <div style={{ gridColumn: "1 / -1", fontSize: '0.78rem', color: '#60a5fa', fontWeight: 600 }}>
+                        ⏱ {h}h {m}m worked{brk > 0 ? ` (${brk}m break deducted)` : ""} · status auto-set
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="modal-actions" style={{ display: "flex", justifyContent: "space-between" }}>
                   <button
@@ -888,7 +963,7 @@ export default function Attendance() {
                     className="btn"
                     style={{ background: "rgba(239, 68, 68, 0.15)", color: "#ef4444" }}
                     onClick={() => {
-                      setEditCell({ ...editCell, status: "", sign_in_time: "", sign_out_time: "" });
+                      setEditCell({ ...editCell, status: "", sign_in_time: "", sign_out_time: "", break_minutes: "" });
                       // Provide a slight delay so state updates before submit is simulated, 
                       // or just call adminSet directly. It's safer to just set state, and let user click save, 
                       // or we can invoke handleSaveCell programmatically by simulating the form submit.

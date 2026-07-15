@@ -161,7 +161,7 @@ export const attendance = {
     api.post("/attendance/sign-in", null, { params: { d: date, sign_in_time, employee_id } }),
   signOut: (date: string, sign_out_time: string, employee_id: number) =>
     api.post("/attendance/sign-out", null, { params: { d: date, sign_out_time, employee_id } }),
-  adminSet: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
+  adminSet: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; break_hours?: number | null; status?: string | null }) =>
     api.put("/attendance/admin-set", data),
   autoMark: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
     api.post("/attendance/auto-mark", data),

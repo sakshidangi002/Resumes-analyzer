@@ -221,6 +221,16 @@ class ResumeDB(Base):
     ready_to_relocate = Column(String, nullable=True)
     reason_job_change = Column(Text, nullable=True)
 
+    # ATS / Candidate Overview fields (manually maintained by HR; not parsed)
+    candidate_status = Column(String(50), nullable=True)     # Immediate Joiner, Shortlisted, Selected, Rejected, ...
+    employment_type = Column(String(50), nullable=True)      # Full-time, Contract, ...
+    preferred_location = Column(String, nullable=True)
+    resume_score = Column(Integer, nullable=True)            # 0-100
+    remarks = Column(Text, nullable=True)
+    candidate_source = Column(String(50), nullable=True)     # LinkedIn, Naukri, Indeed, Referral, ...
+    qualification = Column(String, nullable=True)
+    college_name = Column(String, nullable=True)
+
 
 class CandidateNoteDB(Base):
     __tablename__ = "candidate_notes"
@@ -372,6 +382,15 @@ class CandidateDetailsUpdate(BaseModel):
     location: Optional[str] = None
     ready_to_relocate: Optional[str] = None
     reason_job_change: Optional[str] = None
+    # ATS / Candidate Overview fields
+    candidate_status: Optional[str] = None
+    employment_type: Optional[str] = None
+    preferred_location: Optional[str] = None
+    resume_score: Optional[int] = None
+    remarks: Optional[str] = None
+    candidate_source: Optional[str] = None
+    qualification: Optional[str] = None
+    college_name: Optional[str] = None
 
 
 def _csv_join(value):
@@ -641,8 +660,24 @@ try:
             "availability_ftf": "VARCHAR(255)",
             "current_company": "VARCHAR(255)",
             "ready_to_relocate": "VARCHAR(255)",
-            "reason_job_change": "TEXT"
+            "reason_job_change": "TEXT",
+            # ATS / Candidate Overview fields
+            "candidate_status": "VARCHAR(50)",
+            "employment_type": "VARCHAR(50)",
+            "preferred_location": "VARCHAR(255)",
+            "resume_score": "INTEGER",
+            "remarks": "TEXT",
+            "candidate_source": "VARCHAR(50)",
+            "qualification": "VARCHAR(255)",
+            "college_name": "VARCHAR(255)",
         }
+        # Helpful indexes for server-side filtering/sorting on the overview page.
+        _idx_sql = [
+            "CREATE INDEX IF NOT EXISTS ix_resumes_role ON resumes (role)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_candidate_status ON resumes (candidate_status)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_created_at ON resumes (created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_is_shortlisted ON resumes (is_shortlisted)",
+        ]
         for col_name, col_type in new_cols.items():
             res = conn.execute(text(
                 f"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='resumes' AND column_name='{col_name}')"
@@ -650,6 +685,12 @@ try:
             if not res:
                 conn.execute(text(f"ALTER TABLE resumes ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
+        for _sql in _idx_sql:
+            try:
+                conn.execute(text(_sql))
+                conn.commit()
+            except Exception:
+                pass
 except Exception as e:
     logger.error(f"Schema auto-migration failed: {e}")
 
@@ -876,6 +917,20 @@ def _resume_to_dict(r: ResumeDB) -> dict:
         "current_company": getattr(r, "current_company", "") or "",
         "ready_to_relocate": getattr(r, "ready_to_relocate", "") or "",
         "reason_job_change": getattr(r, "reason_job_change", "") or "",
+        # ATS / Candidate Overview fields. Spec-named aliases are emitted so the
+        # frontend can read company_name / primary_role / current_location
+        # directly, while the underlying columns keep their existing names.
+        "candidate_status": getattr(r, "candidate_status", "") or "",
+        "employment_type": getattr(r, "employment_type", "") or "",
+        "preferred_location": getattr(r, "preferred_location", "") or "",
+        "resume_score": getattr(r, "resume_score", None),
+        "remarks": getattr(r, "remarks", "") or "",
+        "candidate_source": getattr(r, "candidate_source", "") or (_safe_get(r, "source", "") or ""),
+        "qualification": getattr(r, "qualification", "") or "",
+        "college_name": getattr(r, "college_name", "") or "",
+        "company_name": getattr(r, "current_company", "") or "",
+        "primary_role": _safe_get(r, "role", "") or "",
+        "current_location": _safe_get(r, "location", "") or "",
     }
 
 
@@ -1775,6 +1830,264 @@ def list_resumes(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Candidate Overview: server-side search / filter / sort / paginate
+# ---------------------------------------------------------------------------
+
+# Notice-period values that count as an "immediate joiner".
+_IMMEDIATE_TOKENS = ("immediate", "immed", "0 day", "0 days", "ready to join", "asap")
+
+
+def _is_immediate(notice: Optional[str], status: Optional[str]) -> bool:
+    blob = f"{notice or ''} {status or ''}".lower()
+    return any(tok in blob for tok in _IMMEDIATE_TOKENS)
+
+
+def _skill_sql_filter(query, skills: str):
+    """Translate a skills query (with alias expansion) into AND-of-OR ILIKE
+    conditions across all skill-bearing columns, so filtering + pagination
+    happen in SQL rather than in Python."""
+    groups = _expand_skill_query(skills)
+    cols = [
+        ResumeDB.skills, ResumeDB.primary_skills, ResumeDB.other_skills,
+        ResumeDB.key_skills, ResumeDB.raw_skills_text,
+    ]
+    for group in groups:
+        alias_conds = []
+        for alias in group:
+            if not alias:
+                continue
+            for col in cols:
+                alias_conds.append(col.ilike(f"%{alias}%"))
+        if alias_conds:
+            query = query.filter(or_(*alias_conds))
+    return query
+
+
+@app.get("/resumes/search", tags=["Resumes"])
+def search_resumes(
+    db: Session = Depends(get_db),
+    # Global search
+    q: Optional[str] = None,
+    # Advanced filters
+    name: Optional[str] = None,
+    company: Optional[str] = None,
+    primary_role: Optional[str] = None,
+    skills: Optional[str] = None,
+    min_experience: Optional[float] = None,
+    max_experience: Optional[float] = None,
+    current_salary: Optional[str] = None,
+    expected_salary: Optional[str] = None,
+    notice_period: Optional[str] = None,
+    current_location: Optional[str] = None,
+    preferred_location: Optional[str] = None,
+    employment_type: Optional[str] = None,
+    candidate_status: Optional[str] = None,
+    min_score: Optional[int] = None,
+    qualification: Optional[str] = None,
+    college_name: Optional[str] = None,
+    candidate_source: Optional[str] = None,
+    shortlisted: Optional[bool] = None,
+    added_after: Optional[str] = None,
+    added_before: Optional[str] = None,
+    # Sort + paginate
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Server-side Candidate Overview feed: filtered, sorted, paginated, with counts.
+
+    Kept separate from GET /resumes (which the Dashboard/Compare tabs consume as a
+    full list) so those flows are untouched.
+    """
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+
+    # Summary aggregates over the WHOLE database (not the filtered view).
+    total_all = base.count()
+    shortlisted_all = base.filter(ResumeDB.is_shortlisted == True).count()
+    avg_exp = db.query(func.avg(ResumeDB.experience_years)).filter(
+        ResumeDB.deleted_at == None
+    ).scalar()
+    immediate_all = base.filter(
+        or_(
+            *[ResumeDB.notice_period.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+            *[ResumeDB.candidate_status.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+        )
+    ).count()
+
+    # Apply filters
+    fq = base
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        fq = fq.filter(or_(
+            ResumeDB.name.ilike(like), ResumeDB.email.ilike(like),
+            ResumeDB.phone.ilike(like), ResumeDB.current_company.ilike(like),
+            ResumeDB.companies_worked_at.ilike(like), ResumeDB.role.ilike(like),
+            ResumeDB.location.ilike(like), ResumeDB.skills.ilike(like),
+            ResumeDB.primary_skills.ilike(like), ResumeDB.key_skills.ilike(like),
+        ))
+    if name:
+        fq = fq.filter(ResumeDB.name.ilike(f"%{name}%"))
+    if company:
+        fq = fq.filter(or_(
+            ResumeDB.current_company.ilike(f"%{company}%"),
+            ResumeDB.companies_worked_at.ilike(f"%{company}%"),
+        ))
+    if primary_role:
+        # `role` is largely unpopulated in practice, so a role/technology tab
+        # matches against the parsed skills too (word-boundary via skill filter).
+        rq = or_(
+            ResumeDB.role.ilike(f"%{primary_role}%"),
+            ResumeDB.primary_skills.ilike(f"%{primary_role}%"),
+            ResumeDB.key_skills.ilike(f"%{primary_role}%"),
+            ResumeDB.skills.ilike(f"%{primary_role}%"),
+            ResumeDB.raw_skills_text.ilike(f"%{primary_role}%"),
+        )
+        fq = fq.filter(rq)
+    if skills:
+        fq = _skill_sql_filter(fq, skills)
+    if min_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years >= min_experience)
+    if max_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years <= max_experience)
+    if current_salary:
+        fq = fq.filter(ResumeDB.current_salary.ilike(f"%{current_salary}%"))
+    if expected_salary:
+        fq = fq.filter(ResumeDB.expected_salary.ilike(f"%{expected_salary}%"))
+    if notice_period:
+        fq = fq.filter(ResumeDB.notice_period.ilike(f"%{notice_period}%"))
+    if current_location:
+        fq = fq.filter(ResumeDB.location.ilike(f"%{current_location}%"))
+    if preferred_location:
+        fq = fq.filter(ResumeDB.preferred_location.ilike(f"%{preferred_location}%"))
+    if employment_type:
+        fq = fq.filter(ResumeDB.employment_type.ilike(f"%{employment_type}%"))
+    if candidate_status:
+        fq = fq.filter(ResumeDB.candidate_status.ilike(f"%{candidate_status}%"))
+    if min_score is not None:
+        fq = fq.filter(ResumeDB.resume_score >= min_score)
+    if qualification:
+        fq = fq.filter(ResumeDB.qualification.ilike(f"%{qualification}%"))
+    if college_name:
+        fq = fq.filter(ResumeDB.college_name.ilike(f"%{college_name}%"))
+    if candidate_source:
+        fq = fq.filter(or_(
+            ResumeDB.candidate_source.ilike(f"%{candidate_source}%"),
+            ResumeDB.source.ilike(f"%{candidate_source}%"),
+        ))
+    if shortlisted is not None:
+        fq = fq.filter(ResumeDB.is_shortlisted == shortlisted)
+    if added_after:
+        try:
+            dt = datetime.fromisoformat(added_after.replace("Z", "+00:00"))
+            fq = fq.filter(ResumeDB.created_at >= dt)
+        except Exception:
+            pass
+    if added_before:
+        try:
+            dt = datetime.fromisoformat(added_before.replace("Z", "+00:00"))
+            end_of_day = datetime.combine(dt.date(), time(23, 59, 59, 999999))
+            fq = fq.filter(ResumeDB.created_at <= end_of_day)
+        except Exception:
+            pass
+
+    filtered_count = fq.count()
+
+    # Sort
+    sort_map = {
+        "created_at": ResumeDB.created_at, "date_added": ResumeDB.created_at,
+        "name": ResumeDB.name, "experience": ResumeDB.experience_years,
+        "current_salary": ResumeDB.current_salary, "expected_salary": ResumeDB.expected_salary,
+        "notice_period": ResumeDB.notice_period, "primary_role": ResumeDB.role,
+        "candidate_status": ResumeDB.candidate_status, "resume_score": ResumeDB.resume_score,
+        "company_name": ResumeDB.current_company, "current_location": ResumeDB.location,
+        "shortlisted": ResumeDB.is_shortlisted,
+    }
+    order_col = sort_map.get((sort_by or "created_at"), ResumeDB.created_at)
+    fq = fq.order_by(order_col.asc().nulls_last() if sort_order == "asc"
+                     else order_col.desc().nulls_last())
+
+    # Paginate
+    page = max(1, int(page or 1))
+    page_size = min(200, max(1, int(page_size or 20)))
+    rows = fq.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {
+        "rows": [_resume_to_dict(r) for r in rows],
+        "total": total_all,
+        "filtered": filtered_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (filtered_count + page_size - 1) // page_size),
+        "summary": {
+            "total": total_all,
+            "showing": filtered_count,
+            "shortlisted": shortlisted_all,
+            "immediate_joiners": immediate_all,
+            "avg_experience": round(float(avg_exp), 1) if avg_exp is not None else 0.0,
+        },
+    }
+
+
+# Canonical technology/role tabs. Counts are derived from parsed skills because
+# the `role` column is largely empty in practice. Order = display order.
+_TECH_TABS = [
+    ".NET", "React", "Angular", "Node.js", "JavaScript", "TypeScript",
+    "Python", "Java", "PHP", "Django", "Spring Boot",
+    "SQL", "MongoDB", "AWS", "Azure", "DevOps", "Docker", "Kubernetes",
+    "Power BI", "Selenium", "QA", "UI/UX", "Figma", "Machine Learning",
+]
+
+
+def _tech_matches(tech: str, blob: str) -> bool:
+    t = tech.lower()
+    if re.fullmatch(r"[a-z0-9]+", t):  # pure word -> word boundary (java != javascript)
+        return re.search(rf"\b{re.escape(t)}\b", blob) is not None
+    return t in blob  # punctuated (.net, node.js, ui/ux, power bi) -> substring
+
+
+@app.get("/resumes/facets", tags=["Resumes"])
+def resume_facets(db: Session = Depends(get_db)):
+    """Technology/role tabs with candidate counts (derived from parsed skills),
+    plus distinct values for the dropdown filters."""
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+    total = base.count()
+
+    # Build one lowercased skill blob per candidate, then count each tech tab.
+    skill_rows = db.query(
+        ResumeDB.primary_skills, ResumeDB.key_skills,
+        ResumeDB.skills, ResumeDB.raw_skills_text,
+    ).filter(ResumeDB.deleted_at == None).all()
+    blobs = [
+        " ".join(str(x or "") for x in row).lower()
+        for row in skill_rows
+    ]
+    roles = []
+    for tech in _TECH_TABS:
+        cnt = sum(1 for b in blobs if _tech_matches(tech, b))
+        if cnt > 0:
+            roles.append({"role": tech, "count": cnt})
+    roles.sort(key=lambda x: x["count"], reverse=True)
+
+    def _distinct(col):
+        vals = (
+            db.query(col)
+            .filter(ResumeDB.deleted_at == None, col.isnot(None), col != "")
+            .distinct().all()
+        )
+        return sorted({(v[0] or "").strip() for v in vals if (v[0] or "").strip()})
+
+    return {
+        "total": total,
+        "roles": roles,
+        "statuses": _distinct(ResumeDB.candidate_status),
+        "employment_types": _distinct(ResumeDB.employment_type),
+        "sources": _distinct(ResumeDB.candidate_source),
+        "locations": _distinct(ResumeDB.location),
+    }
+
+
 @app.post("/resumes/{resume_id}/reextract-skills", tags=["Resumes"])
 def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
     """
@@ -2462,6 +2775,23 @@ def update_candidate_details(
         r.ready_to_relocate = details.ready_to_relocate
     if details.reason_job_change is not None:
         r.reason_job_change = details.reason_job_change
+    # ATS / Candidate Overview fields
+    if details.candidate_status is not None:
+        r.candidate_status = details.candidate_status
+    if details.employment_type is not None:
+        r.employment_type = details.employment_type
+    if details.preferred_location is not None:
+        r.preferred_location = details.preferred_location
+    if details.resume_score is not None:
+        r.resume_score = details.resume_score
+    if details.remarks is not None:
+        r.remarks = details.remarks
+    if details.candidate_source is not None:
+        r.candidate_source = details.candidate_source
+    if details.qualification is not None:
+        r.qualification = details.qualification
+    if details.college_name is not None:
+        r.college_name = details.college_name
 
     db.commit()
     db.refresh(r)

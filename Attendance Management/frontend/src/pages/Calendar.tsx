@@ -642,8 +642,8 @@ export default function Calendar() {
                     ]
                       .sort((a, b) => new Date(b.date + "T12:00:00").getTime() - new Date(a.date + "T12:00:00").getTime())
                       .map((ev) => (
-                        <tr key={ev.id} style={{ opacity: (ev as any).is_auto ? 0.85 : 1 }}>
-                          <td style={{ color: (ev as any).is_auto ? "var(--brand-300)" : "inherit", textAlign: 'center' }}>
+                        <tr key={ev.id}>
+                          <td style={{ color: "inherit", textAlign: 'center' }}>
                             {formatNiceDate(ev.date)}
                           </td>
                           <td style={{ fontWeight: 600, textAlign: 'center' }}>
