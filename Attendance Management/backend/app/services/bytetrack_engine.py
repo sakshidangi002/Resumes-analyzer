@@ -24,15 +24,102 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from functools import lru_cache
 
 from app.core.config import get_settings
 from app.services.person_tracker import PersonTrack
 
 logger = logging.getLogger(__name__)
-# Serialises INFERENCE so several cameras don't oversubscribe the CPU/GPU.
-# It only orders the calls — tracker state is per-engine (each owns its model).
-_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Inference admission control
+#
+# This used to be a single global Lock: every camera waited for every other one,
+# so with 2 monitor cameras at ~2.7 s/frame each camera only got a fresh look
+# every ~5.3 s and the overlay was drawn from a frame that old.
+#
+# It is now a bounded SEMAPHORE. The purpose is unchanged — stop N cameras from
+# oversubscribing the CPU — but N is configurable instead of hard-wired to 1:
+#   yolo_max_concurrent_inference = 1  -> identical to the old behaviour
+#   yolo_max_concurrent_inference = 0  -> auto (one slot per 4 cores)
+# Tracker state is still per-engine (each camera owns its model), so allowing
+# concurrency cannot mix up ByteTrack ids between cameras.
+# ---------------------------------------------------------------------------
+def _auto_concurrency() -> int:
+    """Slots for simultaneous inference. Explicit setting wins; else auto.
+
+    MEASURED (this 4-physical-core box, yolo11m @960, 2 monitor cameras):
+        1 slot  -> each camera refreshes every 4.10 s
+        2 slots -> each camera refreshes every 4.52 s   (10% WORSE)
+    One inference already saturates the physical cores, so a second concurrent
+    one just splits them and adds overhead. Parallelism only pays once there are
+    spare PHYSICAL cores (or a GPU), hence the >=8 gate — anything less defaults
+    to 1, which is exactly the historical serial behaviour.
+    """
+    s = get_settings()
+    n = int(getattr(s, "yolo_max_concurrent_inference", 0) or 0)
+    if n > 0:
+        return n
+    try:
+        import psutil
+        physical = psutil.cpu_count(logical=False) or 0
+    except Exception:
+        physical = (os.cpu_count() or 4) // 2  # assume hyperthreading
+    return 2 if physical >= 8 else 1
+
+
+_MAX_CONCURRENT = _auto_concurrency()
+_slots = threading.BoundedSemaphore(_MAX_CONCURRENT)
+
+# Cap the threads each inference session may use. Without this ONNX Runtime /
+# torch take every core for EVERY concurrent session (2 x 8 threads on 8 cores),
+# which thrashes and makes the parallel version SLOWER than the serial one.
+def _cap_threads() -> None:
+    s = get_settings()
+    per = int(getattr(s, "yolo_threads_per_session", 0) or 0)
+    if per <= 0:
+        cores = os.cpu_count() or 4
+        per = max(1, cores // max(1, _MAX_CONCURRENT))
+    # Must be set before the runtime builds its thread pools (i.e. before the
+    # first model load), so this runs at import time.
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "ORT_NUM_THREADS"):
+        os.environ.setdefault(var, str(per))
+    try:
+        import torch  # noqa
+        torch.set_num_threads(per)
+    except Exception:
+        pass
+    logger.info(
+        "Person inference: max_concurrent=%d threads_per_session=%d (cores=%s)",
+        _MAX_CONCURRENT, per, os.cpu_count(),
+    )
+
+
+_cap_threads()
+
+# Rolling performance counters, per camera id.
+_perf_lock = threading.Lock()
+_perf: dict[str, dict] = {}
+
+
+def get_perf_stats() -> dict:
+    """Per-camera inference stats: {camera_id: {calls, avg_ms, last_ms, waits_ms}}."""
+    with _perf_lock:
+        return {k: dict(v) for k, v in _perf.items()}
+
+
+def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
+    with _perf_lock:
+        d = _perf.setdefault(
+            camera_id, {"calls": 0, "total_ms": 0.0, "last_ms": 0.0, "wait_ms": 0.0}
+        )
+        d["calls"] += 1
+        d["total_ms"] += infer_ms
+        d["last_ms"] = infer_ms
+        d["wait_ms"] = wait_ms
+        d["avg_ms"] = d["total_ms"] / d["calls"]
+        return dict(d)
 
 
 def _resolve(path: str) -> str | None:
@@ -86,8 +173,12 @@ class ByteTrackEngine:
         device: str | None = None,
         camera_id: str = "?",
         tracker_cfg: str | None = None,
+        model_path: str | None = None,
     ):
         s = get_settings()
+        # MONITOR cameras may run a lighter/faster model than the IN/OUT
+        # attendance cameras, which must stay on the accurate one.
+        self.model_path_override = model_path or None
         # Low detection floor on purpose: ByteTrack's stage-2 association needs the
         # low-score boxes. Track CREATION precision is guarded by new_track_thresh
         # inside the tracker config, not by this value.
@@ -111,7 +202,9 @@ class ByteTrackEngine:
     def _get_model(self):
         """Lazily build this camera's OWN YOLO instance (isolated tracker state)."""
         if self._model is None:
-            path = _model_path()
+            path = _resolve(self.model_path_override) if self.model_path_override else None
+            if path is None:
+                path = _model_path()
             if path is None:
                 return None
             try:
@@ -145,8 +238,31 @@ class ByteTrackEngine:
         if self.device:
             kwargs["device"] = self.device
 
-        with _lock:
+        # Bounded concurrency: `_slots` admits up to N inferences at once (N=1 is
+        # the historical serial behaviour). `wait` is time spent queueing behind
+        # other cameras — the number that used to make the overlay stale.
+        _t_wait0 = time.time()
+        _slots.acquire()
+        _wait_ms = (time.time() - _t_wait0) * 1000.0
+        _t_inf0 = time.time()
+        try:
             results = model.track(frame_bgr, **kwargs)
+        finally:
+            _slots.release()
+        _infer_ms = (time.time() - _t_inf0) * 1000.0
+        stats = _record_perf(self.camera_id, _wait_ms, _infer_ms)
+
+        s_perf = get_settings()
+        _every = int(getattr(s_perf, "perf_log_every", 20) or 0)
+        if _every and stats["calls"] % _every == 0:
+            logger.info(
+                "PERF camera=%s infer=%.0fms avg=%.0fms wait=%.0fms "
+                "cycle=%.2fs fps=%.2f concurrency=%d",
+                self.camera_id, _infer_ms, stats["avg_ms"], _wait_ms,
+                (_wait_ms + _infer_ms) / 1000.0,
+                (1000.0 / (_wait_ms + _infer_ms)) if (_wait_ms + _infer_ms) > 0 else 0.0,
+                _MAX_CONCURRENT,
+            )
 
         detections = 0
         seen: set[int] = set()

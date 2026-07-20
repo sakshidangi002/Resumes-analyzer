@@ -378,9 +378,16 @@ def _draw_enhanced_overlay(
         # Draw bounding box
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
         
-        # Build label text — always show the Track ID (office monitoring needs it)
+        # Build label text — always show the Track ID (office monitoring needs it).
+        # A body we cannot put a name to is labelled "Unknown", not "Person": the
+        # box means "somebody is here but we do not know who", which is the honest
+        # statement and what an operator wants to see. The track id still
+        # distinguishes one unknown body from another.
         track_id = display_info.get("track_id", "?")
-        label_lines = [f"{employee_name} #{track_id}"]
+        _display_name = employee_name if matched else "Unknown"
+        if not _display_name or _display_name in ("Person", "Unknown Person"):
+            _display_name = "Unknown"
+        label_lines = [f"{_display_name} #{track_id}"]
 
         if matched:
             # Add confidence percentage
@@ -1004,6 +1011,7 @@ class _RecognitionThread(threading.Thread):
             self._apply_reid(w, frame, ptracks, face_confirmed)
             any_match = any_match or any(pt.matched for pt in ptracks)
 
+
         # 3. Publish person tracks for the display thread.
         w.state.active_tracks = len(ptracks)
         with w._frame_lock:
@@ -1432,11 +1440,20 @@ class CameraWorker:
                 steep = str(camera_id) in _STEEP_CAMERAS
                 # One engine (and therefore one YOLO model + one ByteTrack state)
                 # PER CAMERA — tracker state must never be shared between feeds.
+                # MONITOR cameras never mark attendance, so they may use a
+                # lighter/faster model + smaller imgsz than the IN/OUT cameras.
+                # Empty settings => identical model to before (no behaviour change).
+                from app.core.config import get_settings as _get_settings
+                _s_cfg = _get_settings()
+                _mon_model = (getattr(_s_cfg, "yolo_monitor_model_path", "") or "") if self.is_monitor else ""
+                _mon_imgsz = int(getattr(_s_cfg, "yolo_monitor_imgsz", 0) or 0) if self.is_monitor else 0
                 self.bytetrack_engine = bytetrack_engine.ByteTrackEngine(
                     conf=(_STEEP_CONF if steep else _PERSON_CONF),
                     max_misses=_body_misses,
                     camera_id=str(camera_id),
                     tracker_cfg=(_STEEP_TRACKER_CFG if steep else None),
+                    imgsz=(_mon_imgsz or None),
+                    model_path=(_mon_model or None),
                 )
                 self.use_person_tracking = True
                 logger.info(

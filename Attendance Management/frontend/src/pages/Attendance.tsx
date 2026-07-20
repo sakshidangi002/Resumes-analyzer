@@ -191,6 +191,39 @@ function MonthlySummaryCard({ employeeId, month, year }: { employeeId: number; m
   );
 }
 
+const parseBreakInputToMinutes = (val: string): number => {
+  const clean = val.trim().toLowerCase();
+  if (!clean) return 0;
+
+  const hourMatch = clean.match(/(\d+(?:\.\d+)?)\s*h/);
+  const minMatch = clean.match(/(\d+(?:\.\d+)?)\s*m/);
+
+  let totalMins = 0;
+  if (hourMatch) {
+    totalMins += parseFloat(hourMatch[1]) * 60;
+  }
+  if (minMatch) {
+    totalMins += parseFloat(minMatch[1]);
+  }
+
+  if (hourMatch || minMatch) {
+    return Math.round(totalMins);
+  }
+
+  if (clean.includes(":")) {
+    const [hStr, mStr] = clean.split(":");
+    const h = parseInt(hStr, 10) || 0;
+    const m = parseInt(mStr, 10) || 0;
+    return h * 60 + m;
+  }
+
+  const num = parseFloat(clean) || 0;
+  if (clean.includes(".") || num <= 5) {
+    return Math.round(num * 60);
+  }
+  return num;
+};
+
 export default function Attendance() {
   const { hasRole, user } = useAuth();
   const isAdmin = hasRole("Admin");
@@ -365,12 +398,23 @@ export default function Attendance() {
       rec = dialogRecords.find((r) => r.employee_id === employee_id && r.date === date);
     }
     const breakHours = Number(rec?.total_break_hours ?? 0);
+    let breakStr = "";
+    if (breakHours > 0) {
+      const totalMins = Math.round(breakHours * 60);
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h > 0) {
+        breakStr = `${h}h${m > 0 ? ` ${m}m` : ""}`;
+      } else {
+        breakStr = `${m}m`;
+      }
+    }
     setEditCell({
       employee_id,
       date,
       sign_in_time: rec?.sign_in_time || "",
       sign_out_time: rec?.sign_out_time || "",
-      break_minutes: breakHours > 0 ? String(Math.round(breakHours * 60)) : "",
+      break_minutes: breakStr,
       status: rec?.status || "PRESENT",
     });
   };
@@ -391,7 +435,7 @@ export default function Attendance() {
     const [oh, om] = signOut.split(":").map(Number);
     const inMins = ih * 60 + im;
     const outMins = oh * 60 + om;
-    const breakMins = Math.max(0, Number(breakMinutes) || 0);
+    const breakMins = Math.max(0, typeof breakMinutes === "string" ? parseBreakInputToMinutes(breakMinutes) : Number(breakMinutes) || 0);
     const workedMins = outMins - inMins - breakMins;
     if (workedMins <= 0) return { status: "ABSENT", hoursWorked: 0 };
     const hoursWorked = workedMins / 60;
@@ -411,12 +455,13 @@ export default function Attendance() {
     // Blank break = leave it to the camera; a typed value pins it and is
     // deducted from working hours.
     const breakEntered = editCell.break_minutes.trim() !== "";
+    const breakMins = breakEntered ? parseBreakInputToMinutes(editCell.break_minutes) : 0;
     api.adminSet({
       employee_id: editCell.employee_id,
       date: editCell.date,
       sign_in_time: editCell.sign_in_time || null,
       sign_out_time: editCell.sign_out_time || null,
-      break_hours: breakEntered ? Number(editCell.break_minutes) / 60 : null,
+      break_hours: breakEntered ? breakMins / 60 : null,
       status: normalizedStatus,
     })
       .then(() => {
@@ -908,12 +953,10 @@ export default function Attendance() {
                     }} />
                   </div>
                   <div className="form-group">
-                    <label>Break Time (minutes)</label>
+                    <label>Break Time</label>
                     <input
-                      type="number"
-                      min={0}
-                      step={5}
-                      placeholder="e.g. 60"
+                      type="text"
+                      placeholder="e.g. 90m, 1.5h, or 1:30"
                       value={editCell.break_minutes}
                       onChange={e => {
                         const newBreak = e.target.value;
@@ -943,16 +986,19 @@ export default function Attendance() {
                     />
                   </div>
                   <div style={{ gridColumn: "1 / -1", fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '-0.15rem' }}>
-                    Break is deducted from working hours — leave it blank to use the break the camera recorded.
+                    Break is deducted from working hours — enter in minutes (e.g. 90m or 90), hours (e.g. 1.5h or 1.5), or HH:MM (e.g. 1:30). Leave blank to use the camera recorded break.
                   </div>
                   {editCell.sign_in_time && editCell.sign_out_time && (() => {
                     const { hoursWorked } = calcStatusFromTimes(editCell.sign_in_time, editCell.sign_out_time, editCell.employee_id, editCell.break_minutes);
                     const h = Math.floor(hoursWorked);
                     const m = Math.round((hoursWorked - h) * 60);
-                    const brk = Math.max(0, Number(editCell.break_minutes) || 0);
+                    const brk = Math.max(0, parseBreakInputToMinutes(editCell.break_minutes));
+                    const brkH = Math.floor(brk / 60);
+                    const brkM = Math.round(brk % 60);
+                    const brkStr = brkH > 0 ? `${brkH}h ${brkM}m` : `${brkM}m`;
                     return hoursWorked > 0 ? (
                       <div style={{ gridColumn: "1 / -1", fontSize: '0.78rem', color: '#60a5fa', fontWeight: 600 }}>
-                        ⏱ {h}h {m}m worked{brk > 0 ? ` (${brk}m break deducted)` : ""} · status auto-set
+                        ⏱ {h}h {m}m worked{brk > 0 ? ` (${brkStr} break deducted)` : ""} · status auto-set
                       </div>
                     ) : null;
                   })()}

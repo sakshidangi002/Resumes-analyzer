@@ -979,6 +979,90 @@ export default function PayrollManagement() {
                     </tr>
                   </tbody>
                 </table>
+                {/* Plain-language hours & deduction breakdown, day by day. */}
+                {(() => {
+                  let bd: any = null;
+                  try {
+                    bd = detailDialog.payslip.component_breakdown
+                      ? JSON.parse(detailDialog.payslip.component_breakdown)
+                      : null;
+                  } catch { bd = null; }
+                  if (!bd || !Array.isArray(bd.days) || bd.days.length === 0) {
+                    return (
+                      <div style={{ marginTop: "0.75rem", fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>
+                        Re-run payroll for this month to see the day-by-day hours breakdown.
+                      </div>
+                    );
+                  }
+                  const cell: React.CSSProperties = { padding: "5px 8px", whiteSpace: "nowrap" };
+                  return (
+                    <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.10)" }}>
+                      <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Working hours &amp; deductions</div>
+
+                      {/* One-line plain summary */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(255,255,255,0.06)", fontSize: "0.8rem" }}>
+                          Worked <strong>{bd.worked_hours_total}h</strong> of <strong>{bd.expected_hours_total}h</strong>
+                        </span>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(34,197,94,0.14)", color: "#4ade80", fontSize: "0.8rem" }}>
+                          Paid <strong>{bd.paid_days}</strong> of {bd.basis_days} days
+                        </span>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(239,68,68,0.14)", color: "#f87171", fontSize: "0.8rem" }}>
+                          LOP <strong>{bd.lop_days}</strong> days
+                        </span>
+                        {Number(bd.short_leaves_used) > 0 && (
+                          <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(245,158,11,0.14)", color: "#fbbf24", fontSize: "0.8rem" }}>
+                            {bd.short_leaves_used} free short leave used
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+                          <thead style={{ position: "sticky", top: 0, background: "#1a1a1a" }}>
+                            <tr style={{ color: "rgba(255,255,255,0.6)", textAlign: "left" }}>
+                              <th style={cell}>Date</th>
+                              <th style={cell}>In – Out</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Worked</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Required</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Short by</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Deducted</th>
+                              <th style={cell}>Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bd.days.map((d: any) => {
+                              const off = d.expected_hours === 0;
+                              const lop = Number(d.lop_days) > 0;
+                              return (
+                                <tr key={d.date} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", opacity: off ? 0.55 : 1 }}>
+                                  <td style={cell}>{d.date.slice(8)}/{d.date.slice(5, 7)} <span style={{ color: "rgba(255,255,255,0.45)" }}>{d.weekday}</span></td>
+                                  <td style={{ ...cell, color: "rgba(255,255,255,0.7)" }}>
+                                    {d.in_time ? `${d.in_time} – ${d.out_time || "…"}` : "—"}
+                                  </td>
+                                  <td style={{ ...cell, textAlign: "right" }}>{d.worked_hours != null ? `${d.worked_hours}h` : "—"}</td>
+                                  <td style={{ ...cell, textAlign: "right", color: "rgba(255,255,255,0.55)" }}>{off ? "—" : `${d.expected_hours}h`}</td>
+                                  <td style={{ ...cell, textAlign: "right", color: d.short_hours > 0 ? "#fbbf24" : "rgba(255,255,255,0.4)" }}>
+                                    {d.short_hours > 0 ? `${d.short_hours.toFixed(2)}h` : "—"}
+                                  </td>
+                                  <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: lop ? "#f87171" : "#4ade80" }}>
+                                    {lop ? `−${Number(d.lop_days).toFixed(2)}` : "0"}
+                                  </td>
+                                  <td style={{ ...cell, color: "rgba(255,255,255,0.6)" }}>{d.note}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", marginTop: "0.5rem" }}>
+                        Pay is based on hours worked, not arrival time. A day is only deducted when hours fall short —
+                        the shortfall is charged proportionally (short hours ÷ required hours).
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {!showFormulaInDetail ? (
                   <button
                     type="button"

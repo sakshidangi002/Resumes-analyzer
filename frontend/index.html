@@ -133,10 +133,11 @@
             padding: 0.5rem 0.65rem;
             border-radius: 0.5rem;
             font-size: 0.75rem;
-            color: #e2e8f0;
+            color: #1e293b;
             background: transparent;
             border: none;
             cursor: pointer;
+            transition: background 0.12s, color 0.12s;
         }
 
         .dark-select-item:hover,
@@ -1681,6 +1682,10 @@
         .cand-th-sort:hover { color: #2563eb; }
         .cand-row:nth-child(even) { background: #f8fafc; }
         .cand-row:hover { background: #eff6ff; }
+        /* Full grid: horizontal + vertical cell borders on the candidate table. */
+        #tab-details table th,
+        #tab-details table td { border: 1px solid #e5eaf1; }
+        #tab-details table thead th { border-bottom: 2px solid #cbd5e1; }
 
         /* Light scrollbar */
         ::-webkit-scrollbar-thumb { background: #cbd5e1 !important; }
@@ -7416,8 +7421,27 @@
             btn.appendChild(label);
             btn.insertAdjacentHTML('beforeend', DARK_SELECT_CHEVRON);
 
+            // Portal menu — appended to body so overflow:hidden never clips it.
             const menu = document.createElement('div');
-            menu.className = 'dark-select-menu hidden absolute left-0 right-0 top-full mt-1 z-[250]';
+            menu.className = 'dark-select-menu hidden';
+            menu.style.cssText = 'position:fixed;z-index:10000;';
+            document.body.appendChild(menu);
+
+            function positionMenu() {
+                const rect = btn.getBoundingClientRect();
+                const estimatedH = Math.min(260, Math.max(80, sel.options.length * 38));
+                const spaceBelow = window.innerHeight - rect.bottom;
+                const openUp = spaceBelow < estimatedH + 8 && rect.top > spaceBelow;
+                menu.style.left = rect.left + 'px';
+                menu.style.width = rect.width + 'px';
+                if (openUp) {
+                    menu.style.top = '';
+                    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+                } else {
+                    menu.style.bottom = '';
+                    menu.style.top = (rect.bottom + 4) + 'px';
+                }
+            }
 
             function rebuildMenu() {
                 menu.innerHTML = '';
@@ -7444,17 +7468,40 @@
 
             btn.onclick = (e) => {
                 e.stopPropagation();
+                const isHidden = menu.classList.contains('hidden');
+                // Close all other open menus
                 document.querySelectorAll('.dark-select-menu').forEach((m) => {
                     if (m !== menu) m.classList.add('hidden');
                 });
-                menu.classList.toggle('hidden');
+                if (isHidden) {
+                    menu.classList.remove('hidden');
+                    positionMenu();
+                } else {
+                    menu.classList.add('hidden');
+                }
             };
+
+            // Reposition on scroll/resize
+            const reposition = () => { if (!menu.classList.contains('hidden')) positionMenu(); };
+            window.addEventListener('scroll', reposition, true);
+            window.addEventListener('resize', reposition);
+
+            // Clean up portal menu if wrap is removed from DOM
+            const observer = new MutationObserver(() => {
+                if (!document.body.contains(wrap)) {
+                    menu.remove();
+                    observer.disconnect();
+                    window.removeEventListener('scroll', reposition, true);
+                    window.removeEventListener('resize', reposition);
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
 
             sel._rebuildDarkMenu = rebuildMenu;
             rebuildMenu();
 
             wrap.appendChild(btn);
-            wrap.appendChild(menu);
+            // menu is already in document.body (portal), NOT in wrap
         }
 
         function initDarkSelects(root = document) {

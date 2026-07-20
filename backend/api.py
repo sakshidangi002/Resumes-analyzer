@@ -650,6 +650,63 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
+
+# ---------------------------------------------------------------------------
+# Primary-role classification
+# Each resume is placed under ONE role category (e.g. ".NET Developer",
+# "React Developer") based on its overall profile — skills, summary, keywords —
+# rather than being tagged with every skill it mentions. Result is stored in
+# `role` so the Candidate Overview role tabs group cleanly.
+# ---------------------------------------------------------------------------
+_ROLE_SIGNALS = [
+    ("HR / Recruiter",     ["recruitment", "talent acquisition", "hr operations", "payroll", "onboarding", "sourcing", "human resource"]),
+    ("Mobile Developer",   ["react native", "flutter", "android", "kotlin", "swift", "ios development"]),
+    (".NET Developer",     ["c#", "asp.net", ".net", "dotnet", ".net core", "entity framework", "blazor", "wpf"]),
+    ("Angular Developer",  ["angular", "ngrx", "rxjs"]),
+    ("React Developer",    ["react", "redux", "next.js", "nextjs"]),
+    ("Node.js Developer",  ["node.js", "nodejs", "node js", "express.js", "express", "nestjs"]),
+    ("Python Developer",   ["python", "django", "flask", "fastapi"]),
+    ("Java Developer",     ["java", "spring", "spring boot", "hibernate", "j2ee"]),
+    ("PHP Developer",      ["php", "laravel", "codeigniter", "wordpress"]),
+    ("QA Engineer",        ["selenium", "cypress", "testng", "qa", "manual testing", "automation testing", "test automation", "junit", "appium"]),
+    ("DevOps Engineer",    ["docker", "kubernetes", "jenkins", "terraform", "ansible", "ci/cd", "devops"]),
+    ("UI/UX Designer",     ["figma", "adobe xd", "sketch", "ui/ux", "wireframe", "prototyping", "user research"]),
+    ("Data Analyst",       ["power bi", "tableau", "pandas", "numpy", "data analysis", "data analyst", "matplotlib"]),
+    ("Data Scientist",     ["machine learning", "deep learning", "tensorflow", "pytorch", "nlp", "scikit-learn"]),
+]
+_ROLE_FE = {"React Developer", "Angular Developer"}
+_ROLE_BE = {".NET Developer", "Node.js Developer", "Java Developer", "Python Developer", "PHP Developer"}
+
+
+def _role_blob_from_row(r) -> str:
+    cols = ("primary_skills", "key_skills", "skills", "raw_skills_text", "role",
+            "summary", "important_keywords", "experience_summary", "one_liner")
+    return " ".join(str(getattr(r, c, "") or "") for c in cols).lower()
+
+
+def _kw_hit(kw: str, blob: str) -> bool:
+    k = kw.lower()
+    if re.fullmatch(r"[a-z0-9]+", k):  # pure word -> word boundary (java != javascript)
+        return re.search(rf"\b{re.escape(k)}\b", blob) is not None
+    return k in blob
+
+
+def classify_primary_role(blob: str) -> str:
+    scores = {}
+    for cat, kws in _ROLE_SIGNALS:
+        s = sum(1 for kw in kws if _kw_hit(kw, blob))
+        if s:
+            scores[cat] = s
+    if not scores:
+        return "Other"
+    explicit_fs = any(x in blob for x in ("full stack", "full-stack", "fullstack", "mern", "mean stack"))
+    fe = max((scores.get(c, 0) for c in _ROLE_FE), default=0)
+    be = max((scores.get(c, 0) for c in _ROLE_BE), default=0)
+    if explicit_fs or (fe >= 2 and be >= 2):
+        return "Full Stack Developer"
+    return max(scores.items(), key=lambda kv: kv[1])[0]
+
+
 # Auto-migrate table to add newly requested candidate detail columns
 try:
     with engine.connect() as conn:
@@ -693,6 +750,21 @@ try:
                 pass
 except Exception as e:
     logger.error(f"Schema auto-migration failed: {e}")
+
+# Backfill primary-role category for candidates that don't have one yet.
+try:
+    with SessionLocal() as _db:
+        _uncat = _db.query(ResumeDB).filter(
+            ResumeDB.deleted_at == None,
+            or_(ResumeDB.role == None, ResumeDB.role == ""),
+        ).all()
+        for _r in _uncat:
+            _r.role = classify_primary_role(_role_blob_from_row(_r))
+        if _uncat:
+            _db.commit()
+            logger.info("Classified %d candidates into primary roles", len(_uncat))
+except Exception as e:
+    logger.error(f"Role classification backfill failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1935,16 +2007,8 @@ def search_resumes(
             ResumeDB.companies_worked_at.ilike(f"%{company}%"),
         ))
     if primary_role:
-        # `role` is largely unpopulated in practice, so a role/technology tab
-        # matches against the parsed skills too (word-boundary via skill filter).
-        rq = or_(
-            ResumeDB.role.ilike(f"%{primary_role}%"),
-            ResumeDB.primary_skills.ilike(f"%{primary_role}%"),
-            ResumeDB.key_skills.ilike(f"%{primary_role}%"),
-            ResumeDB.skills.ilike(f"%{primary_role}%"),
-            ResumeDB.raw_skills_text.ilike(f"%{primary_role}%"),
-        )
-        fq = fq.filter(rq)
+        # Role tabs group by the classified `role` category, so filter it exactly.
+        fq = fq.filter(ResumeDB.role == primary_role)
     if skills:
         fq = _skill_sql_filter(fq, skills)
     if min_experience is not None:
@@ -2030,45 +2094,24 @@ def search_resumes(
     }
 
 
-# Canonical technology/role tabs. Counts are derived from parsed skills because
-# the `role` column is largely empty in practice. Order = display order.
-_TECH_TABS = [
-    ".NET", "React", "Angular", "Node.js", "JavaScript", "TypeScript",
-    "Python", "Java", "PHP", "Django", "Spring Boot",
-    "SQL", "MongoDB", "AWS", "Azure", "DevOps", "Docker", "Kubernetes",
-    "Power BI", "Selenium", "QA", "UI/UX", "Figma", "Machine Learning",
-]
-
-
-def _tech_matches(tech: str, blob: str) -> bool:
-    t = tech.lower()
-    if re.fullmatch(r"[a-z0-9]+", t):  # pure word -> word boundary (java != javascript)
-        return re.search(rf"\b{re.escape(t)}\b", blob) is not None
-    return t in blob  # punctuated (.net, node.js, ui/ux, power bi) -> substring
-
-
 @app.get("/resumes/facets", tags=["Resumes"])
 def resume_facets(db: Session = Depends(get_db)):
-    """Technology/role tabs with candidate counts (derived from parsed skills),
-    plus distinct values for the dropdown filters."""
+    """Role-category tabs with candidate counts (each candidate counted once,
+    under its classified `role`), plus distinct values for the dropdown filters."""
     base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
     total = base.count()
 
-    # Build one lowercased skill blob per candidate, then count each tech tab.
-    skill_rows = db.query(
-        ResumeDB.primary_skills, ResumeDB.key_skills,
-        ResumeDB.skills, ResumeDB.raw_skills_text,
-    ).filter(ResumeDB.deleted_at == None).all()
-    blobs = [
-        " ".join(str(x or "") for x in row).lower()
-        for row in skill_rows
-    ]
-    roles = []
-    for tech in _TECH_TABS:
-        cnt = sum(1 for b in blobs if _tech_matches(tech, b))
-        if cnt > 0:
-            roles.append({"role": tech, "count": cnt})
-    roles.sort(key=lambda x: x["count"], reverse=True)
+    role_rows = (
+        db.query(ResumeDB.role, func.count(ResumeDB.id))
+        .filter(ResumeDB.deleted_at == None, ResumeDB.role.isnot(None), ResumeDB.role != "")
+        .group_by(ResumeDB.role)
+        .order_by(func.count(ResumeDB.id).desc())
+        .all()
+    )
+    # Keep "Other" last regardless of count.
+    roles = [{"role": r, "count": int(c)} for r, c in role_rows if r and r != "Other"]
+    other = [{"role": r, "count": int(c)} for r, c in role_rows if r == "Other"]
+    roles = roles + other
 
     def _distinct(col):
         vals = (

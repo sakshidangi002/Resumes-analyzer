@@ -165,17 +165,70 @@ class Settings(BaseSettings):
     # on this CPU (two monitor cameras share one inference lock) — so a NAMED box
     # sat on an empty chair for up to two minutes after the person walked away.
     #
-    # Detection is now reliable enough (yolo11m finds every seated person) that
-    # holding is unnecessary. The track itself still survives inside ByteTrack
-    # (track_buffer), so a person who is briefly hidden keeps their ID and NAME
-    # when they reappear — it just isn't DRAWN while they cannot be seen.
-    person_publish_held: bool = False
+    # RE-ENABLED. The "empty chair for two minutes" problem was a symptom of a
+    # 13s analysis cycle; a cycle is now ~2.3s measured, so a held track lingers
+    # ~7s (3 missed cycles), not minutes.
+    #
+    # Holding matters because detection on a ceiling camera is genuinely marginal
+    # for seated, chair-occluded people: measured on the live Dev-room frame the
+    # third person scores 0.08 — right at the detection floor — so they flicker
+    # in and out between cycles and their box vanishes entirely. Raising the
+    # resolution does NOT help (measured: @960 -> 3 people, @1280 -> 2, @1600 ->
+    # 2; the marginal detection falls BELOW the floor at higher res). Holding a
+    # recently-seen track is therefore the only way those people stay on screen
+    # as "Unknown" instead of blinking away.
+    #
+    # Trade-off: someone who walks away keeps a box for ~7s.
+    person_publish_held: bool = True
     # Torch device for person detection: "" = auto (CUDA if present, else CPU),
     # or pin explicitly e.g. "cpu" / "0".
     yolo_person_device: str = ""
     # Tuned ByteTrack config. Falls back to ultralytics' built-in bytetrack.yaml
     # when the file is missing.
     bytetrack_config_path: str = "models/bytetrack_person.yaml"
+
+    # ---- Inference concurrency (monitoring latency) ----------------------------
+    # Person inference used to be serialised by ONE global lock, so every camera
+    # waited for every other: with 2 monitor cameras at ~2.7 s/frame each camera
+    # only got a fresh look every ~5.3 s, and the overlay was drawn from a frame
+    # that old (the "box follows several metres behind" effect).
+    #
+    # This is now a bounded semaphore instead. 1 == the old behaviour exactly.
+    # 0 == auto: one slot per 4 cores (8-core box -> 2), which lets the two
+    # monitor cameras analyse concurrently without oversubscribing the CPU.
+    #
+    # Concurrency is NOT free: N parallel inferences share the same cores, so each
+    # one gets slower. It is a win because the cameras stop *queueing* — total
+    # wall-clock per camera drops even though single-frame time rises a little.
+    # yolo_max_concurrent_inference: 0 = auto, N = at most N inferences at once.
+    yolo_max_concurrent_inference: int = 0
+    # Threads handed to each inference session. Without this, ONNX Runtime grabs
+    # every core for EVERY concurrent session (2 x 8 threads on 8 cores = thrash).
+    # 0 = auto: cores / concurrency.
+    yolo_threads_per_session: int = 0
+
+    # ---- Monitor-camera overrides ---------------------------------------------
+    # MONITOR cameras only LABEL people (they can never mark attendance), so they
+    # may trade detection accuracy for latency independently of the IN/OUT
+    # attendance cameras, which must stay on the accurate model.
+    # Empty string = use the shared yolo_person_model_path / yolo_person_imgsz.
+    #
+    # Measured on this CPU @imgsz960: yolo11m.onnx 2667 ms, yolo11s.pt 1246 ms.
+    # Beware: config notes above record that yolo11s finds seated people far less
+    # reliably (only 1 of 4 detections cleared the track threshold). Lowering
+    # imgsz 960 -> 640 is roughly 2x faster and usually the safer trade.
+    yolo_monitor_model_path: str = ""
+    yolo_monitor_imgsz: int = 0
+    # Seconds between monitor analysis cycles. NOTE: this is a FLOOR, not a
+    # target — a cycle can never be faster than one inference (~2.7 s today), so
+    # lowering it below the inference time changes nothing. It only becomes
+    # meaningful once inference is faster than the interval.
+    monitor_analysis_interval: float = 1.5
+    # Drop a person track from the overlay if its last analysis is older than this
+    # (seconds). Stops a stale box lingering after someone has left the frame.
+    monitor_track_timeout: float = 6.0
+    # Log a per-camera performance line every N analysis cycles (0 = off).
+    perf_log_every: int = 20
 
     # ---- Person Re-Identification (cross-camera identity without a face) ----
     # OSNet appearance embeddings keep an employee's name on their body track when
