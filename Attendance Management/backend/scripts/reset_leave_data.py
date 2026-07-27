@@ -5,7 +5,15 @@ from sqlalchemy.orm import sessionmaker
 from app.models import LeaveRequest, LeaveAllocation, AttendanceRecord
 from scripts.seed import seed
 
-url = "postgresql://postgres:d5x8JGZ%40CH5td7X@43.205.127.72:5432/Attendance_system"
+# Read from the environment -- never hardcode the production credential here,
+# this file is committed to git. Uses the same DATABASE_URL the app uses.
+url = os.getenv("DATABASE_URL")
+if not url:
+    raise SystemExit(
+        "DATABASE_URL is not set. Refusing to run a destructive script without "
+        "an explicit target. Set it first, e.g.\n"
+        "  set DATABASE_URL=postgresql://user:pass@host:5432/Attendance_system"
+    )
 engine = create_engine(url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 db = SessionLocal()

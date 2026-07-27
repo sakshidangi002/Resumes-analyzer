@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { dvr } from "../api/client";
 
@@ -45,6 +45,25 @@ export default function DvrCameraDashboard() {
   const [error, setError] = useState("");
   const [dvrStatus, setDvrStatus] = useState<DVRStatus | null>(null);
 
+  // Only ONE channel streams at a time. Each MJPEG feed is an open
+  // multipart/x-mixed-replace connection that never ends, and the browser only
+  // allows ~6 connections per host: with every online camera streaming, the 5 s
+  // status poll and every other API call queued behind them and the whole page
+  // stalled. Server-side each feed also costs a full-frame JPEG encode per
+  // frame, which on this 4-core box is what makes the picture drift behind.
+  const [liveChannel, setLiveChannel] = useState<number | null>(null);
+  const liveImgRef = useRef<HTMLImageElement | null>(null);
+
+  // Removing the <img> from the DOM usually aborts its request, but not
+  // reliably for a stream that never completes. Clearing src first guarantees
+  // the browser drops the connection and the server stops encoding for us.
+  useEffect(() => {
+    const img = liveImgRef.current;
+    return () => {
+      if (img) img.src = "";
+    };
+  }, [liveChannel]);
+
   const fetchStatus = useCallback(async () => {
     try {
       const res = await dvr.status();
@@ -59,6 +78,19 @@ export default function DvrCameraDashboard() {
     const interval = setInterval(fetchStatus, 5000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
+
+  // Auto-open the first running camera so the page isn't blank on arrival, and
+  // drop the selection if that camera stops.
+  useEffect(() => {
+    const running = (dvrStatus?.cameras ?? []).filter((c) => c.worker_status?.is_alive);
+    if (!running.length) {
+      if (liveChannel !== null) setLiveChannel(null);
+      return;
+    }
+    if (liveChannel === null || !running.some((c) => c.channel_id === liveChannel)) {
+      setLiveChannel(running[0].channel_id);
+    }
+  }, [dvrStatus, liveChannel]);
 
   const handleConnect = async () => {
     if (!dvrForm.ip.trim() || !dvrForm.username.trim() || !dvrForm.password.trim()) {
@@ -310,9 +342,34 @@ export default function DvrCameraDashboard() {
                     justifyContent: "center",
                   }}
                 >
-                  {camera.worker_status?.is_alive ? (
+                  {camera.worker_status?.is_alive && camera.channel_id !== liveChannel ? (
+                    // Not the selected channel: render NO <img> at all, so no
+                    // MJPEG connection is opened and the server does no JPEG
+                    // encoding for it.
+                    <button
+                      type="button"
+                      onClick={() => setLiveChannel(camera.channel_id)}
+                      style={{
+                        display: "flex", flexDirection: "column", alignItems: "center",
+                        gap: "0.6rem", background: "transparent", border: 0,
+                        color: "rgba(255,255,255,0.75)", cursor: "pointer", fontSize: "0.95rem",
+                      }}
+                    >
+                      <span style={{ fontSize: "2.4rem", lineHeight: 1 }}>▶</span>
+                      <span>View live</span>
+                      <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.45)" }}>
+                        One camera streams at a time to keep the feed real-time
+                      </span>
+                    </button>
+                  ) : camera.worker_status?.is_alive ? (
                     <>
                     <img
+                      // Keyed by channel so switching cameras unmounts the old
+                      // <img> and closes its never-ending HTTP connection.
+                      key={`live-${camera.channel_id}`}
+                      ref={(el) => {
+                        if (el) liveImgRef.current = el;
+                      }}
                       src={dvr.streamUrl(camera.channel_id)}
                       alt={camera.name}
                       style={{
@@ -324,7 +381,11 @@ export default function DvrCameraDashboard() {
                         display: "block",
                       }}
                       onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
+                        // Clear src too: leaving it set makes a failing stream
+                        // retry forever behind display:none.
+                        const img = e.target as HTMLImageElement;
+                        img.src = "";
+                        img.style.display = "none";
                       }}
                     />
                     <button

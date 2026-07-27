@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, type CSSProperties } from "react";
-import { payroll as payrollApi, employees as employeesApi, attendance as attendanceApi } from "../api/client";
+import { payroll as payrollApi, employees as employeesApi, attendance as attendanceApi, type SalaryAdvanceRow } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SalaryFormulaView from "../components/SalaryFormulaView";
 import ConfirmModal from "../components/ConfirmModal";
@@ -105,6 +105,177 @@ const Icons = {
     </svg>
   ),
 };
+
+// Salary Advances (Feature 6). Self-contained: manages its own fetch/state.
+// An advance is recovered in full on the next payroll run.
+function SalaryAdvancesPanel({
+  employees,
+  canEdit,
+}: {
+  employees: EmployeeOption[];
+  canEdit: boolean;
+}) {
+  const emptyForm = {
+    employee_id: "",
+    amount: "",
+    date_taken: new Date().toISOString().slice(0, 10),
+    reason: "",
+  };
+  const [advances, setAdvances] = useState<SalaryAdvanceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const empName = (id: number) => {
+    const e = employees.find((x) => x.id === id);
+    return e ? `${e.full_name} (${e.employee_code})` : `#${id}`;
+  };
+  const money = (v: number) => "₹ " + Number(v).toLocaleString("en-IN");
+
+  const load = () => {
+    setLoading(true);
+    payrollApi
+      .advances()
+      .then((r) => setAdvances(r.data))
+      .catch(() => setAdvances([]))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.employee_id) {
+      setError("Select an employee");
+      return;
+    }
+    const amt = Number(form.amount);
+    if (!amt || amt <= 0) {
+      setError("Enter a valid amount");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    payrollApi
+      .createAdvance({
+        employee_id: Number(form.employee_id),
+        amount: amt,
+        date_taken: form.date_taken,
+        reason: form.reason || null,
+      })
+      .then(() => {
+        setForm(emptyForm);
+        setShowForm(false);
+        load();
+      })
+      .catch((e: any) => setError(e?.response?.data?.detail || "Failed to save advance"))
+      .finally(() => setBusy(false));
+  };
+
+  const remove = (id: number) => {
+    payrollApi.deleteAdvance(id).then(load).catch(() => load());
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: "1rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Salary Advances</h3>
+          <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: 2 }}>
+            Recovered in full from the employee's next payroll run.
+          </div>
+        </div>
+        {canEdit && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => { setError(""); setShowForm((s) => !s); }}>
+            {showForm ? "Cancel" : "Add Advance"}
+          </button>
+        )}
+      </div>
+
+      {error && <div className="alert alert-error" style={{ marginTop: "0.75rem" }}>{error}</div>}
+
+      {canEdit && showForm && (
+        <form onSubmit={submit} style={{ marginTop: "1rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+            <div className="form-group">
+              <label>Employee</label>
+              <CustomSelect
+                value={form.employee_id}
+                onChange={(v) => setForm({ ...form, employee_id: String(v) })}
+                placeholder="Select employee"
+                options={[
+                  { value: "", label: "Select employee" },
+                  ...employees.map((e) => ({ value: String(e.id), label: `${e.full_name} (${e.employee_code})` })),
+                ]}
+              />
+            </div>
+            <div className="form-group">
+              <label>Amount (₹)</label>
+              <input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+            </div>
+            <div className="form-group">
+              <label>Date Taken</label>
+              <input type="date" value={form.date_taken} onChange={(e) => setForm({ ...form, date_taken: e.target.value })} required />
+            </div>
+            <div className="form-group">
+              <label>Reason (optional)</label>
+              <input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Medical emergency" />
+            </div>
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Saving…" : "Save Advance"}</button>
+        </form>
+      )}
+
+      <div style={{ marginTop: "1rem" }}>
+        {loading ? (
+          <p className="text-muted">Loading advances…</p>
+        ) : advances.length === 0 ? (
+          <p className="text-muted">No advances recorded.</p>
+        ) : (
+          <div className="table-wrap table-wrap--dark">
+            <table className="table-modern table-modern--dark">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th style={{ textAlign: "right" }}>Amount</th>
+                  <th>Date Taken</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  {canEdit && <th></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {advances.map((a) => (
+                  <tr key={a.id}>
+                    <td>{empName(a.employee_id)}</td>
+                    <td style={{ textAlign: "right" }}>{money(a.amount)}</td>
+                    <td>{a.date_taken}</td>
+                    <td>{a.reason || "—"}</td>
+                    <td>
+                      <span style={{ fontWeight: 700, color: a.status === "DEDUCTED" ? "#22c55e" : "#f59e0b" }}>
+                        {a.status === "DEDUCTED" ? "Recovered" : a.status === "PENDING" ? "Pending" : a.status}
+                      </span>
+                    </td>
+                    {canEdit && (
+                      <td style={{ textAlign: "right" }}>
+                        {a.status === "PENDING" && (
+                          <button type="button" className="btn btn-secondary btn-sm" style={{ color: "#f87171" }} onClick={() => remove(a.id)}>
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function PayrollManagement() {
   const { hasRole } = useAuth();
@@ -390,6 +561,8 @@ export default function PayrollManagement() {
         </div>
         <GlobalHeaderControls />
       </div>
+
+      <SalaryAdvancesPanel employees={employees} canEdit={canEdit} />
 
       <div className="card" style={{ marginBottom: "1rem" }}>
         <div className="payroll-filter-bar">
@@ -806,6 +979,90 @@ export default function PayrollManagement() {
                     </tr>
                   </tbody>
                 </table>
+                {/* Plain-language hours & deduction breakdown, day by day. */}
+                {(() => {
+                  let bd: any = null;
+                  try {
+                    bd = detailDialog.payslip.component_breakdown
+                      ? JSON.parse(detailDialog.payslip.component_breakdown)
+                      : null;
+                  } catch { bd = null; }
+                  if (!bd || !Array.isArray(bd.days) || bd.days.length === 0) {
+                    return (
+                      <div style={{ marginTop: "0.75rem", fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>
+                        Re-run payroll for this month to see the day-by-day hours breakdown.
+                      </div>
+                    );
+                  }
+                  const cell: React.CSSProperties = { padding: "5px 8px", whiteSpace: "nowrap" };
+                  return (
+                    <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.10)" }}>
+                      <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Working hours &amp; deductions</div>
+
+                      {/* One-line plain summary */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(255,255,255,0.06)", fontSize: "0.8rem" }}>
+                          Worked <strong>{bd.worked_hours_total}h</strong> of <strong>{bd.expected_hours_total}h</strong>
+                        </span>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(34,197,94,0.14)", color: "#4ade80", fontSize: "0.8rem" }}>
+                          Paid <strong>{bd.paid_days}</strong> of {bd.basis_days} days
+                        </span>
+                        <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(239,68,68,0.14)", color: "#f87171", fontSize: "0.8rem" }}>
+                          LOP <strong>{bd.lop_days}</strong> days
+                        </span>
+                        {Number(bd.short_leaves_used) > 0 && (
+                          <span style={{ padding: "0.35rem 0.7rem", borderRadius: 8, background: "rgba(245,158,11,0.14)", color: "#fbbf24", fontSize: "0.8rem" }}>
+                            {bd.short_leaves_used} free short leave used
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+                          <thead style={{ position: "sticky", top: 0, background: "#1a1a1a" }}>
+                            <tr style={{ color: "rgba(255,255,255,0.6)", textAlign: "left" }}>
+                              <th style={cell}>Date</th>
+                              <th style={cell}>In – Out</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Worked</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Required</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Short by</th>
+                              <th style={{ ...cell, textAlign: "right" }}>Deducted</th>
+                              <th style={cell}>Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bd.days.map((d: any) => {
+                              const off = d.expected_hours === 0;
+                              const lop = Number(d.lop_days) > 0;
+                              return (
+                                <tr key={d.date} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", opacity: off ? 0.55 : 1 }}>
+                                  <td style={cell}>{d.date.slice(8)}/{d.date.slice(5, 7)} <span style={{ color: "rgba(255,255,255,0.45)" }}>{d.weekday}</span></td>
+                                  <td style={{ ...cell, color: "rgba(255,255,255,0.7)" }}>
+                                    {d.in_time ? `${d.in_time} – ${d.out_time || "…"}` : "—"}
+                                  </td>
+                                  <td style={{ ...cell, textAlign: "right" }}>{d.worked_hours != null ? `${d.worked_hours}h` : "—"}</td>
+                                  <td style={{ ...cell, textAlign: "right", color: "rgba(255,255,255,0.55)" }}>{off ? "—" : `${d.expected_hours}h`}</td>
+                                  <td style={{ ...cell, textAlign: "right", color: d.short_hours > 0 ? "#fbbf24" : "rgba(255,255,255,0.4)" }}>
+                                    {d.short_hours > 0 ? `${d.short_hours.toFixed(2)}h` : "—"}
+                                  </td>
+                                  <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: lop ? "#f87171" : "#4ade80" }}>
+                                    {lop ? `−${Number(d.lop_days).toFixed(2)}` : "0"}
+                                  </td>
+                                  <td style={{ ...cell, color: "rgba(255,255,255,0.6)" }}>{d.note}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", marginTop: "0.5rem" }}>
+                        Pay is based on hours worked, not arrival time. A day is only deducted when hours fall short —
+                        the shortfall is charged proportionally (short hours ÷ required hours).
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {!showFormulaInDetail ? (
                   <button
                     type="button"

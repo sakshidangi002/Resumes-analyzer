@@ -1,8 +1,9 @@
 """Payroll periods, salary structure, run payroll, payslips."""
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models import User, SalaryStructure, PayrollPeriod, Payslip, Employee
+from app.models import User, SalaryStructure, PayrollPeriod, Payslip, Employee, SalaryAdvance
 from app.models.user import Role, user_roles
 from datetime import datetime
 
@@ -15,6 +16,8 @@ from app.schemas.payroll import (
     PayslipResponse,
     PayslipCreate,
     PayslipUpdate,
+    SalaryAdvanceCreate,
+    SalaryAdvanceResponse,
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.payroll_service import run_payroll_for_period
@@ -95,9 +98,34 @@ def delete_period(
     period = db.query(PayrollPeriod).filter(PayrollPeriod.id == period_id).first()
     if not period:
         raise HTTPException(status_code=404, detail="Period not found")
+
+    # A LOCKED period has already been paid out. Deleting it destroys every
+    # payslip for that month with no audit trail and no soft-delete, so refuse.
+    if str(getattr(period, "status", "") or "").upper() == "LOCKED":
+        raise HTTPException(
+            status_code=409,
+            detail="This payroll period is locked and cannot be deleted. "
+                   "Unlock it first if you really need to remove it.",
+        )
+
     # Cascade delete is enabled in the model, so deleting the period will delete all its payslips.
-    db.delete(period)
-    db.commit()
+    # That cascade is ORM-level only; anything else still referencing these
+    # payslips (e.g. salary advance repayments) raises an FK error. Roll back so
+    # the payslips aren't left destroyed by a half-applied delete, and report
+    # why instead of surfacing a bare 500.
+    try:
+        db.delete(period)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This period still has records linked to it (for example salary "
+                   "advance repayments). Remove those first, then delete the period.",
+        )
+    except Exception:
+        db.rollback()
+        raise
     return {"message": "Deleted"}
 
 
@@ -188,6 +216,75 @@ def delete_salary_structure(
     if not s:
         raise HTTPException(status_code=404, detail="Salary structure not found")
     db.delete(s)
+    db.commit()
+    return {"message": "Deleted"}
+
+
+# ---------- Salary advances ----------
+@router.post("/advances", response_model=SalaryAdvanceResponse)
+def create_advance(
+    data: SalaryAdvanceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Record a salary advance taken by an employee (recovered on next payroll)."""
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+    emp = db.query(Employee).filter(Employee.id == data.employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    adv = SalaryAdvance(
+        employee_id=data.employee_id,
+        amount=data.amount,
+        date_taken=data.date_taken,
+        reason=data.reason,
+        status="PENDING",
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.username,
+    )
+    db.add(adv)
+    db.commit()
+    db.refresh(adv)
+    return adv
+
+
+@router.get("/advances", response_model=list[SalaryAdvanceResponse])
+def list_advances(
+    employee_id: int | None = Query(None),
+    status: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR", "Employee"])),
+):
+    role_names = [r.name for r in current_user.roles]
+    is_priv = any(r in role_names for r in ("Admin", "HR"))
+    q = db.query(SalaryAdvance)
+    if not is_priv:
+        # Employee: only own advances
+        if current_user.employee_id is None:
+            return []
+        q = q.filter(SalaryAdvance.employee_id == current_user.employee_id)
+    elif employee_id is not None:
+        q = q.filter(SalaryAdvance.employee_id == employee_id)
+    if status:
+        q = q.filter(SalaryAdvance.status == status)
+    return q.order_by(SalaryAdvance.date_taken.desc(), SalaryAdvance.id.desc()).all()
+
+
+@router.delete("/advances/{advance_id}")
+def delete_advance(
+    advance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    adv = db.query(SalaryAdvance).filter(SalaryAdvance.id == advance_id).first()
+    if not adv:
+        raise HTTPException(status_code=404, detail="Advance not found")
+    if adv.status == "DEDUCTED":
+        raise HTTPException(
+            status_code=400,
+            detail="This advance was already recovered in payroll and cannot be deleted.",
+        )
+    db.delete(adv)
     db.commit()
     return {"message": "Deleted"}
 

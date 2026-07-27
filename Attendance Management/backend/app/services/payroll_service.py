@@ -13,7 +13,9 @@ from app.models import (
     LeaveType,
     CompanyConfig,
     Holiday,
+    SalaryAdvance,
 )
+from app.core.datetime_utils import get_ist_now
 from app.services.leave_service import get_current_financial_year
 
 
@@ -85,6 +87,17 @@ def run_payroll_for_period(
     payslips = []
     config = _get_company_config(db)
     weekly_off_days = config.weekly_off_days if config else None
+    # Salary-advance recovery is idempotent across re-runs: release any advances
+    # this period recovered on a previous run so they are re-evaluated below.
+    db.query(SalaryAdvance).filter(SalaryAdvance.deducted_period_id == period.id).update(
+        {
+            SalaryAdvance.status: "PENDING",
+            SalaryAdvance.deducted_period_id: None,
+            SalaryAdvance.deducted_at: None,
+        },
+        synchronize_session=False,
+    )
+    db.flush()
     for emp in employees:
         struct = get_salary_structure_for_date(db, emp.id, date(year, month, 1))
         if not struct:
@@ -332,8 +345,73 @@ def run_payroll_for_period(
         per_day = gross / Decimal("30")
         total_earnings = per_day * paid_days
         total_deductions = (struct.deductions / Decimal("30")) * paid_days
+        # Recover pending salary advances in full on this payroll run. Advances
+        # deducted by this period were released to PENDING above, so re-runs are
+        # consistent. Employees with no advances are unaffected (advance = 0).
+        pending_advances = (
+            db.query(SalaryAdvance)
+            .filter(
+                SalaryAdvance.employee_id == emp.id,
+                SalaryAdvance.status == "PENDING",
+                SalaryAdvance.date_taken <= month_end,
+            )
+            .all()
+        )
+        advance_deduction = sum(
+            (Decimal(str(a.amount)) for a in pending_advances), Decimal("0")
+        )
+        total_deductions = total_deductions + advance_deduction
         net = total_earnings - total_deductions
+        for a in pending_advances:
+            a.status = "DEDUCTED"
+            a.deducted_period_id = period.id
+            a.deducted_at = get_ist_now()
         per_hour = (gross / Decimal("30")) / expected_hours
+
+        # Day-by-day explanation of how paid_days / lop_days were reached, built
+        # from the same values the calculation above used. Lets the UI show
+        # plain hours per day instead of only a fractional day total.
+        _rec_by_date = {r.date: r for r in records}
+        _days = []
+        _cur = start
+        while _cur <= end:
+            _r = _rec_by_date.get(_cur)
+            _frac = day_unpaid_frac.get(_cur, Decimal("0"))
+            _worked = float(_r.total_work_hours) if (_r and _r.total_work_hours is not None) else None
+            _missed = punch_missed_hours.get(_cur)
+            _is_off = _is_weekly_off(_cur, weekly_off_days)
+            _is_hol = _is_holiday(db, _cur)
+            if _is_off:
+                _note = "Week off"
+            elif _is_hol:
+                _note = "Holiday"
+            elif _r is None:
+                _note = "Absent (no record)"
+            elif _frac == 0 and (_missed is not None and _missed > Decimal("0.25")):
+                _note = "Short hours waived (free short leave)"
+            elif _frac == 0:
+                _note = "Full day"
+            elif _frac >= Decimal("1"):
+                _note = "Full day LOP"
+            else:
+                _note = "Partial LOP (short hours)"
+            _days.append({
+                "date": _cur.isoformat(),
+                "weekday": _cur.strftime("%a"),
+                "status": (_r.status if _r else ("WEEKLY_OFF" if _is_off else ("HOLIDAY" if _is_hol else "ABSENT"))),
+                "in_time": (_r.sign_in_time.strftime("%H:%M") if (_r and _r.sign_in_time) else None),
+                "out_time": (_r.sign_out_time.strftime("%H:%M") if (_r and _r.sign_out_time) else None),
+                "worked_hours": _worked,
+                "expected_hours": (0.0 if (_is_off or _is_hol) else float(expected_hours)),
+                "short_hours": (float(_missed) if (_missed is not None and _missed > 0) else 0.0),
+                "lop_days": float(_frac),
+                "note": _note,
+            })
+            _cur += timedelta(days=1)
+
+        _worked_total = sum((d["worked_hours"] or 0.0) for d in _days)
+        _expected_total = sum(d["expected_hours"] for d in _days)
+
         breakdown = json.dumps({
             "basic": float(struct.basic),
             "hra": float(struct.hra),
@@ -342,12 +420,18 @@ def run_payroll_for_period(
             "miscellaneous": float(struct.miscellaneous),
             "allowances": float(struct.allowances),
             "deductions": float(struct.deductions),
+            "advance_deduction": float(advance_deduction),
             "paid_days": float(paid_days),
             "lop_days": float(lop_days),
             "lop_dates": [d.isoformat() for d, v in day_unpaid_frac.items() if v > 0],
             "short_leaves_used": int(short_leaves_used),
             "per_hour_salary": float(round(per_hour, 2)),
-            "expected_hours": float(expected_hours)
+            "expected_hours": float(expected_hours),
+            # Simple hour/day summary for the UI
+            "basis_days": float(basis),
+            "worked_hours_total": round(float(_worked_total), 2),
+            "expected_hours_total": round(float(_expected_total), 2),
+            "days": _days,
         })
         slip = existing_slips.get(emp.id)
         if slip:
@@ -373,7 +457,6 @@ def run_payroll_for_period(
             db.add(slip)
         payslips.append(slip)
     period.status = "PROCESSED"
-    from app.core.datetime_utils import get_ist_now
     period.is_processed = True
     period.processed_at = get_ist_now()
     db.commit()

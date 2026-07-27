@@ -12,19 +12,40 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   if (token) config.headers.Authorization = "Bearer " + token;
+  // For file uploads (FormData), drop the default application/json header so the
+  // browser sets multipart/form-data with the correct boundary; otherwise the
+  // backend can't parse the form fields (HTTP 422).
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    config.headers.delete("Content-Type");
+  }
   return config;
 });
+
+// Camera endpoints that the UI polls on a short interval (DVR status every 5s,
+// live recognition, etc.). These gained auth recently, so a single transient
+// 401 here — a momentary DB hiccup while validating the token against the
+// remote DB — must NOT tear down the session and bounce the user to /login.
+// A genuinely expired/invalid token will still surface a 401 on the next
+// real navigation (/auth/me, /employees, …) and log out normally.
+const BACKGROUND_POLL_PATHS = ["/dvr/", "/recognize-", "/live/"];
 
 api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response && err.response.status === 401) {
+      const url = (err.config && err.config.url) || "";
       // Don't redirect if it's a login attempt, otherwise error message in Login.tsx disappears on refresh
-      const isLoginRequest = err.config && err.config.url && err.config.url.includes("/auth/login");
-      
+      const isLoginRequest = url.includes("/auth/login");
+      const isBackgroundPoll = BACKGROUND_POLL_PATHS.some((p) => url.includes(p));
+
+      if (isBackgroundPoll) {
+        // Let the individual poller handle/ignore it; keep the session.
+        return Promise.reject(err);
+      }
+
       localStorage.removeItem("token");
       localStorage.removeItem("user");
-      
+
       if (!isLoginRequest) {
         window.location.href = "/login";
       }
@@ -93,6 +114,59 @@ export const employees = {
   ) => api.put(`/employees/${id}/bank`, data),
   departments: () => api.get("/employees/departments"),
   designations: () => api.get("/employees/designations"),
+  // Position & Salary increment history (Feature 1)
+  careerHistory: (id: number) => api.get<CareerHistoryBundle>(`/employees/${id}/career-history`),
+  addCareerHistory: (
+    id: number,
+    data: {
+      designation_id?: number | null;
+      department_id?: number | null;
+      salary?: number | null;
+      effective_date: string;
+      reason?: string | null;
+      change_type?: string | null;
+      apply_to_live?: boolean;
+    }
+  ) => api.post(`/employees/${id}/career-history`, data),
+  updateCareerHistory: (
+    id: number,
+    historyId: number,
+    data: {
+      designation_id?: number | null;
+      department_id?: number | null;
+      salary?: number | null;
+      effective_date?: string;
+      reason?: string | null;
+      change_type?: string | null;
+    }
+  ) => api.patch(`/employees/${id}/career-history/${historyId}`, data),
+  deleteCareerHistory: (id: number, historyId: number) =>
+    api.delete(`/employees/${id}/career-history/${historyId}`),
+};
+
+export type CareerHistoryRow = {
+  id: number;
+  employee_id: number;
+  designation_id?: number | null;
+  department_id?: number | null;
+  position_title?: string | null;
+  department_name?: string | null;
+  salary?: number | null;
+  effective_date: string;
+  reason?: string | null;
+  change_type: string;
+  updated_by_name?: string | null;
+  created_at: string;
+};
+
+export type CareerHistoryBundle = {
+  current: {
+    position_title?: string | null;
+    department_name?: string | null;
+    salary?: number | null;
+    effective_date?: string | null;
+  };
+  history: CareerHistoryRow[];
 };
 
 export const attendance = {
@@ -102,7 +176,7 @@ export const attendance = {
     api.post("/attendance/sign-in", null, { params: { d: date, sign_in_time, employee_id } }),
   signOut: (date: string, sign_out_time: string, employee_id: number) =>
     api.post("/attendance/sign-out", null, { params: { d: date, sign_out_time, employee_id } }),
-  adminSet: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
+  adminSet: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; break_hours?: number | null; status?: string | null }) =>
     api.put("/attendance/admin-set", data),
   autoMark: (data: { employee_id: number; date: string; sign_in_time?: string | null; sign_out_time?: string | null; status?: string | null }) =>
     api.post("/attendance/auto-mark", data),
@@ -211,6 +285,25 @@ export const payroll = {
   createPayslip: (data: object) => api.post("/payroll/payslips", data),
   updatePayslip: (id: number, data: object) => api.patch("/payroll/payslips/" + id, data),
   deletePayslip: (id: number) => api.delete("/payroll/payslips/" + id),
+  // Salary advances (Feature 6) — recovered on next payroll run.
+  advances: (params?: { employee_id?: number; status?: string }) =>
+    api.get<SalaryAdvanceRow[]>("/payroll/advances", { params }),
+  createAdvance: (data: { employee_id: number; amount: number; date_taken: string; reason?: string | null }) =>
+    api.post<SalaryAdvanceRow>("/payroll/advances", data),
+  deleteAdvance: (id: number) => api.delete("/payroll/advances/" + id),
+};
+
+export type SalaryAdvanceRow = {
+  id: number;
+  employee_id: number;
+  amount: number;
+  date_taken: string;
+  reason: string | null;
+  status: string; // PENDING | DEDUCTED | CANCELLED
+  deducted_period_id: number | null;
+  deducted_at: string | null;
+  created_by_name: string | null;
+  created_at: string;
 };
 
 export const letters = {
@@ -525,6 +618,105 @@ export const dvr = {
   stopAll: () => api.post("/dvr/cameras/stop-all"),
   previewUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/preview`,
   streamUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/stream`,
+};
+
+// ---- Employee ↔ HR Queries (Feature 2) ----
+export type HRQueryReplyRow = {
+  id: number;
+  query_id: number;
+  user_id: number | null;
+  author_name: string | null;
+  author_role: string | null;
+  message: string;
+  created_at: string;
+};
+
+export type HRQueryRow = {
+  id: number;
+  employee_id: number;
+  employee_name: string | null;
+  subject: string;
+  message: string;
+  category: string | null;
+  status: string; // OPEN | PENDING | RESOLVED
+  created_at: string;
+  updated_at: string | null;
+  replies: HRQueryReplyRow[];
+};
+
+// ---- Company Policies (Feature 4) ----
+export type PolicyVersion = {
+  id: number;
+  name: string;
+  title: string | null;
+  category: string | null;
+  content: string | null;
+  effective_date: string;
+  version: number;
+  attachment_name: string | null;
+  published_by_name: string | null;
+  created_at: string;
+};
+export type PolicyGroupRow = {
+  name: string;
+  category: string | null;
+  current: PolicyVersion;
+  versions_count: number;
+};
+export type PolicyHistoryRow = { name: string; versions: PolicyVersion[] };
+
+export const policies = {
+  list: () => api.get<PolicyGroupRow[]>("/policies"),
+  history: (name: string) => api.get<PolicyHistoryRow>("/policies/history", { params: { name } }),
+  create: (data: FormData) => api.post<PolicyVersion>("/policies", data),
+  update: (id: number, data: { title?: string; category?: string; content?: string; effective_date?: string }) =>
+    api.patch<PolicyVersion>("/policies/" + id, data),
+  remove: (id: number) => api.delete("/policies/" + id),
+  attachment: (id: number) => api.get(`/policies/${id}/attachment`, { responseType: "blob" }),
+};
+
+export type LiveTrackRow = {
+  track_id: number;
+  box: number[];          // x1,y1,x2,y2 in frame pixels
+  frame_w: number;
+  frame_h: number;
+  employee_id: number | null;
+  label: string;
+  named: boolean;
+};
+
+/** Click-to-name for room cameras. A ceiling camera resolves no faces, so Body
+ *  Re-ID has nothing to learn from; naming a track once teaches it that person's
+ *  appearance for the rest of the day. Labelling only — never marks attendance. */
+export const liveIdentify = {
+  tracks: (camera_id: number | string) =>
+    api.get<LiveTrackRow[]>(`/live/tracks/${camera_id}`),
+  nameTrack: (data: { camera_id: number; track_id: number; employee_id: number }) =>
+    api.post<{ message: string; employee_name: string }>("/live/name-track", data),
+  snapshot: (camera_id: number | string) =>
+    api.get(`/cameras/${camera_id}/preview`, { responseType: "blob", timeout: 30000 }),
+  analysisStatus: () => api.get<AnalysisStatusRow[]>("/live/analysis-status"),
+  pauseAnalysis: (camera_id: number, paused: boolean) =>
+    api.post<{ paused: boolean; message: string }>("/live/pause-analysis", { camera_id, paused }),
+};
+
+export type AnalysisStatusRow = {
+  camera_id: number;
+  name: string;
+  camera_purpose: string;
+  paused: boolean;
+  analysis_interval: number;
+};
+
+export const queries = {
+  list: (status?: string) => api.get<HRQueryRow[]>("/queries", { params: { status } }),
+  get: (id: number) => api.get<HRQueryRow>("/queries/" + id),
+  create: (data: { subject: string; message: string; category?: string | null }) =>
+    api.post<HRQueryRow>("/queries", data),
+  reply: (id: number, message: string) =>
+    api.post<HRQueryReplyRow>(`/queries/${id}/replies`, { message }),
+  setStatus: (id: number, status: string) =>
+    api.patch<HRQueryRow>("/queries/" + id, { status }),
 };
 
 

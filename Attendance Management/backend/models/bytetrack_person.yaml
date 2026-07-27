@@ -1,0 +1,46 @@
+# ByteTrack config tuned for office/CCTV person tracking.
+# Used by bytetrack_engine.ByteTrackEngine (tracker=<this file>).
+#
+# WHY these values (vs ultralytics defaults 0.25/0.1/0.25/30):
+# The detector is now called with a LOW conf floor (CCTV_PERSON_CONF, default
+# 0.10) so that weak detections — a person seated behind a monitor, half
+# occluded by a chair, or facing away — actually reach ByteTrack. ByteTrack's
+# whole value is its TWO-STAGE association: stage 1 uses confident detections,
+# stage 2 re-associates the *low-score* leftovers to existing tracks. Previously
+# conf=0.35 discarded those low-score boxes before ByteTrack ever saw them, so
+# stage 2 could never fire. Precision is preserved by gating TRACK CREATION
+# (new_track_thresh), not detection.
+
+tracker_type: bytetrack
+
+# CALIBRATED against real Channel-1 frames (ceiling-mounted, people seated behind
+# high-back chairs). Measured yolo11s@1600 scores for REAL people in this scene:
+# 0.26 - 0.33 (furniture/noise sits at 0.05 - 0.10). Thresholds must live inside
+# that window — earlier values (high 0.35 / new 0.40) were ABOVE every achievable
+# score, so ByteTrack could never create a track and the room showed "People: 0".
+
+# RE-CALIBRATED after the dev-room camera was re-aimed. Real people now measure
+# 0.36 - 0.67 (they were 0.21 - 0.42 at the old steep angle), so the bar can be
+# raised well above where empty chairs and furniture score. This is what stops the
+# phantom "person" box appearing on an empty chair and being given a name.
+track_high_thresh: 0.30
+
+# Stage-2 association: low-score boxes are matched to EXISTING tracks only. This
+# keeps a seated person alive through a frame where their score dips, without
+# ever letting a weak box create a new person.
+track_low_thresh: 0.10
+
+# A NEW track needs a stage-1-grade detection. The weakest real person measures
+# 0.36, so 0.30 admits every real person while excluding chairs.
+new_track_thresh: 0.30
+
+# Frames a lost track is kept alive. Each "frame" here is one ANALYSIS TICK, not a
+# video frame — at a 2s interval, 60 ticks would coast a stale box (with someone's
+# name on it) over an empty chair for 2 minutes after they leave. 8 ticks ≈ 16s.
+track_buffer: 8
+
+# IoU/cost association threshold — unchanged from the ultralytics default.
+match_thresh: 0.8
+
+# Fuse detection score with IoU when matching; stabilises weak detections.
+fuse_score: true

@@ -379,21 +379,43 @@ def recalculate_attendance_summary(db: Session, employee_id: int, d: date) -> At
     rec = get_or_create_attendance(db, employee_id, d)
     events = get_events_for_day(db, employee_id, d)
 
+    work_h = None
     if events:
         work_h, break_h, first_in, last_out, _timeline = calculate_intervals_from_events(events)
         # first_in = earliest IN event time — NEVER overwritten by later events.
         # last_out = latest OUT event time — always updated when new OUT arrives.
-        rec.sign_in_time = first_in
-        rec.sign_out_time = last_out
-        rec.total_work_hours = work_h if work_h and work_h > 0 else None
-        rec.total_break_hours = break_h if break_h and break_h > 0 else Decimal("0")
-        rec.source = "AUTO" if all(e.source == "AUTO" for e in events) else rec.source
+        # A field HR pinned manually is left alone: the camera may have missed
+        # the employee, which is exactly why HR typed the value in.
+        if not rec.sign_in_manual:
+            rec.sign_in_time = first_in
+        if not rec.sign_out_manual:
+            rec.sign_out_time = last_out
+        if not rec.break_manual:
+            rec.total_break_hours = break_h if break_h and break_h > 0 else Decimal("0")
         for event in events:
             if event.attendance_record_id != rec.id:
                 event.attendance_record_id = rec.id
-    else:
-        rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
+    elif not rec.break_manual:
         rec.total_break_hours = None
+
+    manual = rec.sign_in_manual or rec.sign_out_manual or rec.break_manual
+    if manual or not events:
+        # The IN→OUT pair sum only knows the camera's times, so it cannot be used
+        # once HR has overridden anything. Work from the effective span instead,
+        # net of the break, so Working Hours never includes break time.
+        span = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
+        if span is None:
+            # Still checked in (no sign-out yet): fall back to the live
+            # event-derived total rather than blanking the day's hours.
+            rec.total_work_hours = work_h if (work_h and work_h > 0) else None
+        else:
+            net = span - (rec.total_break_hours or Decimal("0"))
+            rec.total_work_hours = net if net > 0 else Decimal("0")
+        if manual:
+            rec.source = "ADMIN"
+    else:
+        rec.total_work_hours = work_h if work_h and work_h > 0 else None
+        rec.source = "AUTO" if all(e.source == "AUTO" for e in events) else rec.source
 
     apply_status_from_hours(db, rec)
     _apply_late_and_early(db, rec)

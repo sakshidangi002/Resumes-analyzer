@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date, time, datetime
+from decimal import Decimal
 
 
 class AttendanceRecordCreate(BaseModel):
@@ -37,6 +38,10 @@ class AdminSetAttendance(BaseModel):
     date: date
     sign_in_time: Optional[time] = None
     sign_out_time: Optional[time] = None
+    # Break in hours (0.5 = 30 min). Sent when HR enters the break by hand; it is
+    # then deducted from working hours instead of whatever the camera saw.
+    # Omit (None) to hand the break back to the camera.
+    break_hours: Optional[Decimal] = None
     status: Optional[str] = None
 
 

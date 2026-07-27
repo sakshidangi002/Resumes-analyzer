@@ -9,7 +9,7 @@ from app.models import User
 from app.models.employee import Employee
 from app.models.user import Role, user_roles
 from app.schemas.auth import LoginRequest, SignupRequest, Token, ForgotPasswordRequest
-from app.api.deps import get_current_user, is_employment_status_blocked
+from app.api.deps import get_current_user, is_employment_status_blocked, require_roles
 from app.schemas.user import UserWithRoles
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -122,12 +122,24 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/forgot-password")
-def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    """Reset password to a default value."""
+def forgot_password(
+    data: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin"])),
+):
+    """Reset a user's password to the default. ADMIN ONLY.
+
+    This was previously unauthenticated, which let anyone reset any account --
+    including Admin -- to a constant password that the response disclosed. It is
+    now an administrative action: an Admin resets the password and tells the
+    person, which is how it was already being used in practice.
+
+    A self-service reset must not live here; it needs an emailed one-time token.
+    """
     user = db.query(User).filter(User.username == data.username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
-    
+
     user.password_hash = get_password_hash("Softwiz@123")
     db.commit()
     return {"detail": "Password has been successfully reset to: Softwiz@123"}

@@ -12,7 +12,12 @@ def run():
         from sqlalchemy import create_engine, text
         from dotenv import load_dotenv
         load_dotenv()
-        url = os.getenv("DATABASE_URL", "postgresql://postgres:d5x8JGZ%40CH5td7X@43.205.127.72:5432/Resume_analyzer")
+        # No hardcoded fallback -- this file is committed to git, and the old
+        # default embedded the live production password.
+        url = os.getenv("DATABASE_URL")
+        if not url:
+            print("[migrate_db] DATABASE_URL is not set; skipping migration.")
+            return
         engine = create_engine(url)
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS one_liner VARCHAR(500);"))

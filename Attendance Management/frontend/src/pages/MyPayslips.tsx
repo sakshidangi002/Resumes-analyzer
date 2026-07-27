@@ -5,8 +5,9 @@ import { useAuth } from "../auth/AuthContext";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { formatDate } from "../utils/dateFormatter";
-import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
+// jsPDF and html2canvas are loaded on demand inside the download handler, not
+// at module scope: together they are ~750 KB, which made this page's chunk
+// 596 KB and downloaded on every visit even for users who never export a PDF.
 import CustomSelect from "../components/CustomSelect";
 import { useMemo } from "react";
 
@@ -138,7 +139,11 @@ export default function MyPayslips() {
     const fileName = `payslip_${codePart}_${per.replace(/[^\w-]+/g, "_")}.pdf`;
 
     // Wait a tiny bit for fonts/styles to stabilize
-    setTimeout(() => {
+    setTimeout(async () => {
+      const [{ jsPDF }, { default: html2canvas }] = await Promise.all([
+        import("jspdf"),
+        import("html2canvas"),
+      ]);
       html2canvas(container, {
         scale: 2, // Better quality
         useCORS: true,

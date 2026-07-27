@@ -2,7 +2,6 @@ import softwizLogo from '../assets/softwiz New Logo1 (1).png';
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { auth } from "../api/client";
 
 
 export default function Login() {
@@ -18,22 +17,22 @@ export default function Login() {
   const [forgotUser, setForgotUser] = useState("");
   const [forgotMsg, setForgotMsg] = useState("");
   const [forgotErr, setForgotErr] = useState("");
-  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotLoading] = useState(false);
 
+  // Self-service reset is deliberately disabled. This used to POST to an
+  // unauthenticated endpoint that reset ANY account -- including Admin -- to a
+  // fixed password and returned it in the response, so anyone who knew a
+  // username could take over that account. Resetting is now an Admin action
+  // (Manage Users). Until an emailed one-time-token flow exists, this form
+  // just tells the user who to ask.
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setForgotErr("");
-    setForgotMsg("");
-    setForgotLoading(true);
-    try {
-      const res = await auth.forgotPassword(forgotUser);
-      setForgotMsg(res.data.detail);
-      setForgotUser("");
-    } catch (err: any) {
-      setForgotErr(err.response?.data?.detail || "Error resetting password");
-    } finally {
-      setForgotLoading(false);
-    }
+    setForgotMsg(
+      "For security, passwords can no longer be reset from this page. " +
+        "Please ask your HR or Admin to reset it for you from Manage Users."
+    );
+    setForgotUser("");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

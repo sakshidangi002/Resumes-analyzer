@@ -171,3 +171,62 @@ class EmployeeResponse(BaseModel):
         return f"{self.first_name} {self.last_name}"
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- Position & Salary increment history (Feature 1) ----------
+class CareerHistoryCreate(BaseModel):
+    """Payload for recording a promotion / salary increment.
+
+    All fields optional except effective_date: HR may change only position, only
+    salary, or both. Omitted position/salary means "unchanged from current".
+    """
+    designation_id: Optional[int] = None
+    department_id: Optional[int] = None
+    salary: Optional[float] = None
+    effective_date: date
+    reason: Optional[str] = None
+    change_type: Optional[str] = None  # PROMOTION, INCREMENT, UPDATE (auto-derived if omitted)
+    # When True (default), also update the employee's live designation/department
+    # and create a new salary structure so payroll picks up the new figure.
+    apply_to_live: bool = True
+
+
+class CareerHistoryUpdate(BaseModel):
+    """Correct an existing history row in place (audit record only — does not
+    re-apply to the employee's live position or salary structure)."""
+    designation_id: Optional[int] = None
+    department_id: Optional[int] = None
+    salary: Optional[float] = None
+    effective_date: Optional[date] = None
+    reason: Optional[str] = None
+    change_type: Optional[str] = None
+
+
+class CareerHistoryResponse(BaseModel):
+    id: int
+    employee_id: int
+    designation_id: Optional[int] = None
+    department_id: Optional[int] = None
+    position_title: Optional[str] = None
+    department_name: Optional[str] = None
+    salary: Optional[float] = None
+    effective_date: date
+    reason: Optional[str] = None
+    change_type: str
+    updated_by_name: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CareerCurrentSnapshot(BaseModel):
+    position_title: Optional[str] = None
+    department_name: Optional[str] = None
+    salary: Optional[float] = None
+    effective_date: Optional[date] = None
+
+
+class CareerHistoryBundle(BaseModel):
+    """Current position/salary plus the full chronological history."""
+    current: CareerCurrentSnapshot
+    history: List[CareerHistoryResponse]

@@ -1,6 +1,7 @@
 """
 Test script for DVR discovery without API authentication.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -11,10 +12,10 @@ sys.path.insert(0, str(backend_dir))
 from app.services.hikvision_discovery import discover_cameras
 
 # Test DVR discovery
-ip = "192.168.29.181"
-port = 8000
-username = "anilchanna"
-password = "test@123"
+ip = os.getenv("DVR_IP", "")
+port = int(os.getenv("DVR_PORT", "8000"))
+username = os.getenv("DVR_USERNAME", "")
+password = os.getenv("DVR_PASSWORD", "")
 
 print(f"Testing DVR discovery for {ip}:{port}")
 print(f"Username: {username}")

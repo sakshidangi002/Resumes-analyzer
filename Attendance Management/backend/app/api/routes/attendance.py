@@ -25,6 +25,7 @@ from app.services.attendance_service import (
     get_or_create_attendance,
     calculate_work_hours,
     apply_status_from_hours,
+    monthly_attendance_summary,
 )
 from app.services.attendance_event_service import (
     add_attendance_event,
@@ -374,8 +375,23 @@ def admin_set_attendance(
     rec = get_or_create_attendance(db, data.employee_id, data.date)
     rec.sign_in_time = data.sign_in_time
     rec.sign_out_time = data.sign_out_time
-    rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
-    apply_status_from_hours(db, rec)
+    # Pin the sides HR filled in so a later camera detection cannot overwrite
+    # them. Clearing a field releases its pin, handing that side back to the
+    # camera.
+    rec.sign_in_manual = data.sign_in_time is not None
+    rec.sign_out_manual = data.sign_out_time is not None
+    if data.break_hours is not None:
+        if data.break_hours < 0:
+            raise HTTPException(status_code=400, detail="Break time cannot be negative")
+        rec.total_break_hours = data.break_hours
+        rec.break_manual = True
+    else:
+        rec.break_manual = False
+    db.flush()
+
+    # One code path computes hours/status/late for both camera and manual entry,
+    # so a manual edit is netted of break time exactly like a camera day is.
+    rec = recalculate_attendance_summary(db, data.employee_id, data.date)
 
     if rec.sign_in_time is None and rec.sign_out_time is None:
         if rec.is_weekly_off:
@@ -790,8 +806,11 @@ def get_monthly_attendance_summary(
         avg_seconds = total_seconds // len(check_out_times)
         avg_check_out = time(avg_seconds // 3600, (avg_seconds % 3600) // 60).isoformat()
 
-    total_working_days = len(records)
-    attendance_percentage = (total_present / total_working_days * 100) if total_working_days > 0 else 0
+    # Calendar-accurate breakdown (Total Calendar Days / Working Days / Present /
+    # Leave / Absent / Holiday / %) reusing the shared service so the calculation
+    # lives in one place. Merged additively — all legacy keys above are kept so
+    # existing callers keep working.
+    breakdown = monthly_attendance_summary(db, employee_id, month, year)
 
     return {
         "employee_id": employee_id,
@@ -807,7 +826,17 @@ def get_monthly_attendance_summary(
         "average_check_out_time": avg_check_out,
         "late_arrivals": late_arrivals,
         "early_exits": early_exits,
-        "attendance_percentage": round(attendance_percentage, 2),
+        # Monthly summary breakdown (Feature 3):
+        "total_calendar_days": breakdown["total_calendar_days"],
+        "working_days": breakdown["working_days"],
+        "present": breakdown["present"],
+        "half_day": breakdown["half_day"],
+        "leave": breakdown["leave"],
+        "absent": breakdown["absent"],
+        "holiday": breakdown["holiday"],
+        "weekly_off": breakdown["weekly_off"],
+        # Percentage now comes from the shared, calendar-aware calculation.
+        "attendance_percentage": breakdown["attendance_percentage"],
     }
 
 

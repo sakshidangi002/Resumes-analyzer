@@ -1,20 +1,51 @@
 from __future__ import annotations
 
 import logging
+import os
 from io import BytesIO
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from PIL import Image
 
+from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.services.recognition import DEFAULT_THRESHOLD, recognize_faces, recognize_from_rgb
 
 router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# These endpoints write attendance, which feeds payroll, so a caller must not be
+# able to set threshold=0 and have every face match every employee.
+#
+# The floor is deliberately LOW. An earlier version pinned it to
+# DEFAULT_THRESHOLD (0.45), which silently overrode any operator who had turned
+# the threshold DOWN to catch difficult faces -- it made recognition stricter
+# than configured and employees stopped matching. Tuning the threshold is a
+# legitimate operator action; these endpoints now require a logged-in user,
+# which is what actually closes the abuse hole. This floor only blocks the
+# degenerate "match anything" values.
+# NOTE: deliberately NOT called CCTV_MIN_THRESHOLD -- camera_service.py already
+# uses that name for a different thing (a per-camera safety floor, default 0.35).
+MIN_ALLOWED_THRESHOLD = float(os.getenv("RECOGNITION_API_MIN_THRESHOLD", "0.15"))
+
+
+def _clamp_threshold(value: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_THRESHOLD
+    if v < MIN_ALLOWED_THRESHOLD:
+        logger.warning(
+            "threshold %.3f is below the minimum %.3f; using the minimum. "
+            "Set CCTV_MIN_THRESHOLD to change this floor.",
+            v, MIN_ALLOWED_THRESHOLD,
+        )
+        return MIN_ALLOWED_THRESHOLD
+    return v
 
 
 class CCTVRecognitionRequest(BaseModel):
@@ -30,6 +61,7 @@ async def recognize_frame(
     threshold: float = DEFAULT_THRESHOLD,
     camera_id: Optional[str] = Query(default=None, description="Camera ID for attendance tracking"),
     camera_purpose: Optional[str] = Query(default=None, description="Camera purpose: IN or OUT"),
+    current_user=Depends(get_current_user),
 ):
     """Accept a webcam frame and recognize the face inside the HRMS backend.
 
@@ -38,6 +70,7 @@ async def recognize_frame(
       - camera_purpose: 'IN' forces Check-In, 'OUT' forces Check-Out;
         omit to use auto-toggle logic (IN → OUT → IN ...)
     """
+    threshold = _clamp_threshold(threshold)
     logger.info(
         "STEP-1 webcam_frame_received source=webcam camera_id=%s camera_purpose=%s threshold=%.3f",
         camera_id, camera_purpose, threshold,
@@ -74,8 +107,12 @@ async def recognize_frame(
 
 
 @router.post("/recognize-cctv-frame")
-def recognize_cctv_frame(payload: CCTVRecognitionRequest):
+def recognize_cctv_frame(
+    payload: CCTVRecognitionRequest,
+    current_user=Depends(get_current_user),
+):
     """Read one frame from a CCTV/IP camera stream and run attendance recognition with improved error handling."""
+    payload.threshold = _clamp_threshold(payload.threshold)
     try:
         import cv2
     except Exception as exc:

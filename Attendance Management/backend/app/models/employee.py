@@ -110,3 +110,4 @@ class EmployeeBankDetail(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     employee = relationship("Employee", back_populates="bank_details")
+

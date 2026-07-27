@@ -1,6 +1,8 @@
 """Attendance: sign-in/out, work hours, status, grace time, weekly off, holiday."""
+import calendar as _calendar
 from datetime import date, time, datetime, timedelta
 from decimal import Decimal
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import AttendanceRecord, CompanyConfig, Holiday
 
@@ -41,11 +43,15 @@ def apply_weekly_off_and_holiday(db: Session, record: AttendanceRecord) -> None:
             record.status = "HOLIDAY"
 
 
-def get_or_create_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord:
-    rec = db.query(AttendanceRecord).filter(
+def _find_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord | None:
+    return db.query(AttendanceRecord).filter(
         AttendanceRecord.employee_id == employee_id,
         AttendanceRecord.date == d,
     ).first()
+
+
+def get_or_create_attendance(db: Session, employee_id: int, d: date) -> AttendanceRecord:
+    rec = _find_attendance(db, employee_id, d)
     if rec:
         return rec
     config = get_company_config(db)
@@ -65,8 +71,19 @@ def get_or_create_attendance(db: Session, employee_id: int, d: date) -> Attendan
         is_holiday=is_hol,
         source="AUTO",
     )
-    db.add(rec)
-    db.flush()
+    # Concurrent camera workers can reach this point for the same employee/day
+    # at once. The uq_attendance_employee_date constraint makes the loser fail;
+    # roll back only the failed INSERT (savepoint) and take the winner's row.
+    try:
+        with db.begin_nested():
+            db.add(rec)
+            db.flush()
+    except IntegrityError:
+        db.expire_all()
+        existing = _find_attendance(db, employee_id, d)
+        if existing is None:
+            raise
+        return existing
     return rec
 
 
@@ -140,6 +157,100 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
             rec.status = "WEEKLY_OFF"
         elif rec.is_holiday:
             rec.status = "HOLIDAY"
+
+def monthly_attendance_summary(db: Session, employee_id: int, month: int, year: int) -> dict:
+    """Aggregate an employee's attendance for a calendar month.
+
+    Reuses the existing attendance records plus the `_is_holiday` / `_is_weekly_off`
+    helpers — no attendance status is recalculated here. Days are bucketed as:
+
+    - holiday      : company holiday (from the Holiday table)
+    - weekly_off   : configured weekly off (e.g. SAT/SUN)
+    - present      : PRESENT or SHORT attendance record
+    - half_day     : HALF_DAY record
+    - leave        : ON_LEAVE / PAID_LEAVE record
+    - absent       : ABSENT record, or an elapsed working day with no record
+
+    Working days = calendar days − holidays − weekly offs. Present/leave/absent
+    are only counted for elapsed days (up to today) on/after the joining date, so
+    the current month is not penalised for days that haven't happened yet.
+
+    Attendance % = (present + ½·half_day) / (present + half_day + absent) — i.e.
+    approved leave is excused and never counts against the employee.
+    """
+    from app.core.datetime_utils import get_ist_now
+    from app.models.employee import Employee
+
+    if not (1 <= month <= 12):
+        raise ValueError("month must be between 1 and 12")
+
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    config = get_company_config(db)
+    weekly_off_days = config.weekly_off_days if config else None
+
+    total_days = _calendar.monthrange(year, month)[1]
+    month_start = date(year, month, 1)
+    month_end = date(year, month, total_days)
+    today = get_ist_now().date()
+    doj = emp.date_of_joining if emp else None
+
+    records = {
+        r.date: r
+        for r in db.query(AttendanceRecord).filter(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.date >= month_start,
+            AttendanceRecord.date <= month_end,
+        ).all()
+    }
+
+    present = half_day = leave = absent = holiday = weekly_off = 0
+
+    d = month_start
+    while d <= month_end:
+        rec = records.get(d)
+        status = rec.status if rec else None
+
+        if _is_holiday(db, d):
+            holiday += 1
+        elif _is_weekly_off(d, weekly_off_days):
+            weekly_off += 1
+        else:
+            # Working day — classify by the attendance record.
+            elapsed = d <= today and (doj is None or d >= doj)
+            if status in ("PRESENT", "SHORT"):
+                present += 1
+            elif status == "HALF_DAY":
+                half_day += 1
+            elif status in ("ON_LEAVE", "PAID_LEAVE"):
+                leave += 1
+            elif status == "ABSENT":
+                absent += 1
+            elif status in ("HOLIDAY", "WEEKLY_OFF"):
+                # Record disagrees with the calendar; trust the record's off-day.
+                pass
+            elif elapsed:
+                # Elapsed working day with no record at all → absent.
+                absent += 1
+        d += timedelta(days=1)
+
+    working_days = total_days - holiday - weekly_off
+    graded = present + half_day + absent  # days that required attendance and weren't excused
+    attendance_pct = round((present + 0.5 * half_day) / graded * 100, 1) if graded > 0 else 0.0
+
+    return {
+        "month": month,
+        "year": year,
+        "total_calendar_days": total_days,
+        "working_days": working_days,
+        "present": present,
+        "half_day": half_day,
+        "leave": leave,
+        "absent": absent,
+        "holiday": holiday,
+        "weekly_off": weekly_off,
+        "attendance_percentage": attendance_pct,
+    }
+
 
 def sign_in(db: Session, employee_id: int, d: date, sign_in_time: time) -> AttendanceRecord:
     rec = get_or_create_attendance(db, employee_id, d)

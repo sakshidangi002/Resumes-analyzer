@@ -32,14 +32,26 @@ try:
         for row in result:
             print(f"  Camera {row.id} ({row.name}): source_type={row.source_type}, source_url={row.source_url}, enabled={row.enabled}")
         
-        # Update camera 7 to use HCNetSDK and enable it
+        # Update camera 7 to use HCNetSDK and enable it.
+        # DVR credentials come from the environment -- this file is committed to
+        # git, so the connection string must not be hardcoded here.
+        _dvr_ip = os.getenv("DVR_IP", "")
+        _dvr_port = os.getenv("DVR_PORT", "8000")
+        _dvr_user = os.getenv("DVR_USERNAME", "")
+        _dvr_pass = os.getenv("DVR_PASSWORD", "")
+        if not all((_dvr_ip, _dvr_user, _dvr_pass)):
+            raise SystemExit(
+                "Set DVR_IP, DVR_USERNAME and DVR_PASSWORD before running this script."
+            )
         update_sql = text("""
-            UPDATE cameras 
+            UPDATE cameras
             SET source_type = 'hcnetsdk',
-                source_url = 'hcnetsdk://192.168.29.181:8000@anilchanna:test@123?channel=1',
+                source_url = :source_url,
                 enabled = true
             WHERE id = 7
-        """)
+        """).bindparams(
+            source_url=f"hcnetsdk://{_dvr_ip}:{_dvr_port}@{_dvr_user}:{_dvr_pass}?channel=1"
+        )
         
         result = conn.execute(update_sql)
         conn.commit()

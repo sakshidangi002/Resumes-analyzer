@@ -221,6 +221,16 @@ class ResumeDB(Base):
     ready_to_relocate = Column(String, nullable=True)
     reason_job_change = Column(Text, nullable=True)
 
+    # ATS / Candidate Overview fields (manually maintained by HR; not parsed)
+    candidate_status = Column(String(50), nullable=True)     # Immediate Joiner, Shortlisted, Selected, Rejected, ...
+    employment_type = Column(String(50), nullable=True)      # Full-time, Contract, ...
+    preferred_location = Column(String, nullable=True)
+    resume_score = Column(Integer, nullable=True)            # 0-100
+    remarks = Column(Text, nullable=True)
+    candidate_source = Column(String(50), nullable=True)     # LinkedIn, Naukri, Indeed, Referral, ...
+    qualification = Column(String, nullable=True)
+    college_name = Column(String, nullable=True)
+
 
 class CandidateNoteDB(Base):
     __tablename__ = "candidate_notes"
@@ -302,28 +312,62 @@ def _normalize_uploaded_filename(filename: str) -> str:
     return os.path.basename(name)
 
 
-def _resolve_resume_file_path(filename: str) -> Optional[str]:
+def _is_inside_upload_dir(path: str) -> bool:
+    """True only if `path` really sits under one of the upload roots.
+
+    realpath() first so that symlinks and ..\\ segments are resolved before the
+    comparison -- a prefix test on the raw string is bypassable.
+    """
+    try:
+        real = os.path.realpath(path)
+    except Exception:
+        return False
+    for upload_dir in _candidate_upload_dirs():
+        try:
+            root = os.path.realpath(upload_dir)
+        except Exception:
+            continue
+        if os.path.commonpath([real, root]) == root:
+            return True
+    return False
+
+
+def _resolve_resume_file_path(filename: str, trusted: bool = False) -> Optional[str]:
     """
     Resolve a stored resume filename across current and legacy upload roots.
+
+    `trusted=True` means the value came from our own DB row (resume.source_file),
+    where legacy records may hold a full absolute path. `trusted=False` is for
+    anything derived from a request URL: there we use the basename only and
+    refuse to return a path outside the upload roots.
+
+    This previously tried the caller's raw string first and returned ANY absolute
+    path that existed, so `GET /files/C:\\...\\.env` was served verbatim.
     """
     raw = (filename or "").strip()
     if not raw:
         return None
 
     normalized = _normalize_uploaded_filename(raw)
-    search_names = []
-    for item in (raw, normalized):
-        if item and item not in search_names:
-            search_names.append(item)
+    if not normalized:
+        return None
 
-    for candidate in search_names:
-        if os.path.isabs(candidate) and os.path.exists(candidate):
-            return candidate
+    # Untrusted input never keeps directory components.
+    search_names = [normalized] if not trusted else []
+    if trusted:
+        for item in (raw, normalized):
+            if item and item not in search_names:
+                search_names.append(item)
+
+    if trusted:
+        for candidate in search_names:
+            if os.path.isabs(candidate) and os.path.exists(candidate):
+                return candidate
 
     for upload_dir in _candidate_upload_dirs():
         for candidate in search_names:
             direct = os.path.join(upload_dir, candidate)
-            if os.path.exists(direct):
+            if os.path.exists(direct) and _is_inside_upload_dir(direct):
                 return direct
 
     for upload_dir in _candidate_upload_dirs():
@@ -372,6 +416,15 @@ class CandidateDetailsUpdate(BaseModel):
     location: Optional[str] = None
     ready_to_relocate: Optional[str] = None
     reason_job_change: Optional[str] = None
+    # ATS / Candidate Overview fields
+    candidate_status: Optional[str] = None
+    employment_type: Optional[str] = None
+    preferred_location: Optional[str] = None
+    resume_score: Optional[int] = None
+    remarks: Optional[str] = None
+    candidate_source: Optional[str] = None
+    qualification: Optional[str] = None
+    college_name: Optional[str] = None
 
 
 def _csv_join(value):
@@ -624,12 +677,74 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # MUST stay False while allow_origins is "*". The pair
+    # allow_origins=["*"] + allow_credentials=True lets any website a logged-in
+    # HR user visits make credentialed cross-origin calls to this API. Auth here
+    # is a Bearer header (no cookies), so disabling credentials costs nothing --
+    # this matches the HRMS app's CORS config.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 Base.metadata.create_all(bind=engine)
+
+
+# ---------------------------------------------------------------------------
+# Primary-role classification
+# Each resume is placed under ONE role category (e.g. ".NET Developer",
+# "React Developer") based on its overall profile — skills, summary, keywords —
+# rather than being tagged with every skill it mentions. Result is stored in
+# `role` so the Candidate Overview role tabs group cleanly.
+# ---------------------------------------------------------------------------
+_ROLE_SIGNALS = [
+    ("HR / Recruiter",     ["recruitment", "talent acquisition", "hr operations", "payroll", "onboarding", "sourcing", "human resource"]),
+    ("Mobile Developer",   ["react native", "flutter", "android", "kotlin", "swift", "ios development"]),
+    (".NET Developer",     ["c#", "asp.net", ".net", "dotnet", ".net core", "entity framework", "blazor", "wpf"]),
+    ("Angular Developer",  ["angular", "ngrx", "rxjs"]),
+    ("React Developer",    ["react", "redux", "next.js", "nextjs"]),
+    ("Node.js Developer",  ["node.js", "nodejs", "node js", "express.js", "express", "nestjs"]),
+    ("Python Developer",   ["python", "django", "flask", "fastapi"]),
+    ("Java Developer",     ["java", "spring", "spring boot", "hibernate", "j2ee"]),
+    ("PHP Developer",      ["php", "laravel", "codeigniter", "wordpress"]),
+    ("QA Engineer",        ["selenium", "cypress", "testng", "qa", "manual testing", "automation testing", "test automation", "junit", "appium"]),
+    ("DevOps Engineer",    ["docker", "kubernetes", "jenkins", "terraform", "ansible", "ci/cd", "devops"]),
+    ("UI/UX Designer",     ["figma", "adobe xd", "sketch", "ui/ux", "wireframe", "prototyping", "user research"]),
+    ("Data Analyst",       ["power bi", "tableau", "pandas", "numpy", "data analysis", "data analyst", "matplotlib"]),
+    ("Data Scientist",     ["machine learning", "deep learning", "tensorflow", "pytorch", "nlp", "scikit-learn"]),
+]
+_ROLE_FE = {"React Developer", "Angular Developer"}
+_ROLE_BE = {".NET Developer", "Node.js Developer", "Java Developer", "Python Developer", "PHP Developer"}
+
+
+def _role_blob_from_row(r) -> str:
+    cols = ("primary_skills", "key_skills", "skills", "raw_skills_text", "role",
+            "summary", "important_keywords", "experience_summary", "one_liner")
+    return " ".join(str(getattr(r, c, "") or "") for c in cols).lower()
+
+
+def _kw_hit(kw: str, blob: str) -> bool:
+    k = kw.lower()
+    if re.fullmatch(r"[a-z0-9]+", k):  # pure word -> word boundary (java != javascript)
+        return re.search(rf"\b{re.escape(k)}\b", blob) is not None
+    return k in blob
+
+
+def classify_primary_role(blob: str) -> str:
+    scores = {}
+    for cat, kws in _ROLE_SIGNALS:
+        s = sum(1 for kw in kws if _kw_hit(kw, blob))
+        if s:
+            scores[cat] = s
+    if not scores:
+        return "Other"
+    explicit_fs = any(x in blob for x in ("full stack", "full-stack", "fullstack", "mern", "mean stack"))
+    fe = max((scores.get(c, 0) for c in _ROLE_FE), default=0)
+    be = max((scores.get(c, 0) for c in _ROLE_BE), default=0)
+    if explicit_fs or (fe >= 2 and be >= 2):
+        return "Full Stack Developer"
+    return max(scores.items(), key=lambda kv: kv[1])[0]
+
 
 # Auto-migrate table to add newly requested candidate detail columns
 try:
@@ -641,8 +756,24 @@ try:
             "availability_ftf": "VARCHAR(255)",
             "current_company": "VARCHAR(255)",
             "ready_to_relocate": "VARCHAR(255)",
-            "reason_job_change": "TEXT"
+            "reason_job_change": "TEXT",
+            # ATS / Candidate Overview fields
+            "candidate_status": "VARCHAR(50)",
+            "employment_type": "VARCHAR(50)",
+            "preferred_location": "VARCHAR(255)",
+            "resume_score": "INTEGER",
+            "remarks": "TEXT",
+            "candidate_source": "VARCHAR(50)",
+            "qualification": "VARCHAR(255)",
+            "college_name": "VARCHAR(255)",
         }
+        # Helpful indexes for server-side filtering/sorting on the overview page.
+        _idx_sql = [
+            "CREATE INDEX IF NOT EXISTS ix_resumes_role ON resumes (role)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_candidate_status ON resumes (candidate_status)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_created_at ON resumes (created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_is_shortlisted ON resumes (is_shortlisted)",
+        ]
         for col_name, col_type in new_cols.items():
             res = conn.execute(text(
                 f"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='resumes' AND column_name='{col_name}')"
@@ -650,8 +781,29 @@ try:
             if not res:
                 conn.execute(text(f"ALTER TABLE resumes ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
+        for _sql in _idx_sql:
+            try:
+                conn.execute(text(_sql))
+                conn.commit()
+            except Exception:
+                pass
 except Exception as e:
     logger.error(f"Schema auto-migration failed: {e}")
+
+# Backfill primary-role category for candidates that don't have one yet.
+try:
+    with SessionLocal() as _db:
+        _uncat = _db.query(ResumeDB).filter(
+            ResumeDB.deleted_at == None,
+            or_(ResumeDB.role == None, ResumeDB.role == ""),
+        ).all()
+        for _r in _uncat:
+            _r.role = classify_primary_role(_role_blob_from_row(_r))
+        if _uncat:
+            _db.commit()
+            logger.info("Classified %d candidates into primary roles", len(_uncat))
+except Exception as e:
+    logger.error(f"Role classification backfill failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +1028,20 @@ def _resume_to_dict(r: ResumeDB) -> dict:
         "current_company": getattr(r, "current_company", "") or "",
         "ready_to_relocate": getattr(r, "ready_to_relocate", "") or "",
         "reason_job_change": getattr(r, "reason_job_change", "") or "",
+        # ATS / Candidate Overview fields. Spec-named aliases are emitted so the
+        # frontend can read company_name / primary_role / current_location
+        # directly, while the underlying columns keep their existing names.
+        "candidate_status": getattr(r, "candidate_status", "") or "",
+        "employment_type": getattr(r, "employment_type", "") or "",
+        "preferred_location": getattr(r, "preferred_location", "") or "",
+        "resume_score": getattr(r, "resume_score", None),
+        "remarks": getattr(r, "remarks", "") or "",
+        "candidate_source": getattr(r, "candidate_source", "") or (_safe_get(r, "source", "") or ""),
+        "qualification": getattr(r, "qualification", "") or "",
+        "college_name": getattr(r, "college_name", "") or "",
+        "company_name": getattr(r, "current_company", "") or "",
+        "primary_role": _safe_get(r, "role", "") or "",
+        "current_location": _safe_get(r, "location", "") or "",
     }
 
 
@@ -1231,34 +1397,28 @@ async def upload_resume(
             else:
                 resume_text = _extract_text_from_bytes(file_bytes, ext, BASE_DIR)
             
-            # STAGE 1: PDF TEXT EXTRACTION DEBUG LOGS
-            logger.info(f"=== STAGE 1: PDF TEXT EXTRACTION DEBUG ===")
-            logger.info(f"File: {file.filename}")
-            logger.info(f"Extension: {ext}")
-            logger.info(f"Raw extracted text length: {len(resume_text)} characters")
-            logger.info(f"Raw extracted text (first 1000 chars):\n{resume_text[:100000]}")
-            
-            # Check for sections
-            text_lower = resume_text.lower()
-            has_skills = any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"])
-            has_experience = any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"])
-            has_education = any(kw in text_lower for kw in ["education", "academic", "qualification"])
-            has_projects = any(kw in text_lower for kw in ["projects", "project experience"])
-            
-            logger.info(f"Section detection - Skills: {has_skills}, Experience: {has_experience}, Education: {has_education}, Projects: {has_projects}")
-            
-            # Check for broken words (PDF extraction artifacts)
-            broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
-            if broken_words:
-                logger.warning(f"Potential broken words detected: {broken_words[:10]}")
-            
-            # Check for spacing artifacts
-            spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
-            if spaced_words:
-                logger.warning(f"Potential spacing artifacts: {spaced_words[:5]}")
-            
-            logger.info(f"=== END STAGE 1 ===")
-            
+            # STAGE 1 diagnostics. Gated behind DEBUG because this block used to
+            # run at INFO on every upload and wrote up to 100 KB of the
+            # candidate's resume -- their name, phone, address -- straight into
+            # the log file. That is a PII leak, and the f-string meant the cost
+            # was paid even when the log level would have discarded it.
+            if logger.isEnabledFor(logging.DEBUG):
+                text_lower = resume_text.lower()
+                logger.debug(
+                    "STAGE 1 %s ext=%s len=%d skills=%s experience=%s education=%s projects=%s",
+                    file.filename, ext, len(resume_text),
+                    any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"]),
+                    any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"]),
+                    any(kw in text_lower for kw in ["education", "academic", "qualification"]),
+                    any(kw in text_lower for kw in ["projects", "project experience"]),
+                )
+                broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
+                if broken_words:
+                    logger.debug("Potential broken words detected: %s", broken_words[:10])
+                spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
+                if spaced_words:
+                    logger.debug("Potential spacing artifacts: %s", spaced_words[:5])
+
             logger.info("Text extracted from %s: %d chars", file.filename, len(resume_text))
             if not (resume_text or resume_text.strip()):
                 results[i] = {"status": "error", "file": file.filename, "message": "Text extraction produced no content."}
@@ -1775,6 +1935,235 @@ def list_resumes(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Candidate Overview: server-side search / filter / sort / paginate
+# ---------------------------------------------------------------------------
+
+# Notice-period values that count as an "immediate joiner".
+_IMMEDIATE_TOKENS = ("immediate", "immed", "0 day", "0 days", "ready to join", "asap")
+
+
+def _is_immediate(notice: Optional[str], status: Optional[str]) -> bool:
+    blob = f"{notice or ''} {status or ''}".lower()
+    return any(tok in blob for tok in _IMMEDIATE_TOKENS)
+
+
+def _skill_sql_filter(query, skills: str):
+    """Translate a skills query (with alias expansion) into AND-of-OR ILIKE
+    conditions across all skill-bearing columns, so filtering + pagination
+    happen in SQL rather than in Python."""
+    groups = _expand_skill_query(skills)
+    cols = [
+        ResumeDB.skills, ResumeDB.primary_skills, ResumeDB.other_skills,
+        ResumeDB.key_skills, ResumeDB.raw_skills_text,
+    ]
+    for group in groups:
+        alias_conds = []
+        for alias in group:
+            if not alias:
+                continue
+            for col in cols:
+                alias_conds.append(col.ilike(f"%{alias}%"))
+        if alias_conds:
+            query = query.filter(or_(*alias_conds))
+    return query
+
+
+@app.get("/resumes/search", tags=["Resumes"])
+def search_resumes(
+    db: Session = Depends(get_db),
+    # Global search
+    q: Optional[str] = None,
+    # Advanced filters
+    name: Optional[str] = None,
+    company: Optional[str] = None,
+    primary_role: Optional[str] = None,
+    skills: Optional[str] = None,
+    min_experience: Optional[float] = None,
+    max_experience: Optional[float] = None,
+    current_salary: Optional[str] = None,
+    expected_salary: Optional[str] = None,
+    notice_period: Optional[str] = None,
+    current_location: Optional[str] = None,
+    preferred_location: Optional[str] = None,
+    employment_type: Optional[str] = None,
+    candidate_status: Optional[str] = None,
+    min_score: Optional[int] = None,
+    qualification: Optional[str] = None,
+    college_name: Optional[str] = None,
+    candidate_source: Optional[str] = None,
+    shortlisted: Optional[bool] = None,
+    added_after: Optional[str] = None,
+    added_before: Optional[str] = None,
+    # Sort + paginate
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Server-side Candidate Overview feed: filtered, sorted, paginated, with counts.
+
+    Kept separate from GET /resumes (which the Dashboard/Compare tabs consume as a
+    full list) so those flows are untouched.
+    """
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+
+    # Summary aggregates over the WHOLE database (not the filtered view).
+    total_all = base.count()
+    shortlisted_all = base.filter(ResumeDB.is_shortlisted == True).count()
+    avg_exp = db.query(func.avg(ResumeDB.experience_years)).filter(
+        ResumeDB.deleted_at == None
+    ).scalar()
+    immediate_all = base.filter(
+        or_(
+            *[ResumeDB.notice_period.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+            *[ResumeDB.candidate_status.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+        )
+    ).count()
+
+    # Apply filters
+    fq = base
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        fq = fq.filter(or_(
+            ResumeDB.name.ilike(like), ResumeDB.email.ilike(like),
+            ResumeDB.phone.ilike(like), ResumeDB.current_company.ilike(like),
+            ResumeDB.companies_worked_at.ilike(like), ResumeDB.role.ilike(like),
+            ResumeDB.location.ilike(like), ResumeDB.skills.ilike(like),
+            ResumeDB.primary_skills.ilike(like), ResumeDB.key_skills.ilike(like),
+        ))
+    if name:
+        fq = fq.filter(ResumeDB.name.ilike(f"%{name}%"))
+    if company:
+        fq = fq.filter(or_(
+            ResumeDB.current_company.ilike(f"%{company}%"),
+            ResumeDB.companies_worked_at.ilike(f"%{company}%"),
+        ))
+    if primary_role:
+        # Role tabs group by the classified `role` category, so filter it exactly.
+        fq = fq.filter(ResumeDB.role == primary_role)
+    if skills:
+        fq = _skill_sql_filter(fq, skills)
+    if min_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years >= min_experience)
+    if max_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years <= max_experience)
+    if current_salary:
+        fq = fq.filter(ResumeDB.current_salary.ilike(f"%{current_salary}%"))
+    if expected_salary:
+        fq = fq.filter(ResumeDB.expected_salary.ilike(f"%{expected_salary}%"))
+    if notice_period:
+        fq = fq.filter(ResumeDB.notice_period.ilike(f"%{notice_period}%"))
+    if current_location:
+        fq = fq.filter(ResumeDB.location.ilike(f"%{current_location}%"))
+    if preferred_location:
+        fq = fq.filter(ResumeDB.preferred_location.ilike(f"%{preferred_location}%"))
+    if employment_type:
+        fq = fq.filter(ResumeDB.employment_type.ilike(f"%{employment_type}%"))
+    if candidate_status:
+        fq = fq.filter(ResumeDB.candidate_status.ilike(f"%{candidate_status}%"))
+    if min_score is not None:
+        fq = fq.filter(ResumeDB.resume_score >= min_score)
+    if qualification:
+        fq = fq.filter(ResumeDB.qualification.ilike(f"%{qualification}%"))
+    if college_name:
+        fq = fq.filter(ResumeDB.college_name.ilike(f"%{college_name}%"))
+    if candidate_source:
+        fq = fq.filter(or_(
+            ResumeDB.candidate_source.ilike(f"%{candidate_source}%"),
+            ResumeDB.source.ilike(f"%{candidate_source}%"),
+        ))
+    if shortlisted is not None:
+        fq = fq.filter(ResumeDB.is_shortlisted == shortlisted)
+    if added_after:
+        try:
+            dt = datetime.fromisoformat(added_after.replace("Z", "+00:00"))
+            fq = fq.filter(ResumeDB.created_at >= dt)
+        except Exception:
+            pass
+    if added_before:
+        try:
+            dt = datetime.fromisoformat(added_before.replace("Z", "+00:00"))
+            end_of_day = datetime.combine(dt.date(), time(23, 59, 59, 999999))
+            fq = fq.filter(ResumeDB.created_at <= end_of_day)
+        except Exception:
+            pass
+
+    filtered_count = fq.count()
+
+    # Sort
+    sort_map = {
+        "created_at": ResumeDB.created_at, "date_added": ResumeDB.created_at,
+        "name": ResumeDB.name, "experience": ResumeDB.experience_years,
+        "current_salary": ResumeDB.current_salary, "expected_salary": ResumeDB.expected_salary,
+        "notice_period": ResumeDB.notice_period, "primary_role": ResumeDB.role,
+        "candidate_status": ResumeDB.candidate_status, "resume_score": ResumeDB.resume_score,
+        "company_name": ResumeDB.current_company, "current_location": ResumeDB.location,
+        "shortlisted": ResumeDB.is_shortlisted,
+    }
+    order_col = sort_map.get((sort_by or "created_at"), ResumeDB.created_at)
+    fq = fq.order_by(order_col.asc().nulls_last() if sort_order == "asc"
+                     else order_col.desc().nulls_last())
+
+    # Paginate
+    page = max(1, int(page or 1))
+    page_size = min(200, max(1, int(page_size or 20)))
+    rows = fq.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {
+        "rows": [_resume_to_dict(r) for r in rows],
+        "total": total_all,
+        "filtered": filtered_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (filtered_count + page_size - 1) // page_size),
+        "summary": {
+            "total": total_all,
+            "showing": filtered_count,
+            "shortlisted": shortlisted_all,
+            "immediate_joiners": immediate_all,
+            "avg_experience": round(float(avg_exp), 1) if avg_exp is not None else 0.0,
+        },
+    }
+
+
+@app.get("/resumes/facets", tags=["Resumes"])
+def resume_facets(db: Session = Depends(get_db)):
+    """Role-category tabs with candidate counts (each candidate counted once,
+    under its classified `role`), plus distinct values for the dropdown filters."""
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+    total = base.count()
+
+    role_rows = (
+        db.query(ResumeDB.role, func.count(ResumeDB.id))
+        .filter(ResumeDB.deleted_at == None, ResumeDB.role.isnot(None), ResumeDB.role != "")
+        .group_by(ResumeDB.role)
+        .order_by(func.count(ResumeDB.id).desc())
+        .all()
+    )
+    # Keep "Other" last regardless of count.
+    roles = [{"role": r, "count": int(c)} for r, c in role_rows if r and r != "Other"]
+    other = [{"role": r, "count": int(c)} for r, c in role_rows if r == "Other"]
+    roles = roles + other
+
+    def _distinct(col):
+        vals = (
+            db.query(col)
+            .filter(ResumeDB.deleted_at == None, col.isnot(None), col != "")
+            .distinct().all()
+        )
+        return sorted({(v[0] or "").strip() for v in vals if (v[0] or "").strip()})
+
+    return {
+        "total": total,
+        "roles": roles,
+        "statuses": _distinct(ResumeDB.candidate_status),
+        "employment_types": _distinct(ResumeDB.employment_type),
+        "sources": _distinct(ResumeDB.candidate_source),
+        "locations": _distinct(ResumeDB.location),
+    }
+
+
 @app.post("/resumes/{resume_id}/reextract-skills", tags=["Resumes"])
 def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
     """
@@ -2004,7 +2393,7 @@ def _rebuild_resume_from_source(resume: ResumeDB) -> dict:
     Re-run extraction against the stored source file and update the row in place.
     Returns a small status payload for batch repair operations.
     """
-    file_path = _resolve_resume_file_path(resume.source_file or "")
+    file_path = _resolve_resume_file_path(resume.source_file or "", trusted=True)
     if not file_path:
         return {"updated": False, "reason": "source_file_missing"}
 
@@ -2324,7 +2713,7 @@ def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
 async def get_resume(resume_id: str, db: Session = Depends(get_db)):
     resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
     if resume and resume.source_file:
-        file_path = _resolve_resume_file_path(resume.source_file)
+        file_path = _resolve_resume_file_path(resume.source_file, trusted=True)
         if file_path and os.path.exists(file_path):
             return FileResponse(
                 file_path,
@@ -2462,6 +2851,23 @@ def update_candidate_details(
         r.ready_to_relocate = details.ready_to_relocate
     if details.reason_job_change is not None:
         r.reason_job_change = details.reason_job_change
+    # ATS / Candidate Overview fields
+    if details.candidate_status is not None:
+        r.candidate_status = details.candidate_status
+    if details.employment_type is not None:
+        r.employment_type = details.employment_type
+    if details.preferred_location is not None:
+        r.preferred_location = details.preferred_location
+    if details.resume_score is not None:
+        r.resume_score = details.resume_score
+    if details.remarks is not None:
+        r.remarks = details.remarks
+    if details.candidate_source is not None:
+        r.candidate_source = details.candidate_source
+    if details.qualification is not None:
+        r.qualification = details.qualification
+    if details.college_name is not None:
+        r.college_name = details.college_name
 
     db.commit()
     db.refresh(r)
@@ -3074,7 +3480,54 @@ def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt
 
-SECRET_KEY = "abc2025"
+# Must be the SAME secret the HRMS app signs with, because this API is mounted
+# inside it and validates the tokens it issues. Read from the environment --
+# this used to be the literal "abc2025", a 7-character key committed to git,
+# which let anyone forge an Admin token for BOTH apps.
+def _resolve_shared_secret_key() -> str:
+    """Find the JWT secret the HRMS app signs with.
+
+    Checked in order, because load_dotenv() here may have picked up the
+    repo-root .env while the authoritative value lives in the HRMS backend's
+    own .env:
+      1. the process environment
+      2. the HRMS settings object, if it is importable (unified deployment)
+      3. the HRMS backend .env file, read directly
+    """
+    key = os.getenv("SECRET_KEY", "").strip()
+    if key:
+        return key
+
+    try:
+        from app.core.config import get_settings as _hrms_settings  # type: ignore
+        key = (_hrms_settings().secret_key or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    hrms_env = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "Attendance Management", "backend", ".env",
+    )
+    try:
+        with open(hrms_env, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("SECRET_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "SECRET_KEY is not set. The Resume Analyzer validates the JWTs the HRMS "
+        "app issues, so it must use the same secret. Set SECRET_KEY in the "
+        'environment or in "Attendance Management/backend/.env" (generate one '
+        'with: python -c "import secrets; print(secrets.token_urlsafe(64))").'
+    )
+
+
+SECRET_KEY = _resolve_shared_secret_key()
 ALGORITHM = "HS256"
 
 security_bearer = HTTPBearer(auto_error=False)

@@ -254,6 +254,22 @@ export default function Dashboard() {
     const from = formatLocalDate(firstDay);
     const to = formatLocalDate(lastDay);
 
+    // Working days elapsed so far this month (weekday, not a holiday). The
+    // attendance percentage is graded against these days only, so a record
+    // logged on a weekend or holiday can never push the ring past 100%.
+    const currentMonthHolidays = holidays.filter(h => {
+      const hd = new Date(h.date);
+      return hd.getMonth() === now.getMonth() && hd.getFullYear() === now.getFullYear() && hd.getDate() <= now.getDate();
+    });
+    const workingDays = new Set<string>();
+    for (let d = 1; d <= now.getDate(); d++) {
+      const dateObj = new Date(now.getFullYear(), now.getMonth(), d);
+      const dayOfWeek = dateObj.getDay();
+      const isHoliday = currentMonthHolidays.some(h => new Date(h.date).getDate() === d);
+      if (dayOfWeek !== 0 && dayOfWeek !== 6 && !isHoliday) workingDays.add(formatLocalDate(dateObj));
+    }
+    const workingDaysCount = workingDays.size;
+
     const loadAttendance = () => {
       attendanceApi.list(from, to, user?.employee_id || undefined).then(res => {
         const records = res.data || [];
@@ -275,6 +291,7 @@ export default function Dashboard() {
         let personalMinutes = 0;
         let personalPresent = 0;
         let personalLeave = 0;
+        let personalPresentOnWorkingDays = 0;
 
         records.forEach((r: any) => {
           const isPresent = ['PRESENT', 'SHORT', 'HALF_DAY'].includes(r.status);
@@ -306,27 +323,15 @@ export default function Dashboard() {
               if (r.sign_out_time) dailyMins[r.date].outTime = r.sign_out_time;
             }
             if (isMe) {
-              if (r.status === 'HALF_DAY') personalPresent += 0.5;
-              else personalPresent++;
+              const credit = r.status === 'HALF_DAY' ? 0.5 : 1;
+              personalPresent += credit;
+              if (workingDays.has(r.date)) personalPresentOnWorkingDays += credit;
             }
           } else if (r.status === 'ON_LEAVE' || r.status === 'PAID_LEAVE') {
             leaveCount++;
             if (isMe) personalLeave++;
           }
         });
-
-        // Calculate Working Days
-        let workingDaysCount = 0;
-        const currentMonthHolidays = holidays.filter(h => {
-          const hd = new Date(h.date);
-          return hd.getMonth() === now.getMonth() && hd.getFullYear() === now.getFullYear() && hd.getDate() <= now.getDate();
-        });
-        for (let d = 1; d <= now.getDate(); d++) {
-          const dateObj = new Date(now.getFullYear(), now.getMonth(), d);
-          const dayOfWeek = dateObj.getDay();
-          const isHoliday = currentMonthHolidays.some(h => new Date(h.date).getDate() === d);
-          if (dayOfWeek !== 0 && dayOfWeek !== 6 && !isHoliday) workingDaysCount++;
-        }
 
         const weekendMinutes = weekendsPassed * expectedHoursPerDay * 60;
         const personalTotalMinutes = personalMinutes + weekendMinutes;
@@ -339,7 +344,9 @@ export default function Dashboard() {
         setAttendanceStats({
           present: personalPresent,
           leave: personalLeave,
-          percentage: workingDaysCount > 0 ? Math.round((personalPresent / workingDaysCount) * 100) : 0,
+          percentage: workingDaysCount > 0
+            ? Math.min(100, Math.round((personalPresentOnWorkingDays / workingDaysCount) * 100))
+            : 0,
           avgHours: personalPresent > 0 ? `${Math.floor((personalMinutes / personalPresent) / 60).toString().padStart(2, '0')}:${Math.round((personalMinutes / personalPresent) % 60).toString().padStart(2, '0')}` : "00:00",
           onTime: presentRecordsCount > 0 ? Math.round((onTimeCount / presentRecordsCount) * 100) : 100,
           totalHours: `${hoursWorked}h ${minsWorked}m`,

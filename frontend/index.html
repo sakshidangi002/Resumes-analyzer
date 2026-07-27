@@ -23,16 +23,16 @@
                     },
                     colors: {
                         brand: {
-                            50: '#f0f4ff',
-                            100: '#e0e9ff',
-                            200: '#c2d4ff',
-                            300: '#94b3ff',
-                            400: '#5e87ff',
-                            500: '#3b5cff',
-                            600: '#253dff',
-                            700: '#1527e6',
-                            800: '#1220bd',
-                            900: '#153273', // Navy Blue HR theme
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            200: '#bfdbfe',
+                            300: '#93c5fd',
+                            400: '#60a5fa',
+                            500: '#3b82f6', // Blue accent
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            800: '#1e40af',
+                            900: '#1e3a8a', // Deep blue (active nav)
                             950: '#0b0f19', // Deep dark space background
                         }
                     }
@@ -42,10 +42,11 @@
     </script>
     <style>
         body {
-            background-color: #0b0f19;
+            background-color: #eef2f7;
+            color: #000000;
             background-image:
-                radial-gradient(circle at 10% 20%, rgba(21, 50, 115, 0.25) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(21, 50, 115, 0.15) 0%, transparent 40%);
+                radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.10) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(37, 99, 235, 0.08) 0%, transparent 40%);
         }
 
         /* Custom scrollbar */
@@ -68,20 +69,20 @@
         }
 
         html {
-            color-scheme: dark;
+            color-scheme: light;
         }
 
         /* Native select fallback */
         select {
-            color-scheme: dark;
-            background-color: rgba(0, 0, 0, 0.25);
-            color: #f1f5f9;
+            color-scheme: light;
+            background-color: #ffffff;
+            color: #000000;
         }
 
         select option,
         select optgroup {
-            background-color: #0b0f19;
-            color: #e2e8f0;
+            background-color: #ffffff;
+            color: #000000;
         }
 
         /* Custom dark dropdown (replaces native option list UI) */
@@ -116,10 +117,10 @@
         }
 
         .dark-select-menu {
-            background: #0b0f19;
-            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
             border-radius: 0.75rem;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.15);
             max-height: 16rem;
             overflow-y: auto;
             padding: 0.35rem;
@@ -132,28 +133,29 @@
             padding: 0.5rem 0.65rem;
             border-radius: 0.5rem;
             font-size: 0.75rem;
-            color: #e2e8f0;
+            color: #1e293b;
             background: transparent;
             border: none;
             cursor: pointer;
+            transition: background 0.12s, color 0.12s;
         }
 
         .dark-select-item:hover,
         .dark-select-item.is-active {
-            background: #153273;
+            background: #2563eb;
             color: #ffffff;
         }
 
         /* === HRMS Theme Tokens (mirrors Attendance Management/frontend/src/index.css) === */
         :root {
-            --hrms-brand-300: #6482c8;
-            --hrms-brand-400: #325096;
-            --hrms-brand-500: #153273;
-            --hrms-brand-rgb: 21 50 115;
-            --hrms-text: #ffffff;
-            --hrms-card: #121212;
-            --hrms-border: #1e1e1e;
-            --hrms-shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+            --hrms-brand-300: #2563eb;
+            --hrms-brand-400: #1d4ed8;
+            --hrms-brand-500: #2563eb;
+            --hrms-brand-rgb: 37 99 235;
+            --hrms-text: #000000;
+            --hrms-card: #ffffff;
+            --hrms-border: #e2e8f0;
+            --hrms-shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.12);
             --hrms-header-height: 70px;
         }
 
@@ -193,8 +195,8 @@
             gap: 1rem;
             padding: 0 1.5rem;
             background:
-                radial-gradient(900px 500px at 25% -20%, rgb(var(--hrms-brand-rgb) / 0.55) 0%, #122c667a 60%),
-                linear-gradient(145deg, #000000 0%, #0d0d0d 50%, #000000 100%);
+                radial-gradient(900px 500px at 25% -20%, rgb(var(--hrms-brand-rgb) / 0.12) 0%, transparent 60%),
+                linear-gradient(145deg, #ffffff 0%, #f5f8fb 50%, #ffffff 100%);
             border-bottom: 1px solid var(--hrms-border);
             box-shadow: var(--hrms-shadow-lg);
             color: var(--hrms-text);
@@ -328,8 +330,8 @@
             font-weight: 500;
             line-height: 1.25;
             color: var(--hrms-text);
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
             border-radius: 10px;
             outline: none;
             box-sizing: border-box;
@@ -353,22 +355,22 @@
 
         .hrms-input::placeholder,
         .hrms-textarea::placeholder {
-            color: rgba(244, 242, 255, 0.50);
+            color: #94a3b8;
             font-weight: 400;
         }
 
         .hrms-input:hover:not(:disabled),
         .hrms-select:hover:not(:disabled),
         .hrms-textarea:hover:not(:disabled) {
-            border-color: rgba(255, 255, 255, 0.22);
+            border-color: #94a3b8;
         }
 
         .hrms-input:focus,
         .hrms-select:focus,
         .hrms-textarea:focus {
-            border-color: rgb(var(--hrms-brand-rgb) / 0.55);
-            box-shadow: 0 0 0 3px rgb(var(--hrms-brand-rgb) / 0.20);
-            background: rgba(255, 255, 255, 0.07);
+            border-color: rgb(var(--hrms-brand-rgb) / 0.75);
+            box-shadow: 0 0 0 3px rgb(var(--hrms-brand-rgb) / 0.18);
+            background: #ffffff;
         }
 
         .hrms-input:disabled,
@@ -380,7 +382,7 @@
 
         /* Native select arrow on HRMS-style select */
         .hrms-select {
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 0.75rem center;
             background-size: 12px;
@@ -390,8 +392,8 @@
 
         .hrms-select option,
         .hrms-select optgroup {
-            background: #121212;
-            color: #ffffff;
+            background: #ffffff;
+            color: #000000;
         }
 
         /* When .hrms-select is consumed by the dark-select custom dropdown JS,
@@ -409,18 +411,17 @@
             text-align: left;
         }
 
-        /* Date / Time / DateTime pickers — white icon on dark theme.
-           Using color-scheme: dark alone makes Chromium render the
-           ::-webkit-calendar-picker-indicator natively in light/white.
-           Applying any filter:invert here would flip that to black, so
-           we intentionally do NOT add a filter. */
+        /* Date / Time / DateTime pickers — dark icon on the light input bg.
+           color-scheme: light makes Chromium render the
+           ::-webkit-calendar-picker-indicator natively in dark, which is
+           visible on the white field. */
         .hrms-input[type="date"],
         .hrms-input[type="time"],
         .hrms-input[type="datetime-local"],
         .hrms-input[type="month"],
         .hrms-input[type="week"],
         .hrms-input[type="number"] {
-            color-scheme: dark;
+            color-scheme: light;
         }
 
         .hrms-input[type="date"]::-webkit-calendar-picker-indicator,
@@ -518,13 +519,13 @@
         .hrms-btn-primary {
             background: var(--hrms-brand-500);
             color: #ffffff;
-            box-shadow: 0 4px 12px rgba(21, 50, 115, 0.30);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.30);
         }
 
         .hrms-btn-primary:hover:not(:disabled) {
             background: var(--hrms-brand-400);
             transform: translateY(-1px);
-            box-shadow: 0 8px 22px rgba(21, 50, 115, 0.40);
+            box-shadow: 0 8px 22px rgba(37, 99, 235, 0.40);
         }
 
         .hrms-btn-primary:active:not(:disabled) {
@@ -1283,7 +1284,7 @@
         .hrms-exp-bar-fill {
             height: 100%;
             border-radius: 999px;
-            background: linear-gradient(90deg, var(--hrms-brand-300), var(--hrms-brand-500, #5e87ff));
+            background: linear-gradient(90deg, var(--hrms-brand-300), var(--hrms-brand-500, #2563eb));
             transition: width 0.4s ease-out;
         }
 
@@ -1328,7 +1329,7 @@
         .hrms-skill-bar-fill {
             height: 100%;
             border-radius: 999px;
-            background: linear-gradient(90deg, #6482c8, #94b3ff);
+            background: linear-gradient(90deg, #3b82f6, #93c5fd);
             transition: width 0.4s ease-out;
         }
 
@@ -1515,13 +1516,188 @@
             outline: none !important;
             box-shadow: none !important;
         }
+
+        /* ============================================================
+           LIGHT THEME OVERRIDES
+           The app was authored dark-first with hardcoded utility classes.
+           This layer remaps those utilities to light-mode values. It is
+           placed last and uses !important so it wins over the Tailwind CDN
+           utilities (which are injected into <head> at runtime). White text
+           is re-asserted afterwards for elements sitting on a brand colour.
+           ============================================================ */
+        /* Text: black on light (muted tones darkened so they read as near-black) */
+        .text-white { color: #000000 !important; }
+        .text-slate-100, .text-slate-200, .text-slate-300 { color: #000000 !important; }
+        .text-slate-400 { color: #1f2937 !important; }
+        .text-slate-500, .text-slate-600 { color: #374151 !important; }
+
+        /* Translucent-white surfaces -> solid light cards / chips */
+        .bg-white\/\[0\.01\], .bg-white\/\[0\.015\], .bg-white\/\[0\.02\],
+        .bg-white\/\[0\.03\], .bg-white\/\[0\.04\], .bg-white\/\[0\.05\] { background-color: #ffffff !important; }
+        .bg-white\/5 { background-color: #f1f5f9 !important; }
+        .bg-white\/10 { background-color: #e5eaf1 !important; }
+        .hover\:bg-white\/5:hover, .hover\:bg-white\/10:hover,
+        .hover\:bg-white\/\[0\.06\]:hover { background-color: #e5eaf1 !important; }
+
+        /* Borders */
+        .border-white\/5, .border-white\/10, .border-white\/20,
+        .border-white\/\[0\.06\], .border-white\/\[0\.08\] { border-color: #e2e8f0 !important; }
+
+        /* Modal / overlay scrims stay a soft dark veil for focus */
+        .bg-black\/50, .bg-black\/60, .bg-black\/70 { background-color: rgba(15, 23, 42, 0.40) !important; }
+        /* Low-alpha black insets (were subtle dark panels) -> light neutral */
+        .bg-black\/15, .bg-black\/20, .bg-black\/25, .bg-black\/30,
+        .bg-black\/35, .bg-black\/40 { background-color: #f1f5f9 !important; }
+
+        /* Panels driven by --hrms-card render as white cards */
+        .hrms-modal-panel {
+            background: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18) !important;
+        }
+
+        /* Elevated cards get a soft shadow so they read on the light bg */
+        .rounded-2xl.bg-white\/\[0\.02\], .rounded-2xl.bg-white\/\[0\.03\],
+        .rounded-xl.bg-white\/\[0\.02\] { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.05); }
+
+        /* Re-assert WHITE text where the surface is a brand colour */
+        .hrms-btn-primary, .hrms-btn-danger { color: #ffffff !important; }
+        .bg-brand-500.text-white, .bg-brand-600.text-white, .bg-brand-700.text-white,
+        .bg-brand-800.text-white, .bg-brand-900.text-white,
+        .hrms-sidebar-nav-btn.bg-brand-900,
+        [class*="from-brand-"].text-white, [class*="to-brand-"].text-white { color: #ffffff !important; }
+
+        /* Sidebar active item keeps its teal fill + white text */
+        .hrms-sidebar-nav-btn.bg-brand-900 { background-color: var(--hrms-brand-500) !important; }
+        .hrms-sidebar-nav-btn.bg-brand-900 * { color: #ffffff !important; }
+
+        /* Button variants that used white text on translucent fills */
+        .hrms-btn-secondary {
+            background: rgb(var(--hrms-brand-rgb) / 0.10) !important;
+            color: #1d4ed8 !important;
+            border-color: rgb(var(--hrms-brand-rgb) / 0.30) !important;
+        }
+        .hrms-btn-secondary:hover:not(:disabled) {
+            background: rgb(var(--hrms-brand-rgb) / 0.18) !important;
+            border-color: rgb(var(--hrms-brand-rgb) / 0.45) !important;
+        }
+        .hrms-btn-ghost {
+            background: #f1f5f9 !important;
+            color: #334155 !important;
+            border-color: #e2e8f0 !important;
+        }
+        .hrms-btn-ghost:hover:not(:disabled) {
+            background: #e5eaf1 !important;
+            border-color: #cbd5e1 !important;
+        }
+
+        /* Accent text: brand tints were tuned for a dark bg; darken for contrast */
+        .text-brand-200, .text-brand-300 { color: #1d4ed8 !important; }
+        .hrms-page-header .hrms-page-eyebrow { color: #1d4ed8 !important; }
+        .hrms-page-header .hrms-page-title { color: #000000 !important; }
+
+        /* Hover-to-white text would vanish on light surfaces -> keep it dark */
+        .hover\:text-white:hover { color: #000000 !important; }
+
+        /* Dashboard KPI + analytics cards were authored with white text — darken. */
+        .hrms-kpi-value, .hrms-section-title, .hrms-analytics-pane-title,
+        .hrms-sparkline-stat-value, .hrms-donut-pct,
+        .hrms-exp-count, .hrms-skill-bar-count { color: #000000 !important; }
+        .hrms-kpi-label, .hrms-kpi-sub, .hrms-kpi-trend--flat,
+        .hrms-section-sub, .hrms-sparkline-stat-label, .hrms-donut-label,
+        .hrms-exp-label, .hrms-skill-bar-name, .hrms-donut-legend-item,
+        .hrms-donut-legend { color: #374151 !important; }
+        .hrms-section-card { border-color: #e2e8f0 !important; }
+        .hrms-kpi-card:hover { border-color: #cbd5e1 !important; }
+
+        /* Progress/chart tracks were translucent-white (invisible on white) */
+        .hrms-exp-bar-track, .hrms-skill-bar-track { background: #e6ebf1 !important; }
+        .hrms-donut-track { stroke: #e2e8f0 !important; }
+        .hrms-donut-legend-dot[style*="rgba(255,255,255"] { background: #cbd5e1 !important; }
+
+        /* SVG chart text (axis labels etc.) injected with white fills */
+        .hrms-sparkline text { fill: #475569 !important; }
+        .hrms-sparkline line { stroke: #e2e8f0 !important; }
+
+        /* Remaining custom components authored with white / translucent-white text */
+        .hrms-dropzone-title, .hrms-candidate-name, .hrms-quick-action-title,
+        .hrms-user-chip-name, .hrms-quick-action,
+        .hrms-table-modern td, .hrms-recent-table td { color: #000000 !important; }
+        .hrms-page-header .hrms-page-meta, .hrms-table-modern th, .hrms-recent-table th,
+        .hrms-dropzone-sub, .hrms-candidate-role, .hrms-quick-action-sub,
+        .hrms-quick-action-chev, .hrms-topbar-search-icon,
+        .hrms-user-chip-role { color: #4b5563 !important; }
+        .hrms-link:hover { color: #1d4ed8 !important; }
+        .hrms-skill-chip {
+            background: rgb(var(--hrms-brand-rgb) / 0.08) !important;
+            color: #1d4ed8 !important;
+        }
+        .hrms-skill-chip-remove { color: #64748b !important; }
+        .hrms-table-modern th, .hrms-recent-table th { border-color: #e2e8f0 !important; }
+
+        /* Candidate Overview (ATS) helpers */
+        .cand-lbl {
+            display: block;
+            font-size: 0.66rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #64748b;
+            margin-bottom: 0.3rem;
+        }
+        .no-scrollbar::-webkit-scrollbar { height: 0; width: 0; display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .cand-tab {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            border: 1px solid #e2e8f0;
+            background: #ffffff;
+            color: #475569;
+            transition: all 0.15s ease;
+        }
+        .cand-tab:hover { border-color: #93c5fd; background: #eff6ff; }
+        .cand-tab.is-active {
+            background: #2563eb;
+            border-color: #2563eb;
+            color: #ffffff;
+        }
+        .cand-tab .cand-tab-count {
+            font-size: 0.66rem;
+            font-weight: 800;
+            padding: 0.05rem 0.4rem;
+            border-radius: 9999px;
+            background: rgba(37, 99, 235, 0.12);
+            color: #1d4ed8;
+        }
+        .cand-tab.is-active .cand-tab-count { background: rgba(255,255,255,0.22); color: #ffffff; }
+        .cand-th-sort { cursor: pointer; user-select: none; }
+        .cand-th-sort:hover { color: #2563eb; }
+        .cand-row:nth-child(even) { background: #f8fafc; }
+        .cand-row:hover { background: #eff6ff; }
+        /* Full grid: horizontal + vertical cell borders on the candidate table. */
+        #tab-details table th,
+        #tab-details table td { border: 1px solid #e5eaf1; }
+        #tab-details table thead th { border-bottom: 2px solid #cbd5e1; }
+
+        /* Light scrollbar */
+        ::-webkit-scrollbar-thumb { background: #cbd5e1 !important; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
+        ::-webkit-scrollbar-track { background: transparent !important; }
     </style>
 </head>
 
 <body class="text-slate-100 font-sans h-screen flex flex-row overflow-hidden">
 
     <aside
-        class="w-72 bg-gradient-to-b from-[rgb(14 29 63)] to-[#080f24] border-r border-white/10 flex flex-col h-screen shrink-0 z-30">
+        class="w-72 bg-[#f8fafc] border-r border-[#e2e8f0] flex flex-col h-screen shrink-0 z-30">
 
         <!-- Branding Logo Header (matches HRMS .sidebar-brand exactly) -->
         <div class="hrms-sidebar-brand">
@@ -1606,6 +1782,16 @@
                 </svg>
                 Resume AI Chat
             </button>
+            <button onclick="switchTab('interview')" id="menu-interview"
+                class="hrms-sidebar-nav-btn w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 2h6a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v0a2 2 0 0 1 2-2z" />
+                    <path d="M17 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                    <path d="M9 12h6M9 16h4" />
+                </svg>
+                Interview Questions
+            </button>
             <!-- <button onclick="switchTab('skills')" id="menu-skills"
                 class="hrms-sidebar-nav-btn w-full text-left px-4 py-3 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 transition-all">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1658,7 +1844,7 @@
     </aside>
 
     <!-- Scrollable Workspace Panel -->
-    <div class="flex-grow h-screen overflow-y-auto bg-[#080d19] flex flex-col">
+    <div class="flex-grow h-screen overflow-y-auto bg-[#eef2f7] flex flex-col">
 
         <!-- Top Workspace Bar (HRMS-themed) -->
         <header class="hrms-page-header">
@@ -1861,11 +2047,11 @@
                             <div class="hrms-donut-legend">
                                 <span class="hrms-donut-legend-item">
                                     <span class="hrms-donut-legend-dot" style="background: #fbbf24;"></span>
-                                    Shortlisted <strong id="dash-donut-short" style="color: #fff; margin-left: 0.2rem;">0</strong>
+                                    Shortlisted <strong id="dash-donut-short" style="color: #111827; margin-left: 0.2rem;">0</strong>
                                 </span>
                                 <span class="hrms-donut-legend-item">
                                     <span class="hrms-donut-legend-dot" style="background: rgba(255,255,255,0.15);"></span>
-                                    Other <strong id="dash-donut-other" style="color: #fff; margin-left: 0.2rem;">0</strong>
+                                    Other <strong id="dash-donut-other" style="color: #111827; margin-left: 0.2rem;">0</strong>
                                 </span>
                             </div>
                         </div>
@@ -2343,162 +2529,147 @@
             <!-- TAB 2b: CANDIDATE OVERVIEW (compact, recruiter-friendly table) -->
             <section id="tab-details" class="hidden space-y-4 flex-1 flex flex-col min-w-0">
 
-                <!-- Toolbar Card -->
-                <div class="p-4 sm:p-5 rounded-2xl bg-black/40 border border-white/10 shadow-xl space-y-4">
-                    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                        <div class="min-w-0">
-                            <h3 class="font-outfit font-extrabold text-base text-white flex items-center gap-2">
-                                <span class="w-7 h-7 rounded-lg bg-brand-500/15 border border-brand-400/30 flex items-center justify-center text-brand-300">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                        stroke-linejoin="round">
-                                        <path d="M3 3h18v4H3z" />
-                                        <path d="M3 11h18v4H3z" />
-                                        <path d="M3 19h18v2H3z" />
-                                    </svg>
-                                </span>
-                                Candidate Overview
-                            </h3>
-                            <p class="text-[11px] text-slate-400 mt-1 leading-snug">
-                                A compact view of the key fields recruiters use most often. Use the filters to narrow down candidates.
-                            </p>
+                <!-- Header + summary stats -->
+                <div class="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-11 h-11 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3z"/><path d="M3 11h18v4H3z"/><path d="M3 19h18v2H3z"/></svg>
+                            </div>
+                            <div class="min-w-0">
+                                <h3 class="font-outfit font-extrabold text-lg text-slate-900">Candidate Overview</h3>
+                                <p class="text-xs text-slate-500 mt-0.5">Search, filter and manage your candidate pipeline.</p>
+                            </div>
                         </div>
-
-                        <!-- Stats row -->
-                        <div class="flex items-center flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 sm:justify-end">
-                            <span>Total <strong id="details-total" class="text-white">0</strong></span>
-                            <span class="text-slate-600">·</span>
-                            <span>Showing <strong id="details-shown" class="text-white">0</strong></span>
-                            <span class="text-slate-600">·</span>
-                            <span>Shortlisted <strong id="details-shortlisted" class="text-amber-300">0</strong></span>
+                        <!-- Summary stats -->
+                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                            <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                                <div class="text-lg font-black text-slate-900 leading-none" id="cand-stat-total">0</div>
+                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">Total</div>
+                            </div>
+                            <div class="px-3 py-2 rounded-xl bg-blue-50 border border-blue-100 text-center">
+                                <div class="text-lg font-black text-blue-700 leading-none" id="cand-stat-showing">0</div>
+                                <div class="text-[10px] font-bold text-blue-600 uppercase tracking-wider mt-1">Showing</div>
+                            </div>
+                            <div class="px-3 py-2 rounded-xl bg-amber-50 border border-amber-100 text-center">
+                                <div class="text-lg font-black text-amber-700 leading-none" id="cand-stat-shortlisted">0</div>
+                                <div class="text-[10px] font-bold text-amber-600 uppercase tracking-wider mt-1">Shortlisted</div>
+                            </div>
+                            <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-center">
+                                <div class="text-lg font-black text-emerald-700 leading-none" id="cand-stat-immediate">0</div>
+                                <div class="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mt-1">Immediate</div>
+                            </div>
+                            <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                                <div class="text-lg font-black text-slate-900 leading-none" id="cand-stat-avgexp">0</div>
+                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">Avg Exp (Yr)</div>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Advanced Filter Button -->
-                    <button type="button" onclick="toggleDetailsFilterPanel()" 
-                        class="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                        <div class="flex items-center gap-3">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
-                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round" class="text-brand-300">
-                                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                            </svg>
-                            <h3 class="font-outfit font-extrabold text-base text-white">Advanced Filters</h3>
-                            <span class="text-[10px] text-slate-500 hidden sm:inline">Click to expand</span>
+                    <!-- Global search + advanced filters toggle -->
+                    <div class="flex flex-col sm:flex-row gap-2 mt-4">
+                        <div class="relative flex-1">
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            </span>
+                            <input type="text" id="cand-search" oninput="candOnSearch()" placeholder="Search name, email, mobile, company, skills, role, location…" class="hrms-input" style="padding-left:2.25rem;">
                         </div>
-                        <svg id="detailsFilterChevron" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
-                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round"
-                            class="text-slate-300 transition-transform duration-300">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </button>
+                        <button type="button" onclick="candToggleFilters()" id="cand-filter-toggle" class="hrms-btn hrms-btn-ghost">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                            Advanced Filters
+                        </button>
+                    </div>
 
-                    <!-- Advanced Filter Panel -->
-                    <div id="detailsFilterPanel" class="hidden px-5 pb-5 pt-1 border-t border-white/5">
-                        <form onsubmit="applyDetailsFilters(event)"
-                            class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-4 pt-4">
+                    <!-- Active filter chips -->
+                    <div id="cand-chips" class="hidden flex-wrap gap-1.5 mt-3"></div>
+
+                    <!-- Advanced filters panel -->
+                    <div id="cand-filters" class="hidden mt-3 pt-4 border-t border-slate-100">
+                        <form onsubmit="candApply(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-3 gap-y-3">
+                            <div><label class="cand-lbl">Candidate Name</label><input id="cf-name" class="hrms-input" placeholder="Name…"></div>
+                            <div><label class="cand-lbl">Company Name</label><input id="cf-company" class="hrms-input" placeholder="Company…"></div>
+                            <div><label class="cand-lbl">Primary Role</label><input id="cf-role" class="hrms-input" placeholder="e.g. React Developer"></div>
+                            <div><label class="cand-lbl">Skills (AND)</label><input id="cf-skills" class="hrms-input" placeholder="React, SQL…"></div>
+                            <div><label class="cand-lbl">Min Exp (Yr)</label><input id="cf-minexp" type="number" min="0" class="hrms-input" placeholder="0"></div>
+                            <div><label class="cand-lbl">Max Exp (Yr)</label><input id="cf-maxexp" type="number" min="0" class="hrms-input" placeholder="Any"></div>
+                            <div><label class="cand-lbl">Current Salary</label><input id="cf-cursal" class="hrms-input" placeholder="e.g. 40K"></div>
+                            <div><label class="cand-lbl">Expected Salary</label><input id="cf-expsal" class="hrms-input" placeholder="e.g. 50K"></div>
+                            <div><label class="cand-lbl">Notice Period</label><input id="cf-notice" class="hrms-input" placeholder="e.g. 30 days"></div>
+                            <div><label class="cand-lbl">Current Location</label><input id="cf-loc" class="hrms-input" placeholder="City…"></div>
+                            <div><label class="cand-lbl">Preferred Location</label><input id="cf-ploc" class="hrms-input" placeholder="City…"></div>
                             <div>
-                                <label class="hrms-form-eyebrow">Name Contains</label>
-                                <input type="text" id="details-filter-name" placeholder="Candidate name..." class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">Email Contains</label>
-                                <input type="text" id="details-filter-email" placeholder="Email contains..." class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">Core Skills (AND)</label>
-                                <input type="text" id="details-filter-skills" placeholder="React, Docker, SQL..." class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">Shortlisted State</label>
-                                <select id="details-filter-shortlisted" class="hrms-select">
-                                    <option value="All">All Profiles</option>
-                                    <option value="Shortlisted">Shortlisted Only</option>
+                                <label class="cand-lbl">Employment Type</label>
+                                <select id="cf-emp" class="hrms-select">
+                                    <option value="">Any</option><option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option><option>Freelance</option>
                                 </select>
                             </div>
                             <div>
-                                <label class="hrms-form-eyebrow">Min Exp (Yr)</label>
-                                <input type="number" id="details-filter-min-exp" min="0" value="0" class="hrms-input">
+                                <label class="cand-lbl">Candidate Status</label>
+                                <select id="cf-status" class="hrms-select">
+                                    <option value="">Any</option><option>Immediate Joiner</option><option>Shortlisted</option><option>Selected</option><option>Rejected</option><option>Offer Released</option><option>Serving Notice</option><option>Open to Opportunity</option>
+                                </select>
+                            </div>
+                            <div><label class="cand-lbl">Min Resume Score</label><input id="cf-score" type="number" min="0" max="100" class="hrms-input" placeholder="0-100"></div>
+                            <div><label class="cand-lbl">Qualification</label><input id="cf-qual" class="hrms-input" placeholder="e.g. B.Tech"></div>
+                            <div><label class="cand-lbl">College / University</label><input id="cf-college" class="hrms-input" placeholder="College…"></div>
+                            <div>
+                                <label class="cand-lbl">Candidate Source</label>
+                                <select id="cf-source" class="hrms-select">
+                                    <option value="">Any</option><option>LinkedIn</option><option>Naukri</option><option>Indeed</option><option>Referral</option><option>Company Website</option><option>Other</option>
+                                </select>
                             </div>
                             <div>
-                                <label class="hrms-form-eyebrow">Max Exp (Yr)</label>
-                                <input type="number" id="details-filter-max-exp" min="0" value="0" class="hrms-input">
+                                <label class="cand-lbl">Shortlisted</label>
+                                <select id="cf-shortlisted" class="hrms-select"><option value="">All</option><option value="true">Shortlisted only</option></select>
                             </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">From Date</label>
-                                <input type="date" id="details-filter-from-date" class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">To Date</label>
-                                <input type="date" id="details-filter-to-date" class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">Location</label>
-                                <input type="text" id="details-filter-location" placeholder="City, State..." class="hrms-input">
-                            </div>
-                            <div>
-                                <label class="hrms-form-eyebrow">Education</label>
-                                <input type="text" id="details-filter-education" placeholder="Degree, University..." class="hrms-input">
-                            </div>
-                            <div class="lg:col-span-2 flex items-end gap-2">
-                                <button type="submit" class="hrms-btn hrms-btn--primary flex-1">Apply Filters</button>
-                                <button type="button" onclick="resetDetailsFilters()" class="hrms-btn hrms-btn--secondary">Reset</button>
+                            <div><label class="cand-lbl">Added From</label><input id="cf-from" type="date" class="hrms-input"></div>
+                            <div><label class="cand-lbl">Added To</label><input id="cf-to" type="date" class="hrms-input"></div>
+                            <div class="sm:col-span-2 lg:col-span-4 flex items-center gap-2 pt-1">
+                                <button type="submit" class="hrms-btn hrms-btn-primary">Apply Filters</button>
+                                <button type="button" onclick="candReset()" class="hrms-btn hrms-btn-ghost">Reset Filters</button>
                             </div>
                         </form>
                     </div>
                 </div>
 
-                <!-- Candidate Table Card -->
-                <div class="rounded-2xl bg-black/40 border border-white/10 shadow-xl overflow-hidden flex-1 flex flex-col min-h-0 min-w-0 w-full">
-                    <div class="overflow-x-auto overflow-y-auto flex-1 min-w-0" style="max-height: calc(100vh - 320px);">
+                <!-- Technology / role tabs -->
+                <div class="rounded-2xl bg-white border border-slate-200 shadow-sm px-3 py-2.5">
+                    <div id="cand-tabs" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+                        <span class="text-xs text-slate-400 px-1">Loading roles…</span>
+                    </div>
+                </div>
+
+                <!-- Candidate table -->
+                <div class="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0 min-w-0 w-full">
+                    <div class="overflow-x-auto overflow-y-auto flex-1 min-w-0" style="max-height: calc(100vh - 380px);">
                         <table class="w-full text-[12px] border-collapse">
-                            <thead class="sticky top-0 z-10 bg-[#0b1530]/95 backdrop-blur">
-                                <tr class="text-[10px] uppercase tracking-wider font-bold text-slate-400 border-b border-white/10">
-                                    <th class="px-4 py-3 text-left font-bold" style="min-width: 220px;">Candidate</th>
-                                    <th class="px-4 py-3 text-left font-bold" style="min-width: 230px;">Contact</th>
-                                    <th class="px-4 py-3 text-right font-bold" style="min-width: 70px;">Exp</th>
-                                    <th class="px-4 py-3 text-left font-bold" style="min-width: 280px;">Core Technical Skills</th>
-                                    <th class="px-4 py-3 text-left font-bold whitespace-nowrap" style="min-width: 110px;">Added</th>
-                                    <th class="px-4 py-3 text-right font-bold whitespace-nowrap" style="min-width: 220px;">Actions</th>
-                                </tr>
+                            <thead class="sticky top-0 z-10 bg-slate-50 backdrop-blur">
+                                <tr id="cand-thead" class="text-[10px] uppercase tracking-wider font-bold text-slate-500 border-b border-slate-200"></tr>
                             </thead>
-                            <tbody id="details-tbody">
-                                <tr>
-                                    <td colspan="6" class="px-4 py-12 text-center text-slate-500 text-xs">
-                                        Loading candidate overview...
-                                    </td>
-                                </tr>
+                            <tbody id="cand-tbody">
+                                <tr><td colspan="14" class="px-4 py-12 text-center text-slate-400 text-xs">Loading candidates…</td></tr>
                             </tbody>
                         </table>
                     </div>
 
-                    <!-- Pagination footer -->
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-white/10 bg-black/30 text-[11px] text-slate-400">
+                    <!-- Pagination -->
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-500">
                         <div class="flex items-center gap-2">
-                            <span class="font-semibold text-white" id="details-page-label">Page 1</span>
-                            <span class="text-slate-600">·</span>
-                            <span id="details-page-info">Page 1 of 1</span>
-                            <span class="text-slate-600">·</span>
-                            <span id="details-page-total">0 candidates</span>
+                            <span id="cand-page-info" class="font-semibold text-slate-700">Page 1 of 1</span>
+                            <span class="text-slate-300">·</span>
+                            <span id="cand-page-total">0 candidates</span>
+                            <span class="text-slate-300 hidden sm:inline">·</span>
+                            <span class="hidden sm:inline-flex items-center gap-1">Rows
+                                <select id="cand-pagesize" onchange="candSetPageSize(this)" class="hrms-select hrms-select--sm" style="width:auto;min-width:64px;">
+                                    <option>10</option><option selected>20</option><option>50</option><option>100</option>
+                                </select>
+                            </span>
                         </div>
-                        <div class="inline-flex items-center gap-2">
-                            <button type="button" id="details-page-prev" onclick="changeDetailsPage(-1)"
-                                class="hrms-btn hrms-btn-secondary hrms-btn-sm">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="15 18 9 12 15 6" />
-                                </svg>
-                                Prev
-                            </button>
-                            <button type="button" id="details-page-next" onclick="changeDetailsPage(1)"
-                                class="hrms-btn hrms-btn-secondary hrms-btn-sm">
-                                Next
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="9 18 15 12 9 6" />
-                                </svg>
-                            </button>
+                        <div class="inline-flex items-center gap-1.5">
+                            <button type="button" id="cand-first" onclick="candFirst()" class="hrms-btn hrms-btn-ghost hrms-btn-sm">« First</button>
+                            <button type="button" id="cand-prev" onclick="candPrev()" class="hrms-btn hrms-btn-ghost hrms-btn-sm">‹ Prev</button>
+                            <button type="button" id="cand-next" onclick="candNext()" class="hrms-btn hrms-btn-ghost hrms-btn-sm">Next ›</button>
+                            <button type="button" id="cand-last" onclick="candLast()" class="hrms-btn hrms-btn-ghost hrms-btn-sm">Last »</button>
                         </div>
                     </div>
                 </div>
@@ -2506,10 +2677,17 @@
 
             <!-- TAB 3: MATCH / COMPARE -->
             <section id="tab-compare" class="hidden space-y-4 flex-1 flex flex-col">
-                <div class="p-3 rounded-2xl bg-white/[0.02] shadow-xl space-y-4 flex-1 flex flex-col">
-                    <div>
-                        <h3 class="font-outfit font-extrabold text-lg text-white">Compare Candidates</h3>
-                        <p class="text-xs text-slate-400 mt-1">Choose 2 to 5 candidates, add the job details, and see who fits best.</p>
+                <div class="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4 flex-1 flex flex-col">
+                    <div class="flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M16 3h5v5" /><path d="M8 3H3v5" /><path d="m21 3-7.5 7.5" /><path d="m3 3 7.5 7.5" /><path d="M16 21h5v-5" /><path d="M8 21H3v-5" /><path d="m21 21-7.5-7.5" /><path d="m3 21 7.5-7.5" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-outfit font-extrabold text-lg text-slate-900">Compare Candidates</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Choose 2 to 5 candidates, add the job details, and see who fits best.</p>
+                        </div>
                     </div>
 
                     <!-- Inline Candidate Selector -->
@@ -2563,7 +2741,13 @@
                     </div>
 
                     <div id="tab-compareResults" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
-                        <!-- Output columns dynamically -->
+                        <div class="col-span-full py-16 flex flex-col items-center justify-center text-center gap-3">
+                            <div class="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="m21 3-7.5 7.5"/><path d="m3 3 7.5 7.5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/><path d="m21 21-7.5-7.5"/><path d="m3 21 7.5-7.5"/></svg>
+                            </div>
+                            <p class="text-sm font-bold text-slate-700">Ready to compare</p>
+                            <p class="text-xs text-slate-400 max-w-xs">Select 2–5 candidates above, paste the job details, then hit <span class="font-semibold text-slate-600">Match Profiles</span> to see AI fit scores side by side.</p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -2762,6 +2946,65 @@
                         </form>
                     </div>
                 </div>
+            </section>
+
+            <!-- TAB: INTERVIEW QUESTIONS -->
+            <section id="tab-interview" class="hidden space-y-4">
+                <!-- Upload panel (collapsible) -->
+                <div class="p-4 rounded-2xl bg-white/[0.02] shadow-xl space-y-4">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <h3 class="font-outfit font-extrabold text-lg text-white">Interview Questions</h3>
+                            <p class="text-xs text-slate-400 mt-1">Upload and manage interview-question PDFs by hiring position.</p>
+                        </div>
+                        <button type="button" onclick="toggleInterviewForm()" id="iq-toggleBtn" class="hrms-btn hrms-btn-primary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            Upload Interview Questions
+                        </button>
+                    </div>
+
+                    <div id="iq-banner" class="hidden text-xs font-semibold rounded-lg px-3 py-2"></div>
+
+                    <form id="iq-form" onsubmit="submitInterviewQuestion(event)" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3 border-t border-white/10 pt-4">
+                        <div class="space-y-1">
+                            <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Hiring Position</label>
+                            <select id="iq-position" class="hrms-select w-full"></select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Title</label>
+                            <input type="text" id="iq-title" class="hrms-input w-full" placeholder="e.g. Senior .NET — Core Concepts">
+                        </div>
+                        <div class="space-y-1 md:col-span-2">
+                            <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Description <span class="text-slate-500 normal-case">(optional)</span></label>
+                            <textarea id="iq-description" rows="2" class="hrms-textarea w-full" placeholder="Short note about this question set"></textarea>
+                        </div>
+                        <div class="space-y-1 md:col-span-2">
+                            <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">PDF File</label>
+                            <input type="file" id="iq-file" accept="application/pdf,.pdf" class="hrms-input w-full">
+                            <p class="text-[11px] text-slate-500 mt-1">PDF only · maximum 20 MB.</p>
+                        </div>
+                        <div class="md:col-span-2">
+                            <button type="submit" id="iq-submitBtn" class="hrms-btn hrms-btn-primary">Upload</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Search + filter -->
+                <div class="p-3 rounded-2xl bg-white/[0.02] shadow-xl flex items-center gap-3 flex-wrap">
+                    <input type="text" id="iq-search" oninput="renderInterviewQuestions()" placeholder="Search by title or position…" class="hrms-input flex-grow min-w-[200px]">
+                    <select id="iq-filter" onchange="renderInterviewQuestions()" class="hrms-select w-[220px]"></select>
+                    <span id="iq-count" class="text-xs text-slate-400"></span>
+                </div>
+
+                <!-- Loader / empty / grid -->
+                <div id="iq-loader" class="hidden py-16 flex items-center justify-center w-full">
+                    <div class="animate-spin rounded-full h-8 w-8 border border-brand-400 border-t-transparent"></div>
+                </div>
+                <div id="iq-empty" class="hidden p-6 rounded-2xl bg-white/[0.02] text-sm text-slate-300"></div>
+                <div id="iq-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+                <!-- Pagination -->
+                <div id="iq-pagination" class="hidden items-center justify-center gap-3 pt-2"></div>
             </section>
 
             <!-- TAB 6: EXPORT CENTER -->
@@ -3048,6 +3291,40 @@
         </div>
     </div>
 
+    <!-- Interview Questions: Edit metadata modal -->
+    <div id="iqEditModal"
+        class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+        <div class="hrms-modal-panel p-6 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col gap-4">
+            <div class="flex items-center justify-between border-b border-white/10 pb-3">
+                <h3 class="font-outfit font-extrabold text-base text-white">Edit Interview Questions</h3>
+                <button type="button" onclick="closeInterviewEdit()" class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div id="iq-editBanner" class="hidden text-xs font-semibold rounded-lg px-3 py-2"></div>
+            <form id="iq-editForm" onsubmit="submitInterviewEdit(event)" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input type="hidden" id="iq-editId">
+                <div class="space-y-1">
+                    <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Hiring Position</label>
+                    <select id="iq-editPosition" class="hrms-select w-full"></select>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Title</label>
+                    <input type="text" id="iq-editTitle" class="hrms-input w-full">
+                </div>
+                <div class="space-y-1 md:col-span-2">
+                    <label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Description <span class="text-slate-500 normal-case">(optional)</span></label>
+                    <textarea id="iq-editDescription" rows="2" class="hrms-textarea w-full"></textarea>
+                </div>
+                <p class="text-[11px] text-slate-500 md:col-span-2">The PDF file is not changed here — to replace it, delete and upload again.</p>
+                <div class="flex gap-2 justify-end md:col-span-2 pt-1">
+                    <button type="button" onclick="closeInterviewEdit()" class="hrms-btn hrms-btn-secondary">Cancel</button>
+                    <button type="submit" id="iq-editSubmitBtn" class="hrms-btn hrms-btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Recruiter Candidate Notes Modal -->
     <div id="notesModal"
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
@@ -3115,7 +3392,7 @@
     <div id="detailsModal"
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
         <div
-            class="hrms-modal-panel p-5 sm:p-6 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col gap-4 max-h-[95vh] bg-gradient-to-br from-[#0f1628] via-[#0d1322] to-[#0a0f1a]">
+            class="hrms-modal-panel p-5 sm:p-6 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col gap-4 max-h-[95vh]">
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-4">
                 <div class="flex items-center gap-4">
@@ -3399,10 +3676,42 @@
             localStorage.setItem("token", jwtToken);
         }
 
+        // Are we mounted inside the HRMS app (served at /resume/) or running
+        // standalone? Under HRMS there must be exactly ONE login — the HRMS
+        // one. The server already enforces this: an unauthorised /resume/
+        // request is 302'd to the HRMS login and /resume-api/* returns 403,
+        // so a second login form here is redundant and confusing. Standalone
+        // deployments keep their own login modal as a fallback.
+        const UNDER_HRMS = window.location.pathname.startsWith("/resume");
+
+        // Single place that decides what "not authenticated" looks like.
+        function requireLogin() {
+            if (UNDER_HRMS) {
+                // Hand off to the HRMS login; it owns the session.
+                window.location.href = "/";
+                return;
+            }
+            document.getElementById("standalone-login-modal").classList.remove("hidden");
+        }
+
         // Intercept all native fetch calls to automatically inject Authorization headers
         const originalFetch = window.fetch;
+        // True for any same-origin API call we own, whether written as an
+        // absolute URL ("http://host/resume-api/x") or a relative one
+        // ("/resume-api/x", "/api/x"). The old check was
+        // `url.includes(resumeApiUrl)`, which silently missed every relative
+        // path — those requests went out with no Authorization header, came
+        // back 401/403, and popped the login box on a perfectly valid session.
+        function needsAuthHeader(url) {
+            if (typeof url !== "string") return false;
+            if (url.includes(resumeApiUrl)) return true;
+            if (url.startsWith("/resume-api") || url.startsWith("/api/")) return true;
+            const origin = window.location.origin;
+            return url.startsWith(origin + "/resume-api") || url.startsWith(origin + "/api/");
+        }
+
         window.fetch = async function (url, options = {}) {
-            if (typeof url === "string" && url.includes(resumeApiUrl)) {
+            if (needsAuthHeader(url)) {
                 if (!options.headers) {
                     options.headers = {};
                 }
@@ -3425,7 +3734,7 @@
                 if (typeof url === "string" && url.endsWith("/health")) {
                     return response;
                 }
-                document.getElementById("standalone-login-modal").classList.remove("hidden");
+                requireLogin();
                 throw new Error("Unauthorized");
             }
             return response;
@@ -3529,7 +3838,7 @@
             const _scrollHost = document.querySelector(".flex-grow.h-screen.overflow-y-auto");
             if (_scrollHost) _scrollHost.scrollTop = 0;
 
-            const tabs = ['dashboard', 'resumes', 'details', 'compare', 'search', 'chat', 'export', 'skills'];
+            const tabs = ['dashboard', 'resumes', 'details', 'compare', 'search', 'chat', 'interview', 'export', 'skills'];
             tabs.forEach(t => {
                 const sec = document.getElementById(`tab-${t}`);
                 const btn = document.getElementById(`menu-${t}`);
@@ -3551,6 +3860,7 @@
                 'compare': 'AI Match / Compare',
                 'search': 'Global AI Search',
                 'chat': 'Resume AI Chat',
+                'interview': 'Interview Questions',
                 'export': 'Export to Sheets',
                 'skills': 'Employee Skills'
             };
@@ -3572,8 +3882,304 @@
             } else if (tabId === 'details') {
                 detailsPage = 1;
                 renderDetailsTable();
+            } else if (tabId === 'interview') {
+                loadInterviewQuestions();
             }
         }
+
+        /* ===================== INTERVIEW QUESTIONS ===================== */
+        // Talks to the HRMS API (/api/interview-questions). Auth is auto-injected
+        // by the global fetch interceptor above (Bearer <jwtToken>).
+        const IQ_API = "/api/interview-questions";
+        const IQ_PAGE_SIZE = 9;
+
+        // The global fetch interceptor only auto-injects the token for /resume-api
+        // URLs; these endpoints live on the HRMS API (/api), so attach the bearer
+        // token explicitly (the user is already authenticated via ?token=).
+        function iqFetch(path, opts = {}) {
+            const headers = new Headers(opts.headers || {});
+            if (jwtToken && !headers.has("Authorization")) headers.set("Authorization", "Bearer " + jwtToken);
+            return fetch(path, { ...opts, headers });
+        }
+        let iqAll = [];
+        let iqPositions = [];
+        let iqPositionsLoaded = false;
+        let iqPage = 1;
+
+        function iqBanner(elId, msg, isError) {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            if (!msg) { el.classList.add("hidden"); el.innerText = ""; return; }
+            el.innerText = msg;
+            el.className = "text-xs font-semibold rounded-lg px-3 py-2 " + (isError
+                ? "bg-red-500/10 border border-red-500/30 text-red-300"
+                : "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300");
+        }
+
+        function iqFormatDate(iso) {
+            if (!iso) return "";
+            const d = new Date(iso);
+            if (isNaN(d)) return iso;
+            return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+        }
+
+        async function initInterviewPositions() {
+            if (iqPositionsLoaded) return;
+            try {
+                const resp = await iqFetch(`${IQ_API}/positions`);
+                iqPositions = resp.ok ? await resp.json() : [];
+            } catch { iqPositions = []; }
+            iqPositionsLoaded = true;
+
+            const opts = iqPositions.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+            const posSel = document.getElementById("iq-position");
+            const editSel = document.getElementById("iq-editPosition");
+            const filterSel = document.getElementById("iq-filter");
+            if (posSel) { posSel.innerHTML = `<option value="">Select a position</option>` + opts; refreshDarkSelect("iq-position"); }
+            if (editSel) { editSel.innerHTML = opts; refreshDarkSelect("iq-editPosition"); }
+            if (filterSel) { filterSel.innerHTML = `<option value="">All Positions</option>` + opts; refreshDarkSelect("iq-filter"); }
+        }
+
+        async function loadInterviewQuestions() {
+            await initInterviewPositions();
+            const loader = document.getElementById("iq-loader");
+            const grid = document.getElementById("iq-grid");
+            if (loader) loader.classList.remove("hidden");
+            if (grid) grid.innerHTML = "";
+            try {
+                const resp = await iqFetch(IQ_API);
+                iqAll = resp.ok ? await resp.json() : [];
+            } catch { iqAll = []; }
+            if (loader) loader.classList.add("hidden");
+            renderInterviewQuestions();
+        }
+
+        function renderInterviewQuestions() {
+            const search = (document.getElementById("iq-search")?.value || "").trim().toLowerCase();
+            const filter = (document.getElementById("iq-filter")?.value || "").toLowerCase();
+            const filtered = iqAll.filter(r => {
+                if (filter && r.position.toLowerCase() !== filter) return false;
+                if (search && !r.title.toLowerCase().includes(search) && !r.position.toLowerCase().includes(search)) return false;
+                return true;
+            });
+
+            const countEl = document.getElementById("iq-count");
+            if (countEl) countEl.innerText = `${filtered.length} result${filtered.length === 1 ? "" : "s"}`;
+
+            const grid = document.getElementById("iq-grid");
+            const empty = document.getElementById("iq-empty");
+            const pag = document.getElementById("iq-pagination");
+
+            if (filtered.length === 0) {
+                if (grid) grid.innerHTML = "";
+                if (pag) pag.classList.add("hidden");
+                if (empty) {
+                    empty.classList.remove("hidden");
+                    empty.innerText = iqAll.length === 0
+                        ? "No interview questions uploaded yet."
+                        : "No interview questions match your search.";
+                }
+                return;
+            }
+            if (empty) empty.classList.add("hidden");
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / IQ_PAGE_SIZE));
+            if (iqPage > totalPages) iqPage = totalPages;
+            const start = (iqPage - 1) * IQ_PAGE_SIZE;
+            const pageRows = filtered.slice(start, start + IQ_PAGE_SIZE);
+
+            if (grid) grid.innerHTML = pageRows.map(iqCardHtml).join("");
+
+            if (pag) {
+                if (totalPages <= 1) {
+                    pag.classList.add("hidden");
+                } else {
+                    pag.classList.remove("hidden");
+                    pag.classList.add("flex");
+                    pag.innerHTML = `
+                        <button type="button" class="hrms-btn hrms-btn-ghost" ${iqPage <= 1 ? "disabled" : ""} onclick="iqGoto(${iqPage - 1})">Previous</button>
+                        <span class="text-xs text-slate-400">Page ${iqPage} of ${totalPages}</span>
+                        <button type="button" class="hrms-btn hrms-btn-ghost" ${iqPage >= totalPages ? "disabled" : ""} onclick="iqGoto(${iqPage + 1})">Next</button>`;
+                }
+            }
+        }
+
+        function iqGoto(p) { iqPage = p; renderInterviewQuestions(); }
+
+        function iqCardHtml(r) {
+            const desc = r.description
+                ? `<p class="text-xs leading-relaxed text-slate-400 mt-2 line-clamp-2">${escapeHtml(r.description)}</p>` : "";
+            const by = r.uploaded_by_name ? ` · ${escapeHtml(r.uploaded_by_name)}` : "";
+            return `
+            <div class="rounded-2xl border border-white/10 bg-white/[0.02] p-4 flex flex-col hover:border-brand-400/40 transition-all">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-red-500/15 border border-red-500/25 text-red-400">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 15h6M9 18h4"/></svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="font-outfit font-bold text-sm text-white truncate" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</div>
+                        <div class="text-[11px] text-slate-500 mt-0.5">Uploaded ${iqFormatDate(r.created_at)}${by}</div>
+                    </div>
+                </div>
+                <span class="self-start mt-3 text-[10px] font-bold text-brand-700 bg-brand-500/10 border border-brand-500/25 rounded-full px-2.5 py-0.5">${escapeHtml(r.position)}</span>
+                ${desc}
+                <div class="mt-auto pt-3 border-t border-white/10 flex flex-wrap gap-2">
+                    <button type="button" class="hrms-btn hrms-btn-secondary !min-h-[34px] !px-3 !text-xs" onclick="viewInterviewPdf(${r.id})">View PDF</button>
+                    <button type="button" class="hrms-btn hrms-btn-ghost !min-h-[34px] !px-3 !text-xs" onclick="downloadInterviewPdf(${r.id})">Download</button>
+                    <button type="button" class="hrms-btn hrms-btn-ghost !min-h-[34px] !px-3 !text-xs" onclick="openInterviewEdit(${r.id})">Edit</button>
+                    <button type="button" class="hrms-btn hrms-btn-ghost !min-h-[34px] !px-3 !text-xs !text-red-300" onclick="deleteInterviewQuestion(${r.id})">Delete</button>
+                </div>
+            </div>`;
+        }
+
+        function toggleInterviewForm() {
+            const form = document.getElementById("iq-form");
+            const btn = document.getElementById("iq-toggleBtn");
+            if (!form) return;
+            const willShow = form.classList.contains("hidden");
+            form.classList.toggle("hidden");
+            iqBanner("iq-banner", "", false);
+            if (btn) btn.innerHTML = willShow
+                ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cancel`
+                : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Upload Interview Questions`;
+        }
+
+        async function submitInterviewQuestion(event) {
+            event.preventDefault();
+            iqBanner("iq-banner", "", false);
+            const position = document.getElementById("iq-position").value;
+            const title = document.getElementById("iq-title").value.trim();
+            const description = document.getElementById("iq-description").value.trim();
+            const fileInput = document.getElementById("iq-file");
+            const file = fileInput.files[0];
+            if (!position) return iqBanner("iq-banner", "Please choose a hiring position", true);
+            if (!title) return iqBanner("iq-banner", "Title is required", true);
+            if (!file) return iqBanner("iq-banner", "Please attach a PDF file", true);
+            if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"))
+                return iqBanner("iq-banner", "Only PDF files are allowed", true);
+            if (file.size > 20 * 1024 * 1024) return iqBanner("iq-banner", "File too large. Maximum size is 20 MB", true);
+
+            const fd = new FormData();
+            fd.append("position", position);
+            fd.append("title", title);
+            if (description) fd.append("description", description);
+            fd.append("file", file);
+
+            const btn = document.getElementById("iq-submitBtn");
+            btn.disabled = true; btn.innerText = "Uploading…";
+            try {
+                const resp = await iqFetch(IQ_API, { method: "POST", body: fd });
+                if (!resp.ok) {
+                    const e = await resp.json().catch(() => ({}));
+                    throw new Error(e.detail || "Failed to upload");
+                }
+                document.getElementById("iq-form").reset();
+                refreshDarkSelect("iq-position");
+                toggleInterviewForm();
+                await loadInterviewQuestions();
+                iqBanner("iq-banner", "Interview questions uploaded.", false);
+                setTimeout(() => iqBanner("iq-banner", "", false), 3000);
+            } catch (err) {
+                iqBanner("iq-banner", err.message || "Failed to upload", true);
+            } finally {
+                btn.disabled = false; btn.innerText = "Upload";
+            }
+        }
+
+        async function viewInterviewPdf(id) {
+            try {
+                const resp = await iqFetch(`${IQ_API}/${id}/file`);
+                if (!resp.ok) throw new Error();
+                const url = URL.createObjectURL(await resp.blob());
+                window.open(url, "_blank", "noopener,noreferrer");
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+            } catch { openConfirmModal("Error", "Could not open the PDF.", closeConfirmModal); }
+        }
+
+        async function downloadInterviewPdf(id) {
+            try {
+                const row = iqAll.find(r => r.id === id);
+                const resp = await iqFetch(`${IQ_API}/${id}/file?download=true`);
+                if (!resp.ok) throw new Error();
+                const url = URL.createObjectURL(await resp.blob());
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = (row && row.pdf_name) || `interview-questions-${id}.pdf`;
+                document.body.appendChild(a); a.click(); a.remove();
+                URL.revokeObjectURL(url);
+            } catch { openConfirmModal("Error", "Could not download the PDF.", closeConfirmModal); }
+        }
+
+        function openInterviewEdit(id) {
+            const row = iqAll.find(r => r.id === id);
+            if (!row) return;
+            iqBanner("iq-editBanner", "", false);
+            document.getElementById("iq-editId").value = row.id;
+            const posSel = document.getElementById("iq-editPosition");
+            posSel.value = row.position;
+            refreshDarkSelect("iq-editPosition");
+            document.getElementById("iq-editTitle").value = row.title;
+            document.getElementById("iq-editDescription").value = row.description || "";
+            document.getElementById("iqEditModal").classList.remove("hidden");
+        }
+
+        function closeInterviewEdit() {
+            document.getElementById("iqEditModal").classList.add("hidden");
+        }
+
+        async function submitInterviewEdit(event) {
+            event.preventDefault();
+            iqBanner("iq-editBanner", "", false);
+            const id = document.getElementById("iq-editId").value;
+            const position = document.getElementById("iq-editPosition").value;
+            const title = document.getElementById("iq-editTitle").value.trim();
+            const description = document.getElementById("iq-editDescription").value.trim();
+            if (!position) return iqBanner("iq-editBanner", "Please choose a hiring position", true);
+            if (!title) return iqBanner("iq-editBanner", "Title is required", true);
+
+            const btn = document.getElementById("iq-editSubmitBtn");
+            btn.disabled = true; btn.innerText = "Saving…";
+            try {
+                const resp = await iqFetch(`${IQ_API}/${id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ position, title, description: description || null }),
+                });
+                if (!resp.ok) {
+                    const e = await resp.json().catch(() => ({}));
+                    throw new Error(e.detail || "Failed to save changes");
+                }
+                const updated = await resp.json();
+                iqAll = iqAll.map(r => r.id === updated.id ? updated : r);
+                closeInterviewEdit();
+                renderInterviewQuestions();
+            } catch (err) {
+                iqBanner("iq-editBanner", err.message || "Failed to save changes", true);
+            } finally {
+                btn.disabled = false; btn.innerText = "Save";
+            }
+        }
+
+        function deleteInterviewQuestion(id) {
+            const row = iqAll.find(r => r.id === id);
+            if (!row) return;
+            openConfirmModal(
+                "Delete interview questions?",
+                `Delete "${row.title}" (${row.position})? This also removes the PDF and cannot be undone.`,
+                async () => {
+                    closeConfirmModal();
+                    try {
+                        const resp = await iqFetch(`${IQ_API}/${id}`, { method: "DELETE" });
+                        if (!resp.ok) throw new Error();
+                        iqAll = iqAll.filter(r => r.id !== id);
+                        renderInterviewQuestions();
+                    } catch {
+                        openConfirmModal("Error", "Could not delete.", closeConfirmModal);
+                    }
+                }
+            );
+        }
+        /* =================== END INTERVIEW QUESTIONS =================== */
 
         // Toggle the collapsible Filters & Sorting panel
         function toggleFilterPanel() {
@@ -3639,7 +4245,7 @@
         const DASH_SPARKLINE_DAYS = 14;
 
         function _dashColor(idx) {
-            const palette = ["#6482c8", "#10b981", "#f59e0b", "#7dd3fc", "#a78bfa", "#f472b6", "#34d399"];
+            const palette = ["#2563eb", "#38bdf8", "#f59e0b", "#a78bfa", "#f472b6", "#34d399", "#818cf8"];
             return palette[idx % palette.length];
         }
 
@@ -3825,7 +4431,7 @@
             if (trendAvg) {
                 if (total > 0) {
                     trendAvg.className = "hrms-kpi-trend hrms-kpi-trend--flat";
-                    trendAvg.innerHTML = `Across <strong style="color:#fff;">${total}</strong> candidates`;
+                    trendAvg.innerHTML = `Across <strong style="color:#000;">${total}</strong> candidates`;
                 } else {
                     trendAvg.innerHTML = "&nbsp;";
                 }
@@ -4497,250 +5103,341 @@
             renderDetailsTable();
         }
 
+        // ============================================================
+        // Candidate Overview (ATS) — server-side search / filter / sort / paginate.
+        // Isolated from the shared `resumes` global (used by Dashboard/Compare),
+        // so those flows are untouched. Entry point keeps the original name.
+        // ============================================================
+        const CAND_COLS = [
+            { key: 'created_at', label: 'Date Added', sortable: true, align: 'left' },
+            { key: 'name', label: 'Candidate', sortable: true, align: 'left' },
+            { key: 'phone', label: 'Mobile', sortable: false, align: 'left' },
+            { key: 'email', label: 'Email', sortable: false, align: 'left' },
+            { key: 'company_name', label: 'Company', sortable: true, align: 'left' },
+            { key: 'current_location', label: 'Location', sortable: true, align: 'left' },
+            { key: 'experience', label: 'Exp', sortable: true, align: 'right' },
+            { key: 'current_salary', label: 'Cur. Salary', sortable: true, align: 'right' },
+            { key: 'expected_salary', label: 'Exp. Salary', sortable: true, align: 'right' },
+            { key: 'notice_period', label: 'Notice', sortable: true, align: 'left' },
+            { key: 'primary_role', label: 'Role', sortable: true, align: 'left' },
+            { key: 'candidate_status', label: 'Status', sortable: true, align: 'left' },
+            { key: 'remarks', label: 'Remarks', sortable: false, align: 'left' },
+            { key: '__actions', label: 'Actions', sortable: false, align: 'right' },
+        ];
+        const candState = { q: '', role: '', sortBy: 'created_at', sortOrder: 'desc', page: 1, pageSize: 20, filters: {}, facetsLoaded: false, roles: [], rolesTotal: 0, totalPages: 1 };
+        let _candSearchTimer = null;
+        let _candReqSeq = 0;
+
         function renderDetailsTable() {
-            const tbody = document.getElementById("details-tbody");
-            if (!tbody) return;
-
-            const rows = _detailsFilteredRows();
-            const total = resumes.length;
-            const shown = rows.length;
-            const shortlisted = resumes.filter(r => r.is_shortlisted).length;
-            const totalPages = Math.max(1, Math.ceil(shown / detailsPageSize));
-            detailsPage = Math.min(detailsPage, totalPages);
-            const start = (detailsPage - 1) * detailsPageSize;
-            const end = Math.min(start + detailsPageSize, shown);
-            const pageRows = rows.slice(start, end);
-
-            const totalEl = document.getElementById("details-total");
-            const shownEl = document.getElementById("details-shown");
-            const slEl = document.getElementById("details-shortlisted");
-            if (totalEl) totalEl.textContent = String(total);
-            if (shownEl) shownEl.textContent = String(shown);
-            if (slEl) slEl.textContent = String(shortlisted);
-            const pageInfo = document.getElementById("details-page-info");
-            const pageLabel = document.getElementById("details-page-label");
-            const pageTotal = document.getElementById("details-page-total");
-            const pagePrev = document.getElementById("details-page-prev");
-            const pageNext = document.getElementById("details-page-next");
-            if (pageInfo) pageInfo.textContent = `Page ${detailsPage} of ${totalPages}`;
-            if (pageLabel) pageLabel.textContent = `Page ${detailsPage}`;
-            if (pageTotal) pageTotal.textContent = `${shown} candidate${shown === 1 ? "" : "s"}`;
-            if (pagePrev) pagePrev.disabled = detailsPage <= 1 || detailsLoading;
-            if (pageNext) pageNext.disabled = detailsPage >= totalPages || detailsLoading;
-
-            if (detailsLoading) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="6" class="px-4 py-16 text-center text-slate-500 text-xs">
-                            <div class="inline-flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="animate-spin">
-                                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                                </svg>
-                                Loading candidate overview...
-                            </div>
-                        </td>
-                    </tr>`;
-                return;
-            }
-
-            if (!rows.length) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="6" class="px-4 py-16 text-center text-slate-500 text-xs">
-                            <div class="flex flex-col items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-slate-600">
-                                    <circle cx="11" cy="11" r="8" />
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                                </svg>
-                                <div class="text-slate-400 font-semibold">No candidates match your filters</div>
-                                <div class="text-slate-500 text-[11px]">Try clearing a filter or widening the date range.</div>
-                            </div>
-                        </td>
-                    </tr>`;
-                return;
-            }
-
-            const iconBtn = (title, colorClass, svg, onclick) => `
-                <button type="button" onclick="${onclick}"
-                    title="${_detailsEscape(title)}"
-                    class="inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-400 ${colorClass} hover:bg-white/10 transition shrink-0">
-                    ${svg}
-                </button>`;
-
-            const titleCase = (s) => {
-                const str = (s == null ? "" : String(s)).trim();
-                if (!str) return "—";
-                if (/[a-z]/.test(str)) return str;
-                return str.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-            };
-
-            const initials = (name) => {
-                const s = (name == null ? "" : String(name)).trim();
-                if (!s) return "?";
-                const parts = s.split(/\s+/).filter(Boolean);
-                const first = parts[0]?.charAt(0) || "";
-                const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
-                return (first + last).toUpperCase() || "?";
-            };
-
-            const avatarColors = [
-                "bg-brand-500/20 text-brand-300 border-brand-400/30",
-                "bg-emerald-500/20 text-emerald-300 border-emerald-400/30",
-                "bg-amber-500/20 text-amber-300 border-amber-400/30",
-                "bg-rose-500/20 text-rose-300 border-rose-400/30",
-                "bg-indigo-500/20 text-indigo-300 border-indigo-400/30",
-                "bg-cyan-500/20 text-cyan-300 border-cyan-400/30",
-                "bg-violet-500/20 text-violet-300 border-violet-400/30",
-                "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-400/30",
-            ];
-            const colorFor = (key) => {
-                const s = String(key || "");
-                let h = 0;
-                for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-                return avatarColors[h % avatarColors.length];
-            };
-
-            const fileIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                </svg>`;
-            const editIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                </svg>`;
-                        const clipboardIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="2" width="6" height="4" rx="1" />
-                    <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
-                    <path d="M9 14h6" />
-                    <path d="M9 18h6" />
-                </svg>`;
-            const starIcon = (filled) => `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>`;
-            const trashIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                </svg>`;
-            const tagIcon = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-                    <line x1="7" y1="7" x2="7.01" y2="7" />
-                </svg>`;
-
-            const buf = pageRows.map((r, idx) => {
-                const skills = getAllSkills(r);
-                const visibleSkills = skills.slice(0, 4);
-                const extraSkills = skills.length > 4
-                    ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-white/5 border border-white/10 text-slate-400 text-[10px] font-semibold">+${skills.length - 4}</span>`
-                    : "";
-
-                const displayName = titleCase(r.name);
-                const avatarClass = colorFor(r.id || r.email || displayName);
-
-                const contactHtml = `
-                    <div class="space-y-1 min-w-0">
-                        ${r.email ? `
-                            <div class="flex items-center gap-1.5 text-slate-300 text-[11px] min-w-0">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2" class="text-slate-500 shrink-0">
-                                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                                    <polyline points="22,6 12,13 2,6" />
-                                </svg>
-                                <span class="truncate">${_detailsEscape(r.email)}</span>
-                            </div>` : ""}
-                        ${r.phone ? `
-                            <div class="flex items-center gap-1.5 text-slate-400 text-[11px] min-w-0">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2" class="text-slate-500 shrink-0">
-                                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-                                </svg>
-                                <span>${_detailsEscape(r.phone)}</span>
-                            </div>` : ""}
-                        ${(!r.email && !r.phone) ? `<span class="text-slate-500 italic text-[11px]">No contact</span>` : ""}
-                    </div>`;
-
-                const skillsHtml = visibleSkills.length
-                    ? `<div class="flex flex-wrap items-center gap-1 cursor-pointer" onclick="openCandidateSkillsModal('${r.id}', event)" title="Click to view/edit skills">
-                            ${visibleSkills.map(s => `<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-brand-500/15 border border-brand-400/25 text-brand-200 text-[10px] font-semibold">${_detailsEscape(s)}</span>`).join("")}
-                            ${extraSkills}
-                        </div>`
-                    : `<span class="text-slate-500 italic text-[11px]">—</span>`;
-
-                const dateAdded = _detailsDate(r.created_at);
-
-                const pdfBtn = r.source_file
-                    ? iconBtn("Open resume PDF", "hover:text-emerald-300", fileIcon,
-                        `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}?token=${encodeURIComponent(jwtToken)}','_blank','noopener')`)
-                    : iconBtn("No resume file", "opacity-30 cursor-not-allowed", fileIcon, "void(0)");
-                                const editBtn = iconBtn("Edit candidate details", "hover:text-indigo-300", editIcon,
-                    `openCandidateDetailsModal('${r.id}', event)`);
-                const skillsBtn = iconBtn("View & Edit Technical Skills", "hover:text-brand-300", tagIcon,
-                    `openCandidateSkillsModal('${r.id}', event)`);
-
-                const shortlistBtn = iconBtn(
-                    r.is_shortlisted ? "Remove from shortlist" : "Shortlist candidate",
-                    r.is_shortlisted ? "text-amber-400" : "hover:text-amber-300",
-                    starIcon(!!r.is_shortlisted),
-                    `toggleShortlist('${r.id}', event)`
-                );
-                const delBtn = iconBtn("Delete candidate", "hover:text-rose-300", trashIcon,
-                    `confirmDeleteCandidate('${r.id}', event)`);
-
-                const expYears = Number(r.experience_years || 0);
-                const expDisplay = expYears > 0 ? `${expYears.toFixed(1)} yr` : `0 yr`;
-                const roleLine = r.role
-                    ? `<div class="text-[10px] text-slate-400 truncate">${_detailsEscape(r.role)}</div>`
-                    : "";
-
-                return `
-                    <tr class="border-b border-white/5 hover:bg-black/30 transition-colors">
-                        <td class="px-4 py-3 align-middle">
-                            <div class="flex items-center gap-3 min-w-0">
-                                <div class="w-9 h-9 rounded-full ${avatarClass} border flex items-center justify-center text-[11px] font-bold shrink-0">
-                                    ${initials(displayName)}
-                                </div>
-                                <div class="min-w-0">
-                                    <div class="font-semibold text-white text-[12px] truncate" title="${_detailsEscape(displayName)}">${_detailsEscape(displayName)}</div>
-                                    ${roleLine}
-                                </div>
-                            </div>
-                        </td>
-                        <td class="px-4 py-3 align-middle">
-                            ${contactHtml}
-                        </td>
-                        <td class="px-4 py-3 align-middle text-right text-white font-semibold whitespace-nowrap">
-                            ${expDisplay}
-                        </td>
-                        <td class="px-4 py-3 align-middle">
-                            ${skillsHtml}
-                        </td>
-                        <td class="px-4 py-3 align-middle text-slate-300 text-[11px] whitespace-nowrap">
-                            ${_detailsEscape(dateAdded)}
-                        </td>
-                        <td class="px-4 py-3 align-middle text-right" onclick="event.stopPropagation()">
-                            <div class="inline-flex items-center gap-1 justify-end">
-                                ${pdfBtn}${editBtn}${skillsBtn}${shortlistBtn}${delBtn}
-                            </div>
-                        </td>
-                    </tr>`;
-            }).join("");
-
-            tbody.innerHTML = buf;
-
-            if (pagePrev) pagePrev.disabled = detailsPage <= 1;
-            if (pageNext) pageNext.disabled = detailsPage >= totalPages;
+            if (!candState.facetsLoaded) candLoadFacets();
+            candFetch();
         }
+
+        function candBuildParams() {
+            const p = new URLSearchParams();
+            if (candState.q) p.set('q', candState.q);
+            if (candState.role) p.set('primary_role', candState.role);
+            const f = candState.filters, map = {
+                name: 'name', company: 'company', role: 'primary_role', skills: 'skills',
+                minexp: 'min_experience', maxexp: 'max_experience', cursal: 'current_salary',
+                expsal: 'expected_salary', notice: 'notice_period', loc: 'current_location',
+                ploc: 'preferred_location', emp: 'employment_type', status: 'candidate_status',
+                score: 'min_score', qual: 'qualification', college: 'college_name',
+                source: 'candidate_source', shortlisted: 'shortlisted', from: 'added_after', to: 'added_before'
+            };
+            // A tab and a role filter shouldn't collide; the tab wins for primary_role.
+            for (const k in map) { if (f[k] && !(k === 'role' && candState.role)) p.set(map[k], f[k]); }
+            p.set('sort_by', candState.sortBy); p.set('sort_order', candState.sortOrder);
+            p.set('page', candState.page); p.set('page_size', candState.pageSize);
+            return p.toString();
+        }
+
+        async function candFetch() {
+            const tbody = document.getElementById('cand-tbody');
+            if (!tbody) return;
+            candRenderHead();
+            const seq = ++_candReqSeq;
+            tbody.innerHTML = `<tr><td colspan="${CAND_COLS.length}" class="px-4 py-14 text-center text-slate-400 text-xs"><span class="inline-flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Loading candidates…</span></td></tr>`;
+            try {
+                const res = await fetch(`${resumeApiUrl}/resumes/search?${candBuildParams()}`, { headers: { "Authorization": `Bearer ${jwtToken}` } });
+                const data = await res.json();
+                if (seq !== _candReqSeq) return;
+                candState.totalPages = data.total_pages || 1;
+                candRenderSummary(data.summary || {});
+                candRenderTable(data.rows || []);
+                candRenderPagination(data);
+                candRenderChips();
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="${CAND_COLS.length}" class="px-4 py-14 text-center text-red-500 text-xs">Failed to load candidates. Is the backend running?</td></tr>`;
+            }
+        }
+
+        async function candLoadFacets() {
+            candState.facetsLoaded = true;
+            try {
+                const res = await fetch(`${resumeApiUrl}/resumes/facets`, { headers: { "Authorization": `Bearer ${jwtToken}` } });
+                const data = await res.json();
+                candState.roles = data.roles || [];
+                candState.rolesTotal = data.total || 0;
+            } catch (e) { candState.roles = []; }
+            candRenderTabs();
+        }
+
+        function candRenderTabs() {
+            const el = document.getElementById('cand-tabs');
+            if (!el) return;
+            const all = `<button type="button" class="cand-tab ${candState.role === '' ? 'is-active' : ''}" onclick="candSetRole('')">All <span class="cand-tab-count">${candState.rolesTotal}</span></button>`;
+            const items = candState.roles.map(r =>
+                `<button type="button" class="cand-tab ${candState.role === r.role ? 'is-active' : ''}" onclick="candSetRole('${r.role.replace(/'/g, "\\'")}')">${_detailsEscape(r.role)} <span class="cand-tab-count">${r.count}</span></button>`
+            ).join('');
+            el.innerHTML = all + items;
+        }
+
+        function candSetRole(role) {
+            candState.role = role; candState.page = 1;
+            candRenderTabs(); candFetch();
+        }
+
+        function candRenderSummary(s) {
+            const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+            set('cand-stat-total', s.total ?? 0);
+            set('cand-stat-showing', s.showing ?? 0);
+            set('cand-stat-shortlisted', s.shortlisted ?? 0);
+            set('cand-stat-immediate', s.immediate_joiners ?? 0);
+            set('cand-stat-avgexp', (s.avg_experience ?? 0));
+        }
+
+        function candSortIndicator(key) {
+            if (candState.sortBy !== key) return '<span class="text-slate-300">↕</span>';
+            return candState.sortOrder === 'asc' ? '<span class="text-blue-600">↑</span>' : '<span class="text-blue-600">↓</span>';
+        }
+
+        function candRenderHead() {
+            const tr = document.getElementById('cand-thead');
+            if (!tr) return;
+            tr.innerHTML = CAND_COLS.map(c => {
+                const align = c.align === 'right' ? 'text-right' : 'text-left';
+                if (c.sortable) {
+                    return `<th class="px-3 py-3 ${align} font-bold cand-th-sort whitespace-nowrap" onclick="candSort('${c.key}')">${c.label} ${candSortIndicator(c.key)}</th>`;
+                }
+                return `<th class="px-3 py-3 ${align} font-bold whitespace-nowrap">${c.label}</th>`;
+            }).join('');
+        }
+
+        function candSort(key) {
+            if (candState.sortBy === key) candState.sortOrder = candState.sortOrder === 'asc' ? 'desc' : 'asc';
+            else { candState.sortBy = key; candState.sortOrder = 'asc'; }
+            candState.page = 1; candFetch();
+        }
+
+        function candStatusBadge(r) {
+            const status = (r.candidate_status || '').trim();
+            const notice = (r.notice_period || '').trim();
+            let label = status || notice || (r.is_shortlisted ? 'Shortlisted' : '');
+            if (!label) return '<span class="text-slate-300">—</span>';
+            const l = label.toLowerCase();
+            let tone = 'slate';
+            if (/immediate|asap|ready to join|0 day/.test(l)) tone = 'emerald';
+            else if (/shortlist/.test(l)) tone = 'amber';
+            else if (/select|offer/.test(l)) tone = 'blue';
+            else if (/reject/.test(l)) tone = 'red';
+            else if (/notice|serving|day/.test(l)) tone = 'indigo';
+            else if (/open to/.test(l)) tone = 'cyan';
+            const map = {
+                slate: 'bg-slate-100 text-slate-700 border-slate-200', emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                amber: 'bg-amber-50 text-amber-700 border-amber-200', blue: 'bg-blue-50 text-blue-700 border-blue-200',
+                red: 'bg-red-50 text-red-700 border-red-200', indigo: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+                cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200'
+            };
+            return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${map[tone]} whitespace-nowrap">${_detailsEscape(label)}</span>`;
+        }
+
+        function candInitials(name) {
+            const s = (name == null ? '' : String(name)).trim();
+            if (!s) return '?';
+            const parts = s.split(/\s+/).filter(Boolean);
+            return ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?';
+        }
+
+        function candCell(c, r) {
+            const dash = '<span class="text-slate-300">—</span>';
+            const exp = Number(r.experience_years || 0);
+            switch (c.key) {
+                case 'created_at':
+                    return `<td class="px-3 py-3 align-middle text-slate-600 whitespace-nowrap">${_detailsEscape(_detailsDate(r.created_at))}</td>`;
+                case 'name':
+                    return `<td class="px-3 py-3 align-middle"><div class="flex items-center gap-2.5 min-w-0"><div class="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold shrink-0">${candInitials(r.name)}</div><span class="font-semibold text-slate-900 truncate" title="${_detailsEscape(r.name)}">${_detailsEscape(r.name) || dash}</span></div></td>`;
+                case 'phone':
+                    return `<td class="px-3 py-3 align-middle text-slate-700 whitespace-nowrap">${r.phone ? _detailsEscape(r.phone) : dash}</td>`;
+                case 'email':
+                    return `<td class="px-3 py-3 align-middle text-slate-700"><span class="truncate inline-block max-w-[200px] align-bottom" title="${_detailsEscape(r.email)}">${r.email ? _detailsEscape(r.email) : dash}</span></td>`;
+                case 'company_name':
+                    return `<td class="px-3 py-3 align-middle text-slate-700">${r.company_name ? _detailsEscape(r.company_name) : dash}</td>`;
+                case 'current_location':
+                    return `<td class="px-3 py-3 align-middle text-slate-700">${r.current_location ? _detailsEscape(r.current_location) : dash}</td>`;
+                case 'experience':
+                    return `<td class="px-3 py-3 align-middle text-right font-semibold text-slate-900 whitespace-nowrap">${exp > 0 ? exp.toFixed(1) + ' yr' : '0 yr'}</td>`;
+                case 'current_salary':
+                    return `<td class="px-3 py-3 align-middle text-right text-slate-700 whitespace-nowrap">${r.current_salary ? _detailsEscape(r.current_salary) : dash}</td>`;
+                case 'expected_salary':
+                    return `<td class="px-3 py-3 align-middle text-right text-slate-700 whitespace-nowrap">${r.expected_salary ? _detailsEscape(r.expected_salary) : dash}</td>`;
+                case 'notice_period':
+                    return `<td class="px-3 py-3 align-middle text-slate-700 whitespace-nowrap">${r.notice_period ? _detailsEscape(r.notice_period) : dash}</td>`;
+                case 'primary_role':
+                    return `<td class="px-3 py-3 align-middle text-slate-700">${r.primary_role ? _detailsEscape(r.primary_role) : dash}</td>`;
+                case 'candidate_status':
+                    return `<td class="px-3 py-3 align-middle">${candStatusBadge(r)}</td>`;
+                case 'remarks': {
+                    const rem = (r.remarks || r.reason_job_change || '').trim();
+                    if (!rem) return `<td class="px-3 py-3 align-middle">${dash}</td>`;
+                    return `<td class="px-3 py-3 align-middle"><span class="line-clamp-2 max-w-[200px] text-slate-600 text-[11px] leading-snug" title="${_detailsEscape(rem)}">${_detailsEscape(rem)}</span></td>`;
+                }
+                case '__actions':
+                    return `<td class="px-3 py-3 align-middle text-right whitespace-nowrap" onclick="event.stopPropagation()">${candActions(r)}</td>`;
+                default:
+                    return '<td class="px-3 py-3"></td>';
+            }
+        }
+
+        function candActions(r) {
+            const btn = (title, cls, svg, onclick) =>
+                `<button type="button" onclick="${onclick}" title="${_detailsEscape(title)}" class="inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-400 ${cls} hover:bg-slate-100 transition shrink-0">${svg}</button>`;
+            const eye = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+            const dl = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+            const edit = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+            const star = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${r.is_shortlisted ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+            const trash = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+            const view = r.source_file
+                ? btn('View resume', 'hover:text-blue-600', eye, `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}?token=${encodeURIComponent(jwtToken)}','_blank','noopener')`)
+                : btn('No resume file', 'opacity-30 cursor-not-allowed', eye, 'void(0)');
+            const download = r.source_file
+                ? btn('Download resume', 'hover:text-emerald-600', dl, `candDownloadResume('${encodeURIComponent(r.source_file)}', '${_detailsEscape(r.name).replace(/'/g, "\\'")}')`)
+                : '';
+            const editB = btn('Edit candidate', 'hover:text-indigo-600', edit, `openCandidateDetailsModal('${r.id}', event)`);
+            const starB = btn(r.is_shortlisted ? 'Remove from shortlist' : 'Shortlist', r.is_shortlisted ? 'text-amber-500' : 'hover:text-amber-500', star, `toggleShortlist('${r.id}', event)`);
+            const delB = btn('Delete candidate', 'hover:text-red-500', trash, `confirmDeleteCandidate('${r.id}', event)`);
+            return `<div class="inline-flex items-center gap-0.5 justify-end">${view}${download}${editB}${starB}${delB}</div>`;
+        }
+
+        function candDownloadResume(sourceFile, name) {
+            const a = document.createElement('a');
+            a.href = `${resumeApiUrl}/files/${sourceFile}?token=${encodeURIComponent(jwtToken)}`;
+            a.download = (name || 'resume');
+            document.body.appendChild(a); a.click(); a.remove();
+        }
+
+        function candRenderTable(rows) {
+            const tbody = document.getElementById('cand-tbody');
+            if (!tbody) return;
+            if (!rows.length) {
+                tbody.innerHTML = `<tr><td colspan="${CAND_COLS.length}" class="px-4 py-16 text-center">
+                    <div class="flex flex-col items-center gap-3">
+                        <div class="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+                        <div class="text-slate-700 font-bold text-sm">No candidates found</div>
+                        <div class="text-slate-400 text-xs">Try adjusting your search or filters.</div>
+                        <button type="button" onclick="candReset()" class="hrms-btn hrms-btn-primary hrms-btn-sm mt-1">Reset Filters</button>
+                    </div></td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map(r =>
+                `<tr class="cand-row border-b border-slate-100 transition-colors">${CAND_COLS.map(c => candCell(c, r)).join('')}</tr>`
+            ).join('');
+        }
+
+        function candRenderPagination(data) {
+            const info = document.getElementById('cand-page-info');
+            const totalEl = document.getElementById('cand-page-total');
+            const pages = data.total_pages || 1, page = data.page || 1;
+            if (info) info.textContent = `Page ${page} of ${pages}`;
+            if (totalEl) totalEl.textContent = `${data.filtered ?? 0} candidate${(data.filtered === 1) ? '' : 's'}`;
+            const first = document.getElementById('cand-first'), prev = document.getElementById('cand-prev');
+            const next = document.getElementById('cand-next'), last = document.getElementById('cand-last');
+            if (first) first.disabled = page <= 1;
+            if (prev) prev.disabled = page <= 1;
+            if (next) next.disabled = page >= pages;
+            if (last) last.disabled = page >= pages;
+        }
+
+        function candFirst() { if (candState.page > 1) { candState.page = 1; candFetch(); } }
+        function candPrev() { if (candState.page > 1) { candState.page--; candFetch(); } }
+        function candNext() { if (candState.page < candState.totalPages) { candState.page++; candFetch(); } }
+        function candLast() { if (candState.page < candState.totalPages) { candState.page = candState.totalPages; candFetch(); } }
+        function candSetPageSize(sel) { candState.pageSize = parseInt(sel.value, 10) || 20; candState.page = 1; candFetch(); }
+
+        function candOnSearch() {
+            const v = (document.getElementById('cand-search')?.value || '').trim();
+            clearTimeout(_candSearchTimer);
+            _candSearchTimer = setTimeout(() => { candState.q = v; candState.page = 1; candFetch(); }, 300);
+        }
+
+        function candToggleFilters() {
+            const p = document.getElementById('cand-filters');
+            if (p) p.classList.toggle('hidden');
+        }
+
+        function candApply(e) {
+            if (e) e.preventDefault();
+            const val = id => (document.getElementById(id)?.value || '').trim();
+            candState.filters = {
+                name: val('cf-name'), company: val('cf-company'), role: val('cf-role'), skills: val('cf-skills'),
+                minexp: val('cf-minexp'), maxexp: val('cf-maxexp'), cursal: val('cf-cursal'), expsal: val('cf-expsal'),
+                notice: val('cf-notice'), loc: val('cf-loc'), ploc: val('cf-ploc'), emp: val('cf-emp'),
+                status: val('cf-status'), score: val('cf-score'), qual: val('cf-qual'), college: val('cf-college'),
+                source: val('cf-source'), shortlisted: val('cf-shortlisted'), from: val('cf-from'), to: val('cf-to')
+            };
+            candState.page = 1; candFetch();
+        }
+
+        function candReset() {
+            ['cf-name', 'cf-company', 'cf-role', 'cf-skills', 'cf-minexp', 'cf-maxexp', 'cf-cursal', 'cf-expsal',
+                'cf-notice', 'cf-loc', 'cf-ploc', 'cf-emp', 'cf-status', 'cf-score', 'cf-qual', 'cf-college',
+                'cf-source', 'cf-shortlisted', 'cf-from', 'cf-to'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+            const s = document.getElementById('cand-search'); if (s) s.value = '';
+            candState.filters = {}; candState.q = ''; candState.role = ''; candState.page = 1;
+            candRenderTabs(); candFetch();
+        }
+
+        const _CAND_CHIP_LABELS = {
+            q: 'Search', role: 'Role', name: 'Name', company: 'Company', skills: 'Skills',
+            minexp: 'Min Exp', maxexp: 'Max Exp', cursal: 'Cur. Salary', expsal: 'Exp. Salary',
+            notice: 'Notice', loc: 'Location', ploc: 'Pref. Location', emp: 'Employment',
+            status: 'Status', score: 'Min Score', qual: 'Qualification', college: 'College',
+            source: 'Source', shortlisted: 'Shortlisted', from: 'From', to: 'To'
+        };
+
+        function candRenderChips() {
+            const el = document.getElementById('cand-chips');
+            if (!el) return;
+            const chips = [];
+            if (candState.q) chips.push(['q', candState.q]);
+            if (candState.role) chips.push(['role', candState.role]);
+            for (const k in candState.filters) {
+                const v = candState.filters[k];
+                if (v) chips.push([k, k === 'shortlisted' ? 'Yes' : v]);
+            }
+            if (!chips.length) { el.className = 'hidden'; el.innerHTML = ''; return; }
+            el.className = 'flex flex-wrap gap-1.5 mt-3';
+            el.innerHTML = chips.map(([k, v]) =>
+                `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-semibold">${_detailsEscape(_CAND_CHIP_LABELS[k] || k)}: ${_detailsEscape(String(v))}<button type="button" onclick="candRemoveChip('${k}')" class="text-blue-400 hover:text-blue-700 leading-none">×</button></span>`
+            ).join('');
+        }
+
+        function candRemoveChip(k) {
+            if (k === 'q') { candState.q = ''; const s = document.getElementById('cand-search'); if (s) s.value = ''; }
+            else if (k === 'role') { candState.role = ''; candRenderTabs(); }
+            else {
+                delete candState.filters[k];
+                const idMap = {
+                    name: 'cf-name', company: 'cf-company', skills: 'cf-skills', minexp: 'cf-minexp', maxexp: 'cf-maxexp',
+                    cursal: 'cf-cursal', expsal: 'cf-expsal', notice: 'cf-notice', loc: 'cf-loc', ploc: 'cf-ploc',
+                    emp: 'cf-emp', status: 'cf-status', score: 'cf-score', qual: 'cf-qual', college: 'cf-college',
+                    source: 'cf-source', shortlisted: 'cf-shortlisted', from: 'cf-from', to: 'cf-to', role: 'cf-role'
+                };
+                const el = document.getElementById(idMap[k]); if (el) el.value = '';
+            }
+            candState.page = 1; candFetch();
+        }
+
 
         function openCandidateDetailsFromTable(id, event) {
             if (event) event.stopPropagation();
@@ -5418,18 +6115,18 @@
                 }
                 const skillsText = displaySkills.slice(0, 2).join(", ");
                 const subtitle = skillsText ? skillsText : (isEmployee ? "Employee" : "Candidate");
+                const initials = (name || "?").split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
 
                 return `
-                <label class="compare-card flex flex-col justify-between p-2.5 rounded-lg border cursor-pointer transition-all text-xs min-h-[64px] ${isSelected ? 'bg-brand-500/20 border-brand-400/60 text-white' : 'bg-white/[0.02] border-white/10 text-slate-300 hover:border-white/30 hover:bg-white/5'}">
-                    <div class="flex items-start gap-2">
-                        <input type="checkbox" data-id="${id}" data-name="${name}"
-                            onchange="toggleCompareCard('${id}', this)"
-                            ${isSelected ? 'checked' : ''}
-                            class="rounded border-white/20 text-brand-500 focus:ring-0 w-3.5 h-3.5 mt-0.5 shrink-0">
-                        <div class="min-w-0 flex-1">
-                            <span class="font-semibold block truncate" title="${name}">${name}</span>
-                            <span class="text-[9px] text-slate-500 block truncate mt-0.5">${subtitle}</span>
-                        </div>
+                <label class="compare-card flex items-center gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all min-h-[58px] ${isSelected ? 'bg-blue-50 border-blue-400 ring-1 ring-blue-400/50' : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-blue-50/40'}">
+                    <input type="checkbox" data-id="${id}" data-name="${name}"
+                        onchange="toggleCompareCard('${id}', this)"
+                        ${isSelected ? 'checked' : ''}
+                        class="w-4 h-4 shrink-0" style="accent-color:#2563eb;">
+                    <div class="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold shrink-0">${initials}</div>
+                    <div class="min-w-0 flex-1">
+                        <span class="font-semibold text-slate-900 text-xs block truncate" title="${name}">${name}</span>
+                        <span class="text-[10px] text-slate-500 block truncate">${subtitle}</span>
                     </div>
                 </label>`;
             }).join("");
@@ -5548,31 +6245,55 @@
                 results.forEach(r => {
                     const primary = getAllSkills(r);
                     const pills = primary.length > 0
-                        ? primary.slice(0, 3).map(s =>
-                            `<span class="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 text-[10px]">${s}</span>`
+                        ? primary.slice(0, 6).map(s =>
+                            `<span class="px-2 py-0.5 rounded-md bg-blue-50 border border-blue-100 text-blue-700 text-[10px] font-semibold">${s}</span>`
                         ).join(" ")
-                        : '<span class="text-slate-500 italic text-[10px]">—</span>';
+                        : '<span class="text-slate-400 italic text-[10px]">No skills parsed</span>';
+
+                    // Fit score drives an accent: strong (>=7) green, fair (>=4) blue, weak amber.
+                    const fs = Number(r.fit_score);
+                    const hasScore = !isNaN(fs);
+                    const tone = !hasScore ? 'slate' : (fs >= 7 ? 'emerald' : (fs >= 4 ? 'blue' : 'amber'));
+                    const toneMap = {
+                        emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+                        blue: 'bg-blue-50 border-blue-200 text-blue-700',
+                        amber: 'bg-amber-50 border-amber-200 text-amber-700',
+                        slate: 'bg-slate-100 border-slate-200 text-slate-600',
+                    };
+                    const pct = hasScore ? Math.max(0, Math.min(100, fs * 10)) : 0;
+                    const barMap = { emerald: '#10b981', blue: '#2563eb', amber: '#f59e0b', slate: '#94a3b8' };
 
                     resultsBox.innerHTML += `
-                        <div class="flex-1 bg-white/[0.02] border border-white/5 hover:border-white/15 p-5 rounded-2xl flex flex-col gap-4 min-w-0 transition-all shadow-lg">
-                            <div class="font-outfit font-extrabold text-sm border-b border-white/5 pb-2 text-white truncate">${r.name}</div>
-                            
-                            <!-- Fit Score -->
-                            <div class="p-4 bg-brand-900/40 rounded-xl text-center border border-brand-300/10">
-                                <span class="text-[9px] text-slate-400 block tracking-wider uppercase font-semibold">Job Fit Match</span>
-                                <span class="text-2xl font-black text-brand-300 mt-1 block">${r.fit_score ?? 'N/A'}/10</span>
+                        <div class="bg-white border border-slate-200 hover:border-blue-400 hover:shadow-lg p-5 rounded-2xl flex flex-col gap-4 min-w-0 transition-all shadow-sm">
+                            <!-- Header: name + fit score badge -->
+                            <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                                <div class="min-w-0">
+                                    <div class="font-outfit font-extrabold text-sm text-slate-900 truncate" title="${r.name}">${r.name}</div>
+                                    <div class="text-[10px] text-slate-500 mt-0.5">${parseFloat(r.experience_years || 0).toFixed(1)} yrs experience</div>
+                                </div>
+                                <div class="flex-shrink-0 flex flex-col items-center px-3 py-1.5 rounded-xl border ${toneMap[tone]}">
+                                    <span class="text-lg font-black leading-none">${hasScore ? fs : 'N/A'}<span class="text-[10px] font-bold opacity-70">/10</span></span>
+                                    <span class="text-[8px] font-bold uppercase tracking-wider opacity-80 mt-0.5">Job Fit</span>
+                                </div>
                             </div>
 
-                            <div class="text-[10px] text-slate-400 space-y-1">
-                                <div>CORE EXP: <strong class="text-white">${parseFloat(r.experience_years || 0).toFixed(1)} Yr</strong></div>
-                                <div>TECHNICAL KEYS:</div>
-                                <div class="flex flex-wrap gap-1 mt-1">${pills}</div>
+                            <!-- Fit bar -->
+                            <div>
+                                <div class="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                                    <div class="h-full rounded-full transition-all" style="width:${pct}%; background:${barMap[tone]};"></div>
+                                </div>
+                            </div>
+
+                            <!-- Skills -->
+                            <div>
+                                <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Key Skills</span>
+                                <div class="flex flex-wrap gap-1.5 mt-1.5">${pills}</div>
                             </div>
 
                             ${r.fit_summary ? `
-                                <div class="flex-1 flex flex-col min-h-0 mt-2">
-                                    <span class="text-[9px] text-slate-400 block uppercase font-bold tracking-wider mb-1">AI Recruiter Feedback</span>
-                                    <p class="text-[10px] text-slate-300 leading-relaxed bg-black/25 p-3 rounded-lg border border-white/5 overflow-y-auto max-h-[140px] flex-1">${r.fit_summary}</p>
+                                <div class="mt-1">
+                                    <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">AI Recruiter Feedback</span>
+                                    <p class="text-[11px] text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 p-3 rounded-lg mt-1.5 overflow-y-auto max-h-[150px]">${r.fit_summary}</p>
                                 </div>
                             ` : ""}
                         </div>
@@ -6732,8 +7453,27 @@
             btn.appendChild(label);
             btn.insertAdjacentHTML('beforeend', DARK_SELECT_CHEVRON);
 
+            // Portal menu — appended to body so overflow:hidden never clips it.
             const menu = document.createElement('div');
-            menu.className = 'dark-select-menu hidden absolute left-0 right-0 top-full mt-1 z-[250]';
+            menu.className = 'dark-select-menu hidden';
+            menu.style.cssText = 'position:fixed;z-index:10000;';
+            document.body.appendChild(menu);
+
+            function positionMenu() {
+                const rect = btn.getBoundingClientRect();
+                const estimatedH = Math.min(260, Math.max(80, sel.options.length * 38));
+                const spaceBelow = window.innerHeight - rect.bottom;
+                const openUp = spaceBelow < estimatedH + 8 && rect.top > spaceBelow;
+                menu.style.left = rect.left + 'px';
+                menu.style.width = rect.width + 'px';
+                if (openUp) {
+                    menu.style.top = '';
+                    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+                } else {
+                    menu.style.bottom = '';
+                    menu.style.top = (rect.bottom + 4) + 'px';
+                }
+            }
 
             function rebuildMenu() {
                 menu.innerHTML = '';
@@ -6760,17 +7500,40 @@
 
             btn.onclick = (e) => {
                 e.stopPropagation();
+                const isHidden = menu.classList.contains('hidden');
+                // Close all other open menus
                 document.querySelectorAll('.dark-select-menu').forEach((m) => {
                     if (m !== menu) m.classList.add('hidden');
                 });
-                menu.classList.toggle('hidden');
+                if (isHidden) {
+                    menu.classList.remove('hidden');
+                    positionMenu();
+                } else {
+                    menu.classList.add('hidden');
+                }
             };
+
+            // Reposition on scroll/resize
+            const reposition = () => { if (!menu.classList.contains('hidden')) positionMenu(); };
+            window.addEventListener('scroll', reposition, true);
+            window.addEventListener('resize', reposition);
+
+            // Clean up portal menu if wrap is removed from DOM
+            const observer = new MutationObserver(() => {
+                if (!document.body.contains(wrap)) {
+                    menu.remove();
+                    observer.disconnect();
+                    window.removeEventListener('scroll', reposition, true);
+                    window.removeEventListener('resize', reposition);
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
 
             sel._rebuildDarkMenu = rebuildMenu;
             rebuildMenu();
 
             wrap.appendChild(btn);
-            wrap.appendChild(menu);
+            // menu is already in document.body (portal), NOT in wrap
         }
 
         function initDarkSelects(root = document) {
@@ -6812,7 +7575,7 @@
         checkServerHealth();
         initTopbarUser();
         if (!jwtToken) {
-            document.getElementById("standalone-login-modal").classList.remove("hidden");
+            requireLogin();
         } else {
             fetchResumes();
             // Render initial empty dashboard immediately so KPIs aren't blank
@@ -6823,8 +7586,8 @@
 
     <!-- Beautiful Standalone Login Modal -->
     <div id="standalone-login-modal"
-        class="fixed inset-0 bg-[#0b0f19]/90 backdrop-blur-md flex items-center justify-center z-50 hidden">
-        <div class="bg-[#112450]/90 border border-white/10 rounded-2xl p-8 max-w-md w-full shadow-2xl relative">
+        class="fixed inset-0 bg-slate-900/40 backdrop-blur-md flex items-center justify-center z-50 hidden">
+        <div class="bg-white border border-[#e2e8f0] rounded-2xl p-8 max-w-md w-full shadow-2xl relative">
             <div class="text-center mb-6">
                 <div
                     class="inline-flex h-12 w-12 rounded-xl bg-brand-900 border border-brand-300/20 items-center justify-center overflow-hidden shadow-lg mb-3 p-0.5">

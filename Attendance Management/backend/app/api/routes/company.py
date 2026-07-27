@@ -66,15 +66,29 @@ def list_holidays(db: Session = Depends(get_db)):
 
 @router.get("/stats", response_model=CompanyStatsResponse)
 def get_company_stats(db: Session = Depends(get_db)):
+    from sqlalchemy import or_, func
     from app.models import Employee, Department, AttendanceRecord, LeaveRequest
     from app.models.employee import EmploymentStatus
     from datetime import date as dt_date
     today = dt_date.today()
 
     active_status = EmploymentStatus.ACTIVE.value
-    active_emp_ids_subq = db.query(Employee.id).filter(Employee.employment_status == active_status).subquery()
+    # Non-Employee staff (Housekeeping, Security, …) have their own attendance
+    # section and must never be counted in company-wide employee stats.
+    employees_only = or_(
+        Employee.staff_type.is_(None), func.lower(Employee.staff_type) == "employee"
+    )
+    active_emp_ids_subq = (
+        db.query(Employee.id)
+        .filter(Employee.employment_status == active_status, employees_only)
+        .subquery()
+    )
 
-    total_employees = db.query(Employee).filter(Employee.employment_status == active_status).count()
+    total_employees = (
+        db.query(Employee)
+        .filter(Employee.employment_status == active_status, employees_only)
+        .count()
+    )
     total_departments = db.query(Department).count()
 
     # Today's attendance (active employees only)

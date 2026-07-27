@@ -85,15 +85,15 @@ def _mark_attendance(
             )
             return None, "unknown"
 
-        # Non-employee staff (housekeeping, security, …) are recognised on camera
-        # but must NOT be marked for attendance.
+        # Non-employee staff (housekeeping, security, …) DO get attendance
+        # recorded, but they are reported separately: every employee-facing
+        # query filters them out via staff_type (see attendance routes).
         staff_type = (getattr(employee, "staff_type", None) or "Employee").strip().lower()
         if staff_type != "employee":
             logger.info(
-                "STEP-7 monitor_only employee=%s staff_type=%s -> attendance skipped",
+                "STEP-7 non_employee_staff employee=%s staff_type=%s -> recorded in staff attendance",
                 employee.full_name, staff_type,
             )
-            return None, "monitor_only"
 
         logger.info(
             "STEP-8 business_logic_start employee=%s employee_id=%s determining_event_type",
