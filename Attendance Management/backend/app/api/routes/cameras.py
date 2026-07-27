@@ -517,7 +517,7 @@ class DVRConnectResponse(BaseModel):
 
 
 @router.post("/dvr/connect")
-def dvr_connect(payload: DVRConnectRequest):
+def dvr_connect(payload: DVRConnectRequest, current_user=Depends(get_current_user)):
     """Connect to DVR and discover cameras."""
     dvr_manager = get_dvr_manager()
     
@@ -555,7 +555,7 @@ def dvr_connect(payload: DVRConnectRequest):
 
 
 @router.post("/dvr/disconnect")
-def dvr_disconnect():
+def dvr_disconnect(current_user=Depends(get_current_user)):
     """Disconnect from DVR and stop all streams."""
     dvr_manager = get_dvr_manager()
     dvr_manager.disconnect()
@@ -563,7 +563,7 @@ def dvr_disconnect():
 
 
 @router.get("/dvr/status")
-def dvr_status():
+def dvr_status(current_user=Depends(get_current_user)):
     """Get DVR connection status and all camera statuses."""
     dvr_manager = get_dvr_manager()
     
@@ -595,7 +595,7 @@ def dvr_status():
 
 
 @router.post("/dvr/cameras/{channel_id}/start")
-def dvr_start_camera(channel_id: int):
+def dvr_start_camera(channel_id: int, current_user=Depends(get_current_user)):
     """Start live stream for a specific camera."""
     dvr_manager = get_dvr_manager()
     
@@ -611,7 +611,7 @@ def dvr_start_camera(channel_id: int):
 
 
 @router.post("/dvr/cameras/{channel_id}/stop")
-def dvr_stop_camera(channel_id: int):
+def dvr_stop_camera(channel_id: int, current_user=Depends(get_current_user)):
     """Stop live stream for a specific camera."""
     dvr_manager = get_dvr_manager()
     
@@ -627,7 +627,7 @@ def dvr_stop_camera(channel_id: int):
 
 
 @router.post("/dvr/cameras/{channel_id}/recognition")
-def dvr_set_recognition(channel_id: int, enabled: bool = Query(...)):
+def dvr_set_recognition(channel_id: int, enabled: bool = Query(...), current_user=Depends(get_current_user)):
     """Enable or disable recognition for a camera."""
     dvr_manager = get_dvr_manager()
     
@@ -643,7 +643,7 @@ def dvr_set_recognition(channel_id: int, enabled: bool = Query(...)):
 
 
 @router.post("/dvr/cameras/start-all")
-def dvr_start_all():
+def dvr_start_all(current_user=Depends(get_current_user)):
     """Start streams for all online cameras."""
     dvr_manager = get_dvr_manager()
     
@@ -655,7 +655,7 @@ def dvr_start_all():
 
 
 @router.post("/dvr/cameras/stop-all")
-def dvr_stop_all():
+def dvr_stop_all(current_user=Depends(get_current_user)):
     """Stop all camera streams."""
     dvr_manager = get_dvr_manager()
     

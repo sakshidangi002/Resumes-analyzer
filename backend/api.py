@@ -312,28 +312,62 @@ def _normalize_uploaded_filename(filename: str) -> str:
     return os.path.basename(name)
 
 
-def _resolve_resume_file_path(filename: str) -> Optional[str]:
+def _is_inside_upload_dir(path: str) -> bool:
+    """True only if `path` really sits under one of the upload roots.
+
+    realpath() first so that symlinks and ..\\ segments are resolved before the
+    comparison -- a prefix test on the raw string is bypassable.
+    """
+    try:
+        real = os.path.realpath(path)
+    except Exception:
+        return False
+    for upload_dir in _candidate_upload_dirs():
+        try:
+            root = os.path.realpath(upload_dir)
+        except Exception:
+            continue
+        if os.path.commonpath([real, root]) == root:
+            return True
+    return False
+
+
+def _resolve_resume_file_path(filename: str, trusted: bool = False) -> Optional[str]:
     """
     Resolve a stored resume filename across current and legacy upload roots.
+
+    `trusted=True` means the value came from our own DB row (resume.source_file),
+    where legacy records may hold a full absolute path. `trusted=False` is for
+    anything derived from a request URL: there we use the basename only and
+    refuse to return a path outside the upload roots.
+
+    This previously tried the caller's raw string first and returned ANY absolute
+    path that existed, so `GET /files/C:\\...\\.env` was served verbatim.
     """
     raw = (filename or "").strip()
     if not raw:
         return None
 
     normalized = _normalize_uploaded_filename(raw)
-    search_names = []
-    for item in (raw, normalized):
-        if item and item not in search_names:
-            search_names.append(item)
+    if not normalized:
+        return None
 
-    for candidate in search_names:
-        if os.path.isabs(candidate) and os.path.exists(candidate):
-            return candidate
+    # Untrusted input never keeps directory components.
+    search_names = [normalized] if not trusted else []
+    if trusted:
+        for item in (raw, normalized):
+            if item and item not in search_names:
+                search_names.append(item)
+
+    if trusted:
+        for candidate in search_names:
+            if os.path.isabs(candidate) and os.path.exists(candidate):
+                return candidate
 
     for upload_dir in _candidate_upload_dirs():
         for candidate in search_names:
             direct = os.path.join(upload_dir, candidate)
-            if os.path.exists(direct):
+            if os.path.exists(direct) and _is_inside_upload_dir(direct):
                 return direct
 
     for upload_dir in _candidate_upload_dirs():
@@ -643,7 +677,12 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # MUST stay False while allow_origins is "*". The pair
+    # allow_origins=["*"] + allow_credentials=True lets any website a logged-in
+    # HR user visits make credentialed cross-origin calls to this API. Auth here
+    # is a Bearer header (no cookies), so disabling credentials costs nothing --
+    # this matches the HRMS app's CORS config.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1358,34 +1397,28 @@ async def upload_resume(
             else:
                 resume_text = _extract_text_from_bytes(file_bytes, ext, BASE_DIR)
             
-            # STAGE 1: PDF TEXT EXTRACTION DEBUG LOGS
-            logger.info(f"=== STAGE 1: PDF TEXT EXTRACTION DEBUG ===")
-            logger.info(f"File: {file.filename}")
-            logger.info(f"Extension: {ext}")
-            logger.info(f"Raw extracted text length: {len(resume_text)} characters")
-            logger.info(f"Raw extracted text (first 1000 chars):\n{resume_text[:100000]}")
-            
-            # Check for sections
-            text_lower = resume_text.lower()
-            has_skills = any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"])
-            has_experience = any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"])
-            has_education = any(kw in text_lower for kw in ["education", "academic", "qualification"])
-            has_projects = any(kw in text_lower for kw in ["projects", "project experience"])
-            
-            logger.info(f"Section detection - Skills: {has_skills}, Experience: {has_experience}, Education: {has_education}, Projects: {has_projects}")
-            
-            # Check for broken words (PDF extraction artifacts)
-            broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
-            if broken_words:
-                logger.warning(f"Potential broken words detected: {broken_words[:10]}")
-            
-            # Check for spacing artifacts
-            spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
-            if spaced_words:
-                logger.warning(f"Potential spacing artifacts: {spaced_words[:5]}")
-            
-            logger.info(f"=== END STAGE 1 ===")
-            
+            # STAGE 1 diagnostics. Gated behind DEBUG because this block used to
+            # run at INFO on every upload and wrote up to 100 KB of the
+            # candidate's resume -- their name, phone, address -- straight into
+            # the log file. That is a PII leak, and the f-string meant the cost
+            # was paid even when the log level would have discarded it.
+            if logger.isEnabledFor(logging.DEBUG):
+                text_lower = resume_text.lower()
+                logger.debug(
+                    "STAGE 1 %s ext=%s len=%d skills=%s experience=%s education=%s projects=%s",
+                    file.filename, ext, len(resume_text),
+                    any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"]),
+                    any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"]),
+                    any(kw in text_lower for kw in ["education", "academic", "qualification"]),
+                    any(kw in text_lower for kw in ["projects", "project experience"]),
+                )
+                broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
+                if broken_words:
+                    logger.debug("Potential broken words detected: %s", broken_words[:10])
+                spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
+                if spaced_words:
+                    logger.debug("Potential spacing artifacts: %s", spaced_words[:5])
+
             logger.info("Text extracted from %s: %d chars", file.filename, len(resume_text))
             if not (resume_text or resume_text.strip()):
                 results[i] = {"status": "error", "file": file.filename, "message": "Text extraction produced no content."}
@@ -2360,7 +2393,7 @@ def _rebuild_resume_from_source(resume: ResumeDB) -> dict:
     Re-run extraction against the stored source file and update the row in place.
     Returns a small status payload for batch repair operations.
     """
-    file_path = _resolve_resume_file_path(resume.source_file or "")
+    file_path = _resolve_resume_file_path(resume.source_file or "", trusted=True)
     if not file_path:
         return {"updated": False, "reason": "source_file_missing"}
 
@@ -2680,7 +2713,7 @@ def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
 async def get_resume(resume_id: str, db: Session = Depends(get_db)):
     resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
     if resume and resume.source_file:
-        file_path = _resolve_resume_file_path(resume.source_file)
+        file_path = _resolve_resume_file_path(resume.source_file, trusted=True)
         if file_path and os.path.exists(file_path):
             return FileResponse(
                 file_path,
@@ -3447,7 +3480,54 @@ def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt
 
-SECRET_KEY = "abc2025"
+# Must be the SAME secret the HRMS app signs with, because this API is mounted
+# inside it and validates the tokens it issues. Read from the environment --
+# this used to be the literal "abc2025", a 7-character key committed to git,
+# which let anyone forge an Admin token for BOTH apps.
+def _resolve_shared_secret_key() -> str:
+    """Find the JWT secret the HRMS app signs with.
+
+    Checked in order, because load_dotenv() here may have picked up the
+    repo-root .env while the authoritative value lives in the HRMS backend's
+    own .env:
+      1. the process environment
+      2. the HRMS settings object, if it is importable (unified deployment)
+      3. the HRMS backend .env file, read directly
+    """
+    key = os.getenv("SECRET_KEY", "").strip()
+    if key:
+        return key
+
+    try:
+        from app.core.config import get_settings as _hrms_settings  # type: ignore
+        key = (_hrms_settings().secret_key or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    hrms_env = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "Attendance Management", "backend", ".env",
+    )
+    try:
+        with open(hrms_env, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("SECRET_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "SECRET_KEY is not set. The Resume Analyzer validates the JWTs the HRMS "
+        "app issues, so it must use the same secret. Set SECRET_KEY in the "
+        'environment or in "Attendance Management/backend/.env" (generate one '
+        'with: python -c "import secrets; print(secrets.token_urlsafe(64))").'
+    )
+
+
+SECRET_KEY = _resolve_shared_secret_key()
 ALGORITHM = "HS256"
 
 security_bearer = HTTPBearer(auto_error=False)

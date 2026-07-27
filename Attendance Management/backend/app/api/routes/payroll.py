@@ -1,5 +1,6 @@
 """Payroll periods, salary structure, run payroll, payslips."""
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, SalaryStructure, PayrollPeriod, Payslip, Employee, SalaryAdvance
@@ -97,9 +98,34 @@ def delete_period(
     period = db.query(PayrollPeriod).filter(PayrollPeriod.id == period_id).first()
     if not period:
         raise HTTPException(status_code=404, detail="Period not found")
+
+    # A LOCKED period has already been paid out. Deleting it destroys every
+    # payslip for that month with no audit trail and no soft-delete, so refuse.
+    if str(getattr(period, "status", "") or "").upper() == "LOCKED":
+        raise HTTPException(
+            status_code=409,
+            detail="This payroll period is locked and cannot be deleted. "
+                   "Unlock it first if you really need to remove it.",
+        )
+
     # Cascade delete is enabled in the model, so deleting the period will delete all its payslips.
-    db.delete(period)
-    db.commit()
+    # That cascade is ORM-level only; anything else still referencing these
+    # payslips (e.g. salary advance repayments) raises an FK error. Roll back so
+    # the payslips aren't left destroyed by a half-applied delete, and report
+    # why instead of surfacing a bare 500.
+    try:
+        db.delete(period)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This period still has records linked to it (for example salary "
+                   "advance repayments). Remove those first, then delete the period.",
+        )
+    except Exception:
+        db.rollback()
+        raise
     return {"message": "Deleted"}
 
 

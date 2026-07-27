@@ -3676,10 +3676,42 @@
             localStorage.setItem("token", jwtToken);
         }
 
+        // Are we mounted inside the HRMS app (served at /resume/) or running
+        // standalone? Under HRMS there must be exactly ONE login — the HRMS
+        // one. The server already enforces this: an unauthorised /resume/
+        // request is 302'd to the HRMS login and /resume-api/* returns 403,
+        // so a second login form here is redundant and confusing. Standalone
+        // deployments keep their own login modal as a fallback.
+        const UNDER_HRMS = window.location.pathname.startsWith("/resume");
+
+        // Single place that decides what "not authenticated" looks like.
+        function requireLogin() {
+            if (UNDER_HRMS) {
+                // Hand off to the HRMS login; it owns the session.
+                window.location.href = "/";
+                return;
+            }
+            document.getElementById("standalone-login-modal").classList.remove("hidden");
+        }
+
         // Intercept all native fetch calls to automatically inject Authorization headers
         const originalFetch = window.fetch;
+        // True for any same-origin API call we own, whether written as an
+        // absolute URL ("http://host/resume-api/x") or a relative one
+        // ("/resume-api/x", "/api/x"). The old check was
+        // `url.includes(resumeApiUrl)`, which silently missed every relative
+        // path — those requests went out with no Authorization header, came
+        // back 401/403, and popped the login box on a perfectly valid session.
+        function needsAuthHeader(url) {
+            if (typeof url !== "string") return false;
+            if (url.includes(resumeApiUrl)) return true;
+            if (url.startsWith("/resume-api") || url.startsWith("/api/")) return true;
+            const origin = window.location.origin;
+            return url.startsWith(origin + "/resume-api") || url.startsWith(origin + "/api/");
+        }
+
         window.fetch = async function (url, options = {}) {
-            if (typeof url === "string" && url.includes(resumeApiUrl)) {
+            if (needsAuthHeader(url)) {
                 if (!options.headers) {
                     options.headers = {};
                 }
@@ -3702,7 +3734,7 @@
                 if (typeof url === "string" && url.endsWith("/health")) {
                     return response;
                 }
-                document.getElementById("standalone-login-modal").classList.remove("hidden");
+                requireLogin();
                 throw new Error("Unauthorized");
             }
             return response;
@@ -7543,7 +7575,7 @@
         checkServerHealth();
         initTopbarUser();
         if (!jwtToken) {
-            document.getElementById("standalone-login-modal").classList.remove("hidden");
+            requireLogin();
         } else {
             fetchResumes();
             // Render initial empty dashboard immediately so KPIs aren't blank

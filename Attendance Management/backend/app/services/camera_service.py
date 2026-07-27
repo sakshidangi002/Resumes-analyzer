@@ -1029,6 +1029,17 @@ class _RecognitionThread(threading.Thread):
             if self._stop_evt.is_set():
                 break
 
+            # Analysis paused → keep streaming video but skip the expensive AI.
+            #
+            # Person detection costs ~2.3s of CPU per frame on this hardware, and
+            # several cameras analysing at once starve a 4-core box: scheduled
+            # jobs were observed running 8 MINUTES late and the app appeared to
+            # "shut down" when it was really just unresponsive. Pausing a room
+            # camera's analysis frees that CPU instantly while the live picture
+            # keeps working (the grab thread is cheap and is untouched).
+            if getattr(w, "analysis_paused", False):
+                continue
+
             with w._frame_lock:
                 frame = w._latest_frame
 
@@ -1400,6 +1411,9 @@ class CameraWorker:
         # analyse slowly so they don't starve the shared inference lock.
         self.is_monitor = self.camera_purpose == "MONITOR"
         self.analysis_interval = _MONITOR_ANALYSIS_INTERVAL if self.is_monitor else _ANALYSIS_INTERVAL
+        # When True the AI analysis is skipped but the video keeps streaming.
+        # Lets an operator drop CPU load without deleting or stopping a camera.
+        self.analysis_paused: bool = False
 
         # Track-expiry is counted in ANALYSIS FRAMES, so it MUST be derived from
         # THIS worker's analysis_interval. Otherwise a slow monitor camera (1.5s

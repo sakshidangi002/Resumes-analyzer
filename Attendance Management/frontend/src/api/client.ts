@@ -21,16 +21,31 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Camera endpoints that the UI polls on a short interval (DVR status every 5s,
+// live recognition, etc.). These gained auth recently, so a single transient
+// 401 here — a momentary DB hiccup while validating the token against the
+// remote DB — must NOT tear down the session and bounce the user to /login.
+// A genuinely expired/invalid token will still surface a 401 on the next
+// real navigation (/auth/me, /employees, …) and log out normally.
+const BACKGROUND_POLL_PATHS = ["/dvr/", "/recognize-", "/live/"];
+
 api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response && err.response.status === 401) {
+      const url = (err.config && err.config.url) || "";
       // Don't redirect if it's a login attempt, otherwise error message in Login.tsx disappears on refresh
-      const isLoginRequest = err.config && err.config.url && err.config.url.includes("/auth/login");
-      
+      const isLoginRequest = url.includes("/auth/login");
+      const isBackgroundPoll = BACKGROUND_POLL_PATHS.some((p) => url.includes(p));
+
+      if (isBackgroundPoll) {
+        // Let the individual poller handle/ignore it; keep the session.
+        return Promise.reject(err);
+      }
+
       localStorage.removeItem("token");
       localStorage.removeItem("user");
-      
+
       if (!isLoginRequest) {
         window.location.href = "/login";
       }
@@ -658,6 +673,39 @@ export const policies = {
     api.patch<PolicyVersion>("/policies/" + id, data),
   remove: (id: number) => api.delete("/policies/" + id),
   attachment: (id: number) => api.get(`/policies/${id}/attachment`, { responseType: "blob" }),
+};
+
+export type LiveTrackRow = {
+  track_id: number;
+  box: number[];          // x1,y1,x2,y2 in frame pixels
+  frame_w: number;
+  frame_h: number;
+  employee_id: number | null;
+  label: string;
+  named: boolean;
+};
+
+/** Click-to-name for room cameras. A ceiling camera resolves no faces, so Body
+ *  Re-ID has nothing to learn from; naming a track once teaches it that person's
+ *  appearance for the rest of the day. Labelling only — never marks attendance. */
+export const liveIdentify = {
+  tracks: (camera_id: number | string) =>
+    api.get<LiveTrackRow[]>(`/live/tracks/${camera_id}`),
+  nameTrack: (data: { camera_id: number; track_id: number; employee_id: number }) =>
+    api.post<{ message: string; employee_name: string }>("/live/name-track", data),
+  snapshot: (camera_id: number | string) =>
+    api.get(`/cameras/${camera_id}/preview`, { responseType: "blob", timeout: 30000 }),
+  analysisStatus: () => api.get<AnalysisStatusRow[]>("/live/analysis-status"),
+  pauseAnalysis: (camera_id: number, paused: boolean) =>
+    api.post<{ paused: boolean; message: string }>("/live/pause-analysis", { camera_id, paused }),
+};
+
+export type AnalysisStatusRow = {
+  camera_id: number;
+  name: string;
+  camera_purpose: string;
+  paused: boolean;
+  analysis_interval: number;
 };
 
 export const queries = {

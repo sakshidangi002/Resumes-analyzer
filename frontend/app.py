@@ -46,7 +46,24 @@ is_authorized = False
 if token:
     try:
         from jose import jwt
-        SECRET_KEY = "abc2025"
+        # Same secret as the HRMS app. Never hardcode it: the previous literal
+        # was committed to git, so anyone could forge a token this gate would
+        # accept as Admin. Fall back to the HRMS backend's own .env, because
+        # that is where the authoritative value lives.
+        SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+        if not SECRET_KEY:
+            _hrms_env = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "Attendance Management", "backend", ".env",
+            )
+            with open(_hrms_env, encoding="utf-8") as _fh:
+                for _line in _fh:
+                    _line = _line.strip()
+                    if _line.startswith("SECRET_KEY="):
+                        SECRET_KEY = _line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        if not SECRET_KEY:
+            raise RuntimeError("SECRET_KEY is not set")
         ALGORITHM = "HS256"
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
