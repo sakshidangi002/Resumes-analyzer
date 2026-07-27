@@ -1,0 +1,173 @@
+# Extra technical vocabulary for resume skill extraction.
+# One term per line. Lines starting with # are ignored.
+# Add any tool, framework, language, platform, or domain skill here.
+
+# ── RPA / Automation ──
+UiPath
+UiPath Orchestrator
+UiPath Studio
+Automation Anywhere
+Blue Prism
+Power Automate
+Process Automation
+RPA
+Robotic Process Automation
+Zapier
+Make
+n8n
+
+# ── Computer Vision / ML ──
+OpenCV
+MediaPipe
+TensorFlow
+Keras
+PyTorch
+scikit-learn
+Scikit Learn
+YOLO
+YOLO v5
+YOLO v8
+Detectron2
+ImageAI
+Face Recognition
+dlib
+Tesseract OCR
+OCR
+
+# ── Data & Analytics ──
+Power BI
+Tableau
+Looker
+Data Analytics
+Data Analysis
+Data Visualization
+Business Intelligence
+Microsoft Excel
+Google Sheets
+Excel
+Pandas
+NumPy
+Matplotlib
+Seaborn
+Plotly
+Jupyter
+Jupyter Notebook
+SPSS
+R Studio
+Stata
+
+# ── Databases ──
+MySQL
+PostgreSQL
+MongoDB
+SQLite
+Oracle
+MS SQL Server
+SQL Server
+Redis
+Cassandra
+Firebase
+DynamoDB
+Supabase
+PlanetScale
+
+# ── Programming Languages ──
+Python
+Java
+JavaScript
+TypeScript
+C
+C++
+C#
+Go
+Golang
+Rust
+PHP
+Ruby
+Swift
+Kotlin
+Scala
+Perl
+Shell
+Bash
+PowerShell
+R
+MATLAB
+
+# ── Web & Frameworks ──
+React
+React Native
+Angular
+Vue
+Vue.js
+Next.js
+Nuxt.js
+Node.js
+Express
+Express.js
+FastAPI
+Flask
+Django
+Spring Boot
+Laravel
+ASP.NET
+ASP.NET Core
+Ruby on Rails
+Svelte
+Remix
+
+# ── DevOps / Cloud ──
+Docker
+Kubernetes
+Terraform
+Ansible
+Jenkins
+GitHub Actions
+GitLab CI
+CircleCI
+AWS
+Azure
+Google Cloud
+GCP
+Heroku
+Netlify
+Vercel
+Nginx
+Linux
+Ubuntu
+CI/CD
+DevOps
+
+# ── HR / Recruitment / Business ──
+Recruitment
+Recruitment Coordination
+Interview Scheduling
+Employee Engagement
+HR Documentation
+HR Operations
+Conflict Resolution
+Problem Solving
+Time Management
+Communication Skills
+Teamwork
+Adaptability
+Leadership
+Microsoft Office
+MS Office
+Google Workspace
+
+# ── Soft / Domain Skills ──
+Project Management
+Agile
+Scrum
+Kanban
+JIRA
+Trello
+Notion
+Figma
+Adobe XD
+Canva
+Photoshop
+Illustrator
+Slack
+Zoom

@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 import zipfile
+from datetime import datetime as _dt
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, time
@@ -15,55 +17,36 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Float, ForeignKey, String, Text, Boolean, create_engine, text, or_, func
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, Boolean, create_engine, text, or_, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from starlette.responses import FileResponse, JSONResponse, Response
 
-# allow running from workspace root OR from inside the backend/ folder
-try:
-    from backend.main import (
-        analyze_fit,
-        calculate_experience_years,
-        chatbot_answer,
-        extract_resume,
-        extract_skills_from_text,
-        estimate_experience_years_from_text,
-        extract_text_from_docx,
-        extract_text_from_pdf,
-        format_experience_duration,
-        normalize_resume_text,
-        validate_and_repair_extraction,
-        get_embedding_model,
-        preload_chat_model,
-        preload_extract_model,
-        rank_candidates,
-    )
-except ImportError:  # pragma: no cover
-    from main import (  # type: ignore
-        analyze_fit,
-        calculate_experience_years,
-        chatbot_answer,
-        extract_resume,
-        extract_skills_from_text,
-        estimate_experience_years_from_text,
-        extract_text_from_docx,
-        extract_text_from_pdf,
-        format_experience_duration,
-        normalize_resume_text,
-        validate_and_repair_extraction,
-        get_embedding_model,
-        preload_chat_model,
-        preload_extract_model,
-        rank_candidates,
-    )
+from .main import (
+    analyze_fit,
+    calculate_experience_years,
+    chatbot_answer,
+    extract_resume,
+    extract_skills_from_text,
+    extract_skills_with_langchain,
+    estimate_experience_years_from_text,
+    extract_text_from_docx,
+    extract_text_from_pdf,
+    format_experience_duration,
+    normalize_resume_text,
+    validate_and_repair_extraction,
+    get_embedding_model,
+    preload_chat_model,
+    preload_extract_model,
+    rank_candidates,
+)
 
 import pandas as pd
 from chromadb import PersistentClient
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s – %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s - %(message)s")
 
 
 def _log_json(event: str, payload: dict) -> None:
@@ -108,6 +91,45 @@ def _sanitize_embedding_text(text: str) -> str:
         lines.append(s)
     return re.sub(r"\s+", " ", "\n".join(lines)).strip()
 
+
+def _parse_text_list(value) -> list[str]:
+    """Parse a DB text field that may be JSON list or comma-separated text."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, tuple):
+        return [str(x).strip() for x in value if str(x).strip()]
+    s = str(value).strip()
+    if not s:
+        return []
+    if s.startswith("["):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+    return [part.strip() for part in re.split(r"[\n,]", s) if part.strip()]
+
+
+def _dump_text_list(values) -> str | None:
+    """Store a text field as JSON array so skills remain structured."""
+    if values is None:
+        return None
+    if isinstance(values, str):
+        items = _parse_text_list(values)
+    else:
+        items = [str(x).strip() for x in values if str(x).strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return json.dumps(deduped, ensure_ascii=False) if deduped else None
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -117,13 +139,17 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:root@localhost:5432/Resume_analyzer",
 )
-# Used for building resume download links — override in .env if behind a proxy
+# Used for building resume download links; override in .env if behind a proxy
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+LEGACY_UPLOAD_DIR = os.path.join(PROJECT_ROOT, "uploads")
 EXCEL_DIR = os.path.join(BASE_DIR, "data")
 EXCEL_FILE = os.path.join(EXCEL_DIR, "resumes_data.xlsx")
+# Always under backend/ - not process cwd (unified server runs from hrms/backend).
+CHROMA_DIR = os.path.join(BASE_DIR, "chromadb")
 
 # Excel column order for append
 EXCEL_COLUMNS = ["name", "email", "phone", "skills", "experience", "resume_link", "created_at"]
@@ -153,7 +179,7 @@ class ResumeDB(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, index=True)
-    email = Column(String, unique=True, index=True)
+    email = Column(String, nullable=True, unique=True, index=True)
     phone = Column(String)
     location = Column(Text)
     skills = Column(Text)
@@ -183,6 +209,27 @@ class ResumeDB(Base):
     key_skills = Column(Text, nullable=True)
     primary_skills = Column(Text, nullable=True)
     other_skills = Column(Text, nullable=True)
+    raw_skills_text = Column(Text, nullable=True)
+    employee_id = Column(Integer, nullable=True)
+    
+    # Newly requested details form fields
+    current_salary = Column(String, nullable=True)
+    expected_salary = Column(String, nullable=True)
+    notice_period = Column(String, nullable=True)
+    availability_ftf = Column(String, nullable=True)
+    current_company = Column(String, nullable=True)
+    ready_to_relocate = Column(String, nullable=True)
+    reason_job_change = Column(Text, nullable=True)
+
+    # ATS / Candidate Overview fields (manually maintained by HR; not parsed)
+    candidate_status = Column(String(50), nullable=True)     # Immediate Joiner, Shortlisted, Selected, Rejected, ...
+    employment_type = Column(String(50), nullable=True)      # Full-time, Contract, ...
+    preferred_location = Column(String, nullable=True)
+    resume_score = Column(Integer, nullable=True)            # 0-100
+    remarks = Column(Text, nullable=True)
+    candidate_source = Column(String(50), nullable=True)     # LinkedIn, Naukri, Indeed, Referral, ...
+    qualification = Column(String, nullable=True)
+    college_name = Column(String, nullable=True)
 
 
 class CandidateNoteDB(Base):
@@ -229,6 +276,7 @@ class ResumeSchema(BaseModel):
     key_skills: List[str] = []
     primary_skills: List[str] = []
     other_skills: List[str] = []
+    raw_skills_text: str = ""
 
 
 class AnalyzeFitRequest(BaseModel):
@@ -250,28 +298,220 @@ class NoteCreate(BaseModel):
     status: Optional[str] = None
 
 
+def _candidate_upload_dirs() -> list[str]:
+    dirs = []
+    legacy = globals().get("LEGACY_UPLOAD_DIR") or os.path.join(PROJECT_ROOT, "uploads")
+    for path in (UPLOAD_DIR, legacy):
+        if path and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def _normalize_uploaded_filename(filename: str) -> str:
+    name = (filename or "").strip().replace("\\", "/")
+    return os.path.basename(name)
+
+
+def _is_inside_upload_dir(path: str) -> bool:
+    """True only if `path` really sits under one of the upload roots.
+
+    realpath() first so that symlinks and ..\\ segments are resolved before the
+    comparison -- a prefix test on the raw string is bypassable.
+    """
+    try:
+        real = os.path.realpath(path)
+    except Exception:
+        return False
+    for upload_dir in _candidate_upload_dirs():
+        try:
+            root = os.path.realpath(upload_dir)
+        except Exception:
+            continue
+        if os.path.commonpath([real, root]) == root:
+            return True
+    return False
+
+
+def _resolve_resume_file_path(filename: str, trusted: bool = False) -> Optional[str]:
+    """
+    Resolve a stored resume filename across current and legacy upload roots.
+
+    `trusted=True` means the value came from our own DB row (resume.source_file),
+    where legacy records may hold a full absolute path. `trusted=False` is for
+    anything derived from a request URL: there we use the basename only and
+    refuse to return a path outside the upload roots.
+
+    This previously tried the caller's raw string first and returned ANY absolute
+    path that existed, so `GET /files/C:\\...\\.env` was served verbatim.
+    """
+    raw = (filename or "").strip()
+    if not raw:
+        return None
+
+    normalized = _normalize_uploaded_filename(raw)
+    if not normalized:
+        return None
+
+    # Untrusted input never keeps directory components.
+    search_names = [normalized] if not trusted else []
+    if trusted:
+        for item in (raw, normalized):
+            if item and item not in search_names:
+                search_names.append(item)
+
+    if trusted:
+        for candidate in search_names:
+            if os.path.isabs(candidate) and os.path.exists(candidate):
+                return candidate
+
+    for upload_dir in _candidate_upload_dirs():
+        for candidate in search_names:
+            direct = os.path.join(upload_dir, candidate)
+            if os.path.exists(direct) and _is_inside_upload_dir(direct):
+                return direct
+
+    for upload_dir in _candidate_upload_dirs():
+        if not os.path.isdir(upload_dir):
+            continue
+        for root, _dirs, files in os.walk(upload_dir):
+            if normalized in files:
+                return os.path.join(root, normalized)
+
+    return None
+
+
+def _resume_file_media_type(filename: str) -> str:
+    ext = os.path.splitext((filename or "").lower())[1]
+    if ext == ".docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if ext == ".pdf":
+        return "application/pdf"
+    return "application/octet-stream"
+
+
+class CandidateDetailsUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    experience_years: Optional[float] = None
+    total_experience_years: Optional[float] = None
+    experience_level: Optional[str] = None
+    experience_summary: Optional[str] = None
+    experience_notes: Optional[str] = None
+    summary: Optional[str] = None
+    skills: Optional[list[str]] = None
+    key_skills: Optional[list[str]] = None
+    primary_skills: Optional[list[str]] = None
+    other_skills: Optional[list[str]] = None
+    education: Optional[list[str]] = None
+    projects: Optional[list[str]] = None
+    companies_worked_at: Optional[list[str]] = None
+    important_keywords: Optional[list[str]] = None
+    current_salary: Optional[str] = None
+    expected_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    availability_ftf: Optional[str] = None
+    current_company: Optional[str] = None
+    location: Optional[str] = None
+    ready_to_relocate: Optional[str] = None
+    reason_job_change: Optional[str] = None
+    # ATS / Candidate Overview fields
+    candidate_status: Optional[str] = None
+    employment_type: Optional[str] = None
+    preferred_location: Optional[str] = None
+    resume_score: Optional[int] = None
+    remarks: Optional[str] = None
+    candidate_source: Optional[str] = None
+    qualification: Optional[str] = None
+    college_name: Optional[str] = None
+
+
+def _csv_join(value):
+    if value is None:
+        return None
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(cleaned) if cleaned else None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return str(value).strip() or None
+
+
 # ---------------------------------------------------------------------------
 # Vector / embedding manager
 # ---------------------------------------------------------------------------
 
+def _is_chroma_schema_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "no such column" in msg or "collections.topic" in msg or "schema" in msg
+
+
+def _reset_chroma_store(reason: str) -> None:
+    """Remove incompatible Chroma SQLite data (e.g. after chromadb package upgrade)."""
+    if not os.path.isdir(CHROMA_DIR):
+        return
+    backup = f"{CHROMA_DIR}_backup_{_dt.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        shutil.move(CHROMA_DIR, backup)
+        logger.warning(
+            "ChromaDB store reset (%s). Old data moved to: %s. "
+            "Semantic search will re-index on new uploads; PostgreSQL resumes are unchanged.",
+            reason,
+            backup,
+        )
+    except Exception as move_exc:
+        logger.warning("ChromaDB move failed (%s); deleting folder: %s", reason, move_exc)
+        shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+
+
+def _open_chroma_collection(client: PersistentClient):
+    try:
+        return client.get_collection("resumes")
+    except Exception as exc:
+        if _is_chroma_schema_error(exc):
+            raise
+        return client.create_collection(
+            name="resumes",
+            metadata={"hnsw:space": "cosine"},
+        )
+
+
 class ResumeEmbedding:
     def __init__(self):
-        os.makedirs("./chromadb", exist_ok=True)
-        self.chromaclient = PersistentClient(path="./chromadb")
+        os.makedirs(CHROMA_DIR, exist_ok=True)
+        self.chromaclient = PersistentClient(path=CHROMA_DIR)
         try:
-            self.collection = self.chromaclient.get_collection("resumes")
-            logger.info("Found existing 'resumes' ChromaDB collection.")
-        except Exception:
-            self.collection = self.chromaclient.create_collection(
-                name="resumes", 
-                metadata={"hnsw:space": "cosine"},
-            )
-            logger.info("Created new 'resumes' ChromaDB collection.")
+            self.collection = _open_chroma_collection(self.chromaclient)
+            logger.info("Found existing 'resumes' ChromaDB collection at %s.", CHROMA_DIR)
+        except Exception as exc:
+            if _is_chroma_schema_error(exc):
+                _reset_chroma_store(str(exc))
+                self.chromaclient = PersistentClient(path=CHROMA_DIR)
+                self.collection = self.chromaclient.create_collection(
+                    name="resumes",
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info("Created fresh 'resumes' ChromaDB collection after schema reset.")
+            else:
+                self.collection = self.chromaclient.create_collection(
+                    name="resumes",
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info("Created new 'resumes' ChromaDB collection.")
         self.embedder = get_embedding_model()
         logger.info("Embedding manager ready.")
 
         
-embedding_manager = ResumeEmbedding()
+embedding_manager: ResumeEmbedding | None = None
+
+
+def _get_embedding_manager() -> ResumeEmbedding:
+    global embedding_manager
+    if embedding_manager is None:
+        embedding_manager = ResumeEmbedding()
+    return embedding_manager
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +539,7 @@ def _run_migrations():
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS key_skills TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS primary_skills TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS other_skills TEXT",
+        "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS raw_skills_text TEXT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual_upload'",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS total_experience_years FLOAT",
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS experience_level VARCHAR(50)",
@@ -345,7 +586,7 @@ async def lifespan(app: FastAPI):
 
     # 3. Pre-warm embedding model (fast, ~1 sec)
     try:
-        logger.info("Loading embedding model…")
+        logger.info("Loading embedding model...")
         model = get_embedding_model()
         test_vec = model.encode(["test"])
         logger.info("Embedding model OK. Shape: %s", test_vec.shape)
@@ -356,20 +597,20 @@ async def lifespan(app: FastAPI):
     if os.getenv("PRELOAD_CHAT_MODEL", "").strip().lower() in ("1", "true", "yes"):
         def _preload_chat():
             try:
-                logger.info("Preloading chat model in background…")
+                logger.info("Preloading chat model in background...")
                 preload_chat_model()
                 logger.info("Chat model preloaded.")
             except Exception as exc:
                 logger.warning("Chat model preload failed (will load on first chat): %s", exc)
         loop = asyncio.get_event_loop()
         loop.run_in_executor(executor, _preload_chat)
-        # Do not await — let startup complete immediately; model loads in background
+        # Do not await; let startup complete immediately; model loads in background
 
     # 5. Optional: preload extraction model so first upload is fast (no cold start)
     if os.getenv("PRELOAD_EXTRACT_MODEL", "").strip().lower() in ("1", "true", "yes"):
         def _preload_extract():
             try:
-                logger.info("Preloading extraction model in background…")
+                logger.info("Preloading extraction model in background...")
                 preload_extract_model()
                 logger.info("Extraction model preloaded.")
             except Exception as exc:
@@ -377,19 +618,192 @@ async def lifespan(app: FastAPI):
         loop = asyncio.get_event_loop()
         loop.run_in_executor(executor, _preload_extract)
 
+    # 6. Optional: auto-poll a mailbox for resume emails (EMAIL_IMPORT_AUTOSTART=1).
+    #    Runs the same importer as the manual "Sync Email" button, on an interval.
+    email_scheduler = None
+    if os.getenv("EMAIL_IMPORT_AUTOSTART", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+
+            try:
+                from .email_resume_pipeline import import_resumes_from_email, make_shim_request
+            except ImportError:  # pragma: no cover
+                from email_resume_pipeline import import_resumes_from_email, make_shim_request  # type: ignore
+
+            poll_minutes = float(os.getenv("EMAIL_IMPORT_POLL_MINUTES", "10") or "10")
+
+            def _email_poll_tick():
+                # Runs in a scheduler thread: own DB session, a shim request
+                # (inline extraction), and never lets an error kill the job.
+                db = SessionLocal()
+                try:
+                    asyncio.run(import_resumes_from_email(
+                        request=make_shim_request(executor=None),
+                        db=db,
+                        upload_resume_callable=upload_resume,
+                    ))
+                except Exception:
+                    logger.exception("Email auto-poll tick failed")
+                finally:
+                    db.close()
+
+            email_scheduler = BackgroundScheduler(daemon=True)
+            email_scheduler.add_job(_email_poll_tick, "interval", minutes=poll_minutes,
+                                    id="email_resume_import", max_instances=1, coalesce=True)
+            email_scheduler.start()
+            logger.info("Email resume auto-import scheduler started (every %.1f min)", poll_minutes)
+        except Exception as exc:
+            logger.warning("Email auto-import scheduler not started: %s", exc)
+
     yield
 
+    if email_scheduler is not None:
+        try:
+            email_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
     executor.shutdown(wait=False)
 
 
 app = FastAPI(
     title="Resume Analyzer",
     version="2.1.0",
-    description="FastAPI backend for Resume Analyzer – upload, search, rank, chat.",
+    description="FastAPI backend for Resume Analyzer - upload, search, rank, chat.",
     lifespan=lifespan,
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    # MUST stay False while allow_origins is "*". The pair
+    # allow_origins=["*"] + allow_credentials=True lets any website a logged-in
+    # HR user visits make credentialed cross-origin calls to this API. Auth here
+    # is a Bearer header (no cookies), so disabling credentials costs nothing --
+    # this matches the HRMS app's CORS config.
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 Base.metadata.create_all(bind=engine)
+
+
+# ---------------------------------------------------------------------------
+# Primary-role classification
+# Each resume is placed under ONE role category (e.g. ".NET Developer",
+# "React Developer") based on its overall profile — skills, summary, keywords —
+# rather than being tagged with every skill it mentions. Result is stored in
+# `role` so the Candidate Overview role tabs group cleanly.
+# ---------------------------------------------------------------------------
+_ROLE_SIGNALS = [
+    ("HR / Recruiter",     ["recruitment", "talent acquisition", "hr operations", "payroll", "onboarding", "sourcing", "human resource"]),
+    ("Mobile Developer",   ["react native", "flutter", "android", "kotlin", "swift", "ios development"]),
+    (".NET Developer",     ["c#", "asp.net", ".net", "dotnet", ".net core", "entity framework", "blazor", "wpf"]),
+    ("Angular Developer",  ["angular", "ngrx", "rxjs"]),
+    ("React Developer",    ["react", "redux", "next.js", "nextjs"]),
+    ("Node.js Developer",  ["node.js", "nodejs", "node js", "express.js", "express", "nestjs"]),
+    ("Python Developer",   ["python", "django", "flask", "fastapi"]),
+    ("Java Developer",     ["java", "spring", "spring boot", "hibernate", "j2ee"]),
+    ("PHP Developer",      ["php", "laravel", "codeigniter", "wordpress"]),
+    ("QA Engineer",        ["selenium", "cypress", "testng", "qa", "manual testing", "automation testing", "test automation", "junit", "appium"]),
+    ("DevOps Engineer",    ["docker", "kubernetes", "jenkins", "terraform", "ansible", "ci/cd", "devops"]),
+    ("UI/UX Designer",     ["figma", "adobe xd", "sketch", "ui/ux", "wireframe", "prototyping", "user research"]),
+    ("Data Analyst",       ["power bi", "tableau", "pandas", "numpy", "data analysis", "data analyst", "matplotlib"]),
+    ("Data Scientist",     ["machine learning", "deep learning", "tensorflow", "pytorch", "nlp", "scikit-learn"]),
+]
+_ROLE_FE = {"React Developer", "Angular Developer"}
+_ROLE_BE = {".NET Developer", "Node.js Developer", "Java Developer", "Python Developer", "PHP Developer"}
+
+
+def _role_blob_from_row(r) -> str:
+    cols = ("primary_skills", "key_skills", "skills", "raw_skills_text", "role",
+            "summary", "important_keywords", "experience_summary", "one_liner")
+    return " ".join(str(getattr(r, c, "") or "") for c in cols).lower()
+
+
+def _kw_hit(kw: str, blob: str) -> bool:
+    k = kw.lower()
+    if re.fullmatch(r"[a-z0-9]+", k):  # pure word -> word boundary (java != javascript)
+        return re.search(rf"\b{re.escape(k)}\b", blob) is not None
+    return k in blob
+
+
+def classify_primary_role(blob: str) -> str:
+    scores = {}
+    for cat, kws in _ROLE_SIGNALS:
+        s = sum(1 for kw in kws if _kw_hit(kw, blob))
+        if s:
+            scores[cat] = s
+    if not scores:
+        return "Other"
+    explicit_fs = any(x in blob for x in ("full stack", "full-stack", "fullstack", "mern", "mean stack"))
+    fe = max((scores.get(c, 0) for c in _ROLE_FE), default=0)
+    be = max((scores.get(c, 0) for c in _ROLE_BE), default=0)
+    if explicit_fs or (fe >= 2 and be >= 2):
+        return "Full Stack Developer"
+    return max(scores.items(), key=lambda kv: kv[1])[0]
+
+
+# Auto-migrate table to add newly requested candidate detail columns
+try:
+    with engine.connect() as conn:
+        new_cols = {
+            "current_salary": "VARCHAR(255)",
+            "expected_salary": "VARCHAR(255)",
+            "notice_period": "VARCHAR(255)",
+            "availability_ftf": "VARCHAR(255)",
+            "current_company": "VARCHAR(255)",
+            "ready_to_relocate": "VARCHAR(255)",
+            "reason_job_change": "TEXT",
+            # ATS / Candidate Overview fields
+            "candidate_status": "VARCHAR(50)",
+            "employment_type": "VARCHAR(50)",
+            "preferred_location": "VARCHAR(255)",
+            "resume_score": "INTEGER",
+            "remarks": "TEXT",
+            "candidate_source": "VARCHAR(50)",
+            "qualification": "VARCHAR(255)",
+            "college_name": "VARCHAR(255)",
+        }
+        # Helpful indexes for server-side filtering/sorting on the overview page.
+        _idx_sql = [
+            "CREATE INDEX IF NOT EXISTS ix_resumes_role ON resumes (role)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_candidate_status ON resumes (candidate_status)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_created_at ON resumes (created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_resumes_is_shortlisted ON resumes (is_shortlisted)",
+        ]
+        for col_name, col_type in new_cols.items():
+            res = conn.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='resumes' AND column_name='{col_name}')"
+            )).scalar()
+            if not res:
+                conn.execute(text(f"ALTER TABLE resumes ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+        for _sql in _idx_sql:
+            try:
+                conn.execute(text(_sql))
+                conn.commit()
+            except Exception:
+                pass
+except Exception as e:
+    logger.error(f"Schema auto-migration failed: {e}")
+
+# Backfill primary-role category for candidates that don't have one yet.
+try:
+    with SessionLocal() as _db:
+        _uncat = _db.query(ResumeDB).filter(
+            ResumeDB.deleted_at == None,
+            or_(ResumeDB.role == None, ResumeDB.role == ""),
+        ).all()
+        for _r in _uncat:
+            _r.role = classify_primary_role(_role_blob_from_row(_r))
+        if _uncat:
+            _db.commit()
+            logger.info("Classified %d candidates into primary roles", len(_uncat))
+except Exception as e:
+    logger.error(f"Role classification backfill failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +831,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def sanitize_db_string(val):
+    if isinstance(val, str):
+        return val.replace("\x00", "")
+    elif isinstance(val, list):
+        return [sanitize_db_string(item) for item in val]
+    elif isinstance(val, dict):
+        return {k: sanitize_db_string(v) for k, v in val.items()}
+    return val
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -546,11 +970,7 @@ def _derive_primary_skills_fallback(r: ResumeDB) -> list[str]:
 
 
 def _resume_to_dict(r: ResumeDB) -> dict:
-    primary_list = [
-        s.strip()
-        for s in (_safe_get(r, "primary_skills") or "").split(",")
-        if s.strip()
-    ]
+    primary_list = _parse_text_list(_safe_get(r, "primary_skills"))
     # If DB has a role label in primary_skills, derive 3 real skills at read-time.
     if len(primary_list) == 1 and _looks_like_role_label(primary_list[0]):
         primary_list = _derive_primary_skills_fallback(r)
@@ -561,15 +981,15 @@ def _resume_to_dict(r: ResumeDB) -> dict:
         "email": r.email or "",
         "phone": r.phone or "",
         "location": _safe_get(r, "location", "") or "",
-        "skills": [s.strip() for s in (r.skills or "").split(",") if s.strip()],
+        "skills": _parse_text_list(r.skills),
         "experience_years": r.experience_years,
         "total_experience_years": float(getattr(r, "total_experience_years", 0.0) or 0.0),
         "experience_level": _safe_get(r, "experience_level", "") or "",
         "internship_present": bool(getattr(r, "internship_present", False) or False),
         "experience_notes": _safe_get(r, "experience_notes", "") or "",
         "experience_summary": r.experience_summary or "",
-        "education": [s.strip() for s in (r.education or "").split(",") if s.strip()],
-        "projects": [s.strip() for s in (r.projects or "").split(",") if s.strip()],
+        "education": _parse_text_list(r.education),
+        "projects": _parse_text_list(r.projects),
         "resume_link": r.resume_link,
         "summary": _safe_get(r, "summary", "") or "",
         "companies_worked_at": [
@@ -584,26 +1004,44 @@ def _resume_to_dict(r: ResumeDB) -> dict:
             if s.strip()
         ],
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
-        "tags": [s.strip() for s in (_safe_get(r, "tags") or "").split(",") if s.strip()],
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "tags": _parse_text_list(_safe_get(r, "tags")),
+        "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "source": _safe_get(r, "source", "") or "",
+        "source_file": r.source_file or "",
         "experience_line": _safe_get(r, "experience_line", "") or "",
         "experience_tags": [
             s.strip()
             for s in (_safe_get(r, "experience_tags") or "").split(",")
             if s.strip()
         ],
-        "key_skills": [
-            s.strip()
-            for s in (_safe_get(r, "key_skills") or "").split(",")
-            if s.strip()
-        ],
+        # key_skills / other_skills are stored as JSON arrays (like `skills`), so
+        # parse them the same way. Splitting on "," would shred a JSON string
+        # into fragments ('["Frontend"', '"Tailwind"') that then bypass the
+        # frontend's skill de-duplication and show up as duplicate chips.
+        "key_skills": _parse_text_list(_safe_get(r, "key_skills")),
         "primary_skills": primary_list,
-        "other_skills": [
-            s.strip()
-            for s in (_safe_get(r, "other_skills") or "").split(",")
-            if s.strip()
-        ],
+        "other_skills": _parse_text_list(_safe_get(r, "other_skills")),
+        "current_salary": getattr(r, "current_salary", "") or "",
+        "expected_salary": getattr(r, "expected_salary", "") or "",
+        "notice_period": getattr(r, "notice_period", "") or "",
+        "availability_ftf": getattr(r, "availability_ftf", "") or "",
+        "current_company": getattr(r, "current_company", "") or "",
+        "ready_to_relocate": getattr(r, "ready_to_relocate", "") or "",
+        "reason_job_change": getattr(r, "reason_job_change", "") or "",
+        # ATS / Candidate Overview fields. Spec-named aliases are emitted so the
+        # frontend can read company_name / primary_role / current_location
+        # directly, while the underlying columns keep their existing names.
+        "candidate_status": getattr(r, "candidate_status", "") or "",
+        "employment_type": getattr(r, "employment_type", "") or "",
+        "preferred_location": getattr(r, "preferred_location", "") or "",
+        "resume_score": getattr(r, "resume_score", None),
+        "remarks": getattr(r, "remarks", "") or "",
+        "candidate_source": getattr(r, "candidate_source", "") or (_safe_get(r, "source", "") or ""),
+        "qualification": getattr(r, "qualification", "") or "",
+        "college_name": getattr(r, "college_name", "") or "",
+        "company_name": getattr(r, "current_company", "") or "",
+        "primary_role": _safe_get(r, "role", "") or "",
+        "current_location": _safe_get(r, "location", "") or "",
     }
 
 
@@ -711,7 +1149,7 @@ def stats(db: Session = Depends(get_db)):
 def _encode_embedding(embedding_text: str):
     """Blocking: encode text and return (vector_id, embedding list). Run in thread pool."""
     vid = str(uuid.uuid4())
-    vec = embedding_manager.embedder.encode(embedding_text)
+    vec = _get_embedding_manager().embedder.encode(embedding_text)
     if len(vec.shape) == 2:
         vec = vec[0]
     return vid, vec.tolist()
@@ -719,12 +1157,28 @@ def _encode_embedding(embedding_text: str):
 
 def _chroma_add(vector_id: str, embedding: list, embedding_text: str, file_name: str, name: str) -> None:
     """Blocking: add vector to ChromaDB."""
-    embedding_manager.collection.add(
-        embeddings=[embedding],
-        documents=[embedding_text],
-        metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
-        ids=[vector_id],
-    )
+    mgr = _get_embedding_manager()
+    try:
+        mgr.collection.add(
+            embeddings=[embedding],
+            documents=[embedding_text],
+            metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
+            ids=[vector_id],
+        )
+    except Exception as exc:
+        if not _is_chroma_schema_error(exc):
+            raise
+        global embedding_manager
+        logger.warning("ChromaDB add failed with schema error; resetting store: %s", exc)
+        embedding_manager = None
+        _reset_chroma_store(str(exc))
+        mgr = _get_embedding_manager()
+        mgr.collection.add(
+            embeddings=[embedding],
+            documents=[embedding_text],
+            metadatas=[{"vector_id": vector_id, "file": file_name, "name": name}],
+            ids=[vector_id],
+        )
 
 
 def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:
@@ -734,8 +1188,10 @@ def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:
         with open(temp_path, "wb") as fh:
             fh.write(file_bytes)
         if ext == ".docx":
-            return extract_text_from_docx(temp_path)
-        return extract_text_from_pdf(temp_path)
+            extracted_text = extract_text_from_docx(temp_path)
+        else:
+            extracted_text = extract_text_from_pdf(temp_path)
+        return (extracted_text or "").replace("\x00", "")
     finally:
         try:
             if os.path.exists(temp_path):
@@ -759,14 +1215,7 @@ def _slice_skills_section(text: str) -> str:
             start = start + len(m)
             break
     if start == -1:
-        # fallback: first occurrence
-        for m in ["skills", "technical skills", "key skills", "skill set"]:
-            p = lower.find(m)
-            if p != -1:
-                start = p
-                break
-    if start == -1:
-        return text or ""
+        return ""
 
     tail = t[start:]
     tail_l = tail.lower()
@@ -798,21 +1247,40 @@ def _clean_skill_list(items, *, max_items: int) -> list[str]:
     seen: set[str] = set()
     for raw in (items or []):
         s = str(raw or "").strip()
+        s = re.sub(
+            r"^(programming languages|frontend development|backend development|version control tools|"
+            r"database management|web technologies|project management tool|core concepts|technical skills|"
+            r"technical proficiencies|skills|languages|databases|frameworks|testing|tools)\s*[:\-]?\s*",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        )
         if not s:
             continue
 
         # Drop overly long / sentence-like strings
-        if len(s) > 32:
+        if len(s) > 28:
             continue
         # Drop items with too many words (usually sentences)
-        if len(s.split()) > 3:
+        word_count = len(s.split())
+        if word_count > 4:
+            continue
+        if word_count > 2 and not _looks_like_primary_skill(s):
             continue
         # Drop obvious non-skill filler
         low = s.lower().strip(" .,:;|/\\-+_()[]{}")
         if low in {"programmer", "developer", "software", "engineer", "fresher", "student"}:
             continue
-        if any(w in low for w in ["ready to", "passion", "team work", "teamwork", "adaptability", "time management", "communication "]):
-            # These are too often soft-skill sentences in your data; keep them out of primary lists.
+        if low in {"asp", "net", "concepts"}:
+            continue
+        if low in {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"}:
+            continue
+        if "management team collaboration" in low:
+            continue
+        
+        # Aggressive verb/noun filtering for hallucinated strings
+        bad_words = ["ready", "good", "passion", "team", "adaptability", "time management", "communication", "work", "thumbnail", "canva", "seo", "management", "designer"]
+        if any(w in low for w in bad_words):
             continue
 
         key = low.replace(" ", "")
@@ -825,22 +1293,76 @@ def _clean_skill_list(items, *, max_items: int) -> list[str]:
     return out
 
 
+def _looks_like_primary_skill(label: str) -> bool:
+    s = str(label or "").strip()
+    if not s:
+        return False
+    low = re.sub(r"\s+", " ", s.lower()).strip()
+    if not low:
+        return False
+    if any(ch in s for ch in (".", "#", "+", "/")):
+        return True
+    primary_terms = {
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "react",
+        "node.js",
+        "next.js",
+        "angular",
+        "vue",
+        "asp.net",
+        ".net",
+        "c#",
+        "sql",
+        "mysql",
+        "postgresql",
+        "mongodb",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "jira",
+        "figma",
+        "framer",
+        "webflow",
+        "photoshop",
+        "maya",
+        "blender",
+        "windows",
+        "linux",
+        "visual studio",
+        "entity framework",
+        "core java",
+        "advanced java",
+        "react native",
+        "postman",
+        "ssms",
+    }
+    return low in primary_terms
+
+
 def _derive_clean_skills_from_text(resume_text: str) -> tuple[list[str], list[str]]:
     """
     Prefer extracting skills from the Skills section; fallback to full text.
     """
     skills_text = _slice_skills_section(resume_text or "")
-    skills = extract_skills_from_text(skills_text if skills_text.strip() else (resume_text or "")) or {}
+    skills = extract_skills_with_langchain(skills_text if skills_text.strip() else (resume_text or ""))
+    # skills is a list, not a dict
+    if not isinstance(skills, list):
+        skills = []
 
-    primary = skills.get("primary_skills") or skills.get("key_skills") or []
-    other = skills.get("other_skills") or skills.get("skills") or []
-    if not isinstance(primary, list):
-        primary = [s.strip() for s in str(primary).split(",") if s.strip()]
-    if not isinstance(other, list):
-        other = [s.strip() for s in str(other).split(",") if s.strip()]
+    primary = [s for s in skills if _looks_like_primary_skill(s)]
+    if not primary:
+        primary = []
+    else:
+        primary = primary[:10]
+    other = [s for s in skills if s not in primary] if skills else []
 
     primary_clean = _clean_skill_list(primary, max_items=10)
-    other_clean = _clean_skill_list([s for s in other if str(s).strip()], max_items=40)
+    other_clean = _clean_skill_list(other, max_items=40)
     # remove duplicates across lists
     prim_norm = {s.lower().replace(" ", "") for s in primary_clean}
     other_clean = [s for s in other_clean if s.lower().replace(" ", "") not in prim_norm]
@@ -856,10 +1378,7 @@ async def upload_resume(
     executor = getattr(request.app.state, "executor", None)
     loop = asyncio.get_event_loop()
     results: List[Optional[dict]] = [None] * len(files)
-    try:
-        from backend.main import _enrichment_fallback
-    except ImportError:
-        from main import _enrichment_fallback  # type: ignore[import]
+    from .main import _enrichment_fallback
 
     # Phase 1: read files and extract text; collect valid items for parallel LLM extraction
     valid_items: List[tuple] = []  # (index, filename, file_bytes, ext, resume_text)
@@ -877,6 +1396,29 @@ async def upload_resume(
                 )
             else:
                 resume_text = _extract_text_from_bytes(file_bytes, ext, BASE_DIR)
+            
+            # STAGE 1 diagnostics. Gated behind DEBUG because this block used to
+            # run at INFO on every upload and wrote up to 100 KB of the
+            # candidate's resume -- their name, phone, address -- straight into
+            # the log file. That is a PII leak, and the f-string meant the cost
+            # was paid even when the log level would have discarded it.
+            if logger.isEnabledFor(logging.DEBUG):
+                text_lower = resume_text.lower()
+                logger.debug(
+                    "STAGE 1 %s ext=%s len=%d skills=%s experience=%s education=%s projects=%s",
+                    file.filename, ext, len(resume_text),
+                    any(kw in text_lower for kw in ["skills", "technical skills", "technologies", "tech stack"]),
+                    any(kw in text_lower for kw in ["experience", "work experience", "employment", "work history"]),
+                    any(kw in text_lower for kw in ["education", "academic", "qualification"]),
+                    any(kw in text_lower for kw in ["projects", "project experience"]),
+                )
+                broken_words = re.findall(r'\b[a-z]{1,2}\s+[a-z]{1,2}\b', resume_text[:5000])
+                if broken_words:
+                    logger.debug("Potential broken words detected: %s", broken_words[:10])
+                spaced_words = re.findall(r'[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]\s+[A-Za-z]', resume_text[:5000])
+                if spaced_words:
+                    logger.debug("Potential spacing artifacts: %s", spaced_words[:5])
+
             logger.info("Text extracted from %s: %d chars", file.filename, len(resume_text))
             if not (resume_text or resume_text.strip()):
                 results[i] = {"status": "error", "file": file.filename, "message": "Text extraction produced no content."}
@@ -924,17 +1466,36 @@ async def upload_resume(
             except Exception as _gate_exc:
                 logger.warning("Extraction validation gate failed for %s: %s", filename, _gate_exc)
 
-            # Skills repair: derive cleaner skills from the Skills section and override junky outputs.
-            try:
-                primary_clean, other_clean = _derive_clean_skills_from_text(resume_text or "")
-                if primary_clean:
-                    extracted["primary_skills"] = primary_clean
-                if other_clean:
-                    extracted["other_skills"] = other_clean
-            except Exception as _skills_exc:
-                logger.debug("Skills cleanup skipped for %s: %s", filename, _skills_exc)
+            # Skills repair: DISABLED - V3 extraction is already working correctly
+            # The _derive_clean_skills_from_text function was overriding V3 skills with
+            # incorrect extraction from Languages/Interests sections instead of technical skills.
+            # V3 already does proper section-aware extraction with confidence scoring.
+            # try:
+            #     primary_clean, other_clean = _derive_clean_skills_from_text(norm_text or resume_text or "")
+            #     deterministic_skills = primary_clean + other_clean
+            #     if deterministic_skills:
+            #         extracted["primary_skills"] = primary_clean
+            #         extracted["other_skills"] = other_clean
+            #         extracted["skills"] = deterministic_skills
+            #         extracted["key_skills"] = primary_clean[:15] if primary_clean else deterministic_skills[:15]
+            # except Exception as _skills_exc:
+            #     logger.debug("Skills split skipped for %s: %s", filename, _skills_exc)
+
+            # Sanitize NUL characters from all extracted string fields before schemas and DB write
+            extracted = sanitize_db_string(extracted)
 
             cleaned = ResumeSchema(**extracted)
+
+            # STAGE 6: DATABASE SAVE DEBUG LOGS
+            logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG ===")
+            logger.info(f"Before database save - Name: {cleaned.name}")
+            logger.info(f"Before database save - Skills: {cleaned.skills}")
+            logger.info(f"Before database save - Number of skills: {len(cleaned.skills) if cleaned.skills else 0}")
+            logger.info(f"Before database save - Experience years: {cleaned.experience_years}")
+            logger.info(f"Before database save - Primary skills: {cleaned.primary_skills}")
+            logger.info(f"Before database save - Other skills: {cleaned.other_skills}")
+            logger.info(f"Before database save - Key skills: {cleaned.key_skills}")
+            logger.info(f"=== END STAGE 6 (BEFORE SAVE) ===")
 
             if cleaned.experience_years == 0.0:
                 cleaned.experience_years = calculate_experience_years(cleaned.experience_summary or "")
@@ -1004,11 +1565,13 @@ async def upload_resume(
                 }
                 continue
 
-            os.makedirs(UPLOAD_DIR, exist_ok=True)
+
             safe_name = _sanitize_filename(filename or "resume")
             new_name = f"{uuid.uuid4()}_{safe_name}"
-            with open(os.path.join(UPLOAD_DIR, new_name), "wb") as fh:
-                fh.write(file_bytes)
+            for upload_dir in _candidate_upload_dirs():
+                os.makedirs(upload_dir, exist_ok=True)
+                with open(os.path.join(upload_dir, new_name), "wb") as fh:
+                    fh.write(file_bytes)
             resume_link = f"{BASE_URL}/files/{new_name}"
 
             embedding_text = (
@@ -1034,18 +1597,18 @@ async def upload_resume(
             def _make_record(include_new_cols: bool = True) -> ResumeDB:
                 base = dict(
                     name=_sanitize_name(cleaned.name) or cleaned.name or "",
-                    email=cleaned.email,
+                    email=cleaned.email if cleaned.email else None,
                     phone=cleaned.phone,
                     location=cleaned.location or "",
-                    skills=", ".join(cleaned.skills),
+                    skills=_dump_text_list(cleaned.skills),
                     experience_years=cleaned.experience_years,
                     experience_summary=cleaned.experience_summary,
                     total_experience_years=getattr(cleaned, "total_experience_years", None),
                     experience_level=getattr(cleaned, "experience_level", None),
                     internship_present=getattr(cleaned, "internship_present", False),
                     experience_notes=getattr(cleaned, "experience_notes", None),
-                    education=", ".join(cleaned.education),
-                    projects=", ".join(cleaned.projects),
+                    education=_dump_text_list(cleaned.education),
+                    projects=_dump_text_list(cleaned.projects),
                     resume_link=resume_link,
                     source_file=new_name,
                     vector_id=vector_id,
@@ -1054,18 +1617,21 @@ async def upload_resume(
                 if include_new_cols:
                     base.update(
                         summary=cleaned.summary or None,
-                        companies_worked_at=", ".join(cleaned.companies_worked_at) if cleaned.companies_worked_at else None,
+                        companies_worked_at=_dump_text_list(cleaned.companies_worked_at),
                         role=cleaned.role,
-                        important_keywords=", ".join(cleaned.important_keywords) if cleaned.important_keywords else None,
+                        important_keywords=_dump_text_list(cleaned.important_keywords),
                         experience_line=getattr(cleaned, "experience_line", None),
                         experience_tags=", ".join(getattr(cleaned, "experience_tags", []) or []) or None,
-                        key_skills=", ".join(getattr(cleaned, "key_skills", []) or []) or None,
-                        primary_skills=", ".join(getattr(cleaned, "primary_skills", []) or []) or None,
-                        other_skills=", ".join(getattr(cleaned, "other_skills", []) or []) or None,
+                        key_skills=_dump_text_list(getattr(cleaned, "key_skills", []) or []),
+                        primary_skills=_dump_text_list(getattr(cleaned, "primary_skills", []) or []),
+                        other_skills=_dump_text_list(getattr(cleaned, "other_skills", []) or []),
+                        raw_skills_text=getattr(cleaned, "raw_skills_text", "") or "",
                         is_shortlisted=False,
                         tags=None,
                         deleted_at=None,
                     )
+                # Sanitize any string fields to prevent NUL characters in DB
+                base = sanitize_db_string(base)
                 return ResumeDB(**base)
 
             db_record = _make_record(include_new_cols=True)
@@ -1073,6 +1639,46 @@ async def upload_resume(
             try:
                 db.commit()
                 db.refresh(db_record)
+                
+                # STAGE 6: DATABASE SAVE DEBUG LOGS (after save)
+                logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG (AFTER SAVE) ===")
+                logger.info(f"After database save - Record ID: {db_record.id}")
+                logger.info(f"After database save - Name: {db_record.name}")
+                logger.info(f"After database save - Skills: {db_record.skills}")
+                logger.info(f"After database save - Number of skills: {len(_parse_text_list(db_record.skills))}")
+                logger.info(f"After database save - Experience years: {db_record.experience_years}")
+                logger.info(f"After database save - Primary skills: {db_record.primary_skills}")
+                logger.info(f"After database save - Other skills: {db_record.other_skills}")
+                logger.info(f"After database save - Key skills: {db_record.key_skills}")
+                logger.info(f"=== END STAGE 6 (AFTER SAVE) ===")
+                
+                if db_record.email:
+                    try:
+                        emp_row = db.execute(
+                            text("SELECT id, skills FROM employees WHERE LOWER(official_email) = :email OR LOWER(personal_email) = :email LIMIT 1"),
+                            {"email": db_record.email.lower().strip()}
+                        ).first()
+                        if emp_row:
+                            emp_id = emp_row[0]
+                            db_record.employee_id = emp_id
+                            
+                            new_skills_list = []
+                            if cleaned.skills:
+                                new_skills_list = list(cleaned.skills)
+                            elif db_record.skills:
+                                new_skills_list = [s.strip() for s in db_record.skills.split(",") if s.strip()]
+                                
+                            existing_skills = [s.strip() for s in (emp_row[1] or "").split(",") if s.strip()]
+                            merged_skills = list(dict.fromkeys(existing_skills + new_skills_list))
+                            
+                            db.execute(
+                                text("UPDATE employees SET skills = :skills WHERE id = :eid"),
+                                {"skills": ", ".join(merged_skills), "eid": emp_id}
+                            )
+                            db.commit()
+                            db.refresh(db_record)
+                    except Exception as sync_err:
+                        logger.error("Failed to link employee or sync skills: %s", sync_err)
             except (OperationalError, ProgrammingError) as db_err:
                 msg = str(getattr(db_err, "orig", db_err))
                 if "column" in msg.lower() and ("does not exist" in msg or "undefined" in msg):
@@ -1144,7 +1750,7 @@ async def upload_resume(
                 },
             )
 
-            logger.info("Upload complete: %s → %s", filename, cleaned.name)
+            logger.info("Upload complete: %s -> %s", filename, cleaned.name)
             results[idx] = {"status": "success", "candidate_name": cleaned.name, "resume_link": resume_link}
 
         except Exception as exc:
@@ -1159,6 +1765,28 @@ async def upload_resume(
 # ---------------------------------------------------------------------------
 # Skills-only extraction (no DB write)
 # ---------------------------------------------------------------------------
+
+@app.post("/email/sync", tags=["Email Import"])
+async def sync_email_resumes(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Manual "Sync Email" trigger for the intelligent resume importer.
+
+    Fetches new emails from the configured mailbox/label, validates attachments
+    by content (not subject/filename), and imports valid resumes through the
+    SAME upload pipeline as a manual upload (with built-in duplicate detection).
+    Returns a per-attachment decision summary (Imported / Duplicate / Needs
+    Review / Ignored).
+    """
+    try:
+        from .email_resume_pipeline import import_resumes_from_email
+    except ImportError:  # pragma: no cover
+        from email_resume_pipeline import import_resumes_from_email  # type: ignore
+    return await import_resumes_from_email(
+        request=request, db=db, upload_resume_callable=upload_resume,
+    )
+
 
 @app.post("/extract/skills", tags=["Resumes"])
 async def extract_skills_only(
@@ -1290,7 +1918,7 @@ def list_resumes(
                         if not a:
                             continue
                         if re.fullmatch(r"[a-z0-9]+", a):
-                            # pure alphanumeric → word boundary
+                            # pure alphanumeric word boundary
                             if re.search(rf"\b{re.escape(a)}\b", blob):
                                 found_any = True
                                 break
@@ -1305,6 +1933,235 @@ def list_resumes(
             result = [r for r in result if _matches(r)]
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Candidate Overview: server-side search / filter / sort / paginate
+# ---------------------------------------------------------------------------
+
+# Notice-period values that count as an "immediate joiner".
+_IMMEDIATE_TOKENS = ("immediate", "immed", "0 day", "0 days", "ready to join", "asap")
+
+
+def _is_immediate(notice: Optional[str], status: Optional[str]) -> bool:
+    blob = f"{notice or ''} {status or ''}".lower()
+    return any(tok in blob for tok in _IMMEDIATE_TOKENS)
+
+
+def _skill_sql_filter(query, skills: str):
+    """Translate a skills query (with alias expansion) into AND-of-OR ILIKE
+    conditions across all skill-bearing columns, so filtering + pagination
+    happen in SQL rather than in Python."""
+    groups = _expand_skill_query(skills)
+    cols = [
+        ResumeDB.skills, ResumeDB.primary_skills, ResumeDB.other_skills,
+        ResumeDB.key_skills, ResumeDB.raw_skills_text,
+    ]
+    for group in groups:
+        alias_conds = []
+        for alias in group:
+            if not alias:
+                continue
+            for col in cols:
+                alias_conds.append(col.ilike(f"%{alias}%"))
+        if alias_conds:
+            query = query.filter(or_(*alias_conds))
+    return query
+
+
+@app.get("/resumes/search", tags=["Resumes"])
+def search_resumes(
+    db: Session = Depends(get_db),
+    # Global search
+    q: Optional[str] = None,
+    # Advanced filters
+    name: Optional[str] = None,
+    company: Optional[str] = None,
+    primary_role: Optional[str] = None,
+    skills: Optional[str] = None,
+    min_experience: Optional[float] = None,
+    max_experience: Optional[float] = None,
+    current_salary: Optional[str] = None,
+    expected_salary: Optional[str] = None,
+    notice_period: Optional[str] = None,
+    current_location: Optional[str] = None,
+    preferred_location: Optional[str] = None,
+    employment_type: Optional[str] = None,
+    candidate_status: Optional[str] = None,
+    min_score: Optional[int] = None,
+    qualification: Optional[str] = None,
+    college_name: Optional[str] = None,
+    candidate_source: Optional[str] = None,
+    shortlisted: Optional[bool] = None,
+    added_after: Optional[str] = None,
+    added_before: Optional[str] = None,
+    # Sort + paginate
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Server-side Candidate Overview feed: filtered, sorted, paginated, with counts.
+
+    Kept separate from GET /resumes (which the Dashboard/Compare tabs consume as a
+    full list) so those flows are untouched.
+    """
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+
+    # Summary aggregates over the WHOLE database (not the filtered view).
+    total_all = base.count()
+    shortlisted_all = base.filter(ResumeDB.is_shortlisted == True).count()
+    avg_exp = db.query(func.avg(ResumeDB.experience_years)).filter(
+        ResumeDB.deleted_at == None
+    ).scalar()
+    immediate_all = base.filter(
+        or_(
+            *[ResumeDB.notice_period.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+            *[ResumeDB.candidate_status.ilike(f"%{t}%") for t in _IMMEDIATE_TOKENS],
+        )
+    ).count()
+
+    # Apply filters
+    fq = base
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        fq = fq.filter(or_(
+            ResumeDB.name.ilike(like), ResumeDB.email.ilike(like),
+            ResumeDB.phone.ilike(like), ResumeDB.current_company.ilike(like),
+            ResumeDB.companies_worked_at.ilike(like), ResumeDB.role.ilike(like),
+            ResumeDB.location.ilike(like), ResumeDB.skills.ilike(like),
+            ResumeDB.primary_skills.ilike(like), ResumeDB.key_skills.ilike(like),
+        ))
+    if name:
+        fq = fq.filter(ResumeDB.name.ilike(f"%{name}%"))
+    if company:
+        fq = fq.filter(or_(
+            ResumeDB.current_company.ilike(f"%{company}%"),
+            ResumeDB.companies_worked_at.ilike(f"%{company}%"),
+        ))
+    if primary_role:
+        # Role tabs group by the classified `role` category, so filter it exactly.
+        fq = fq.filter(ResumeDB.role == primary_role)
+    if skills:
+        fq = _skill_sql_filter(fq, skills)
+    if min_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years >= min_experience)
+    if max_experience is not None:
+        fq = fq.filter(ResumeDB.experience_years <= max_experience)
+    if current_salary:
+        fq = fq.filter(ResumeDB.current_salary.ilike(f"%{current_salary}%"))
+    if expected_salary:
+        fq = fq.filter(ResumeDB.expected_salary.ilike(f"%{expected_salary}%"))
+    if notice_period:
+        fq = fq.filter(ResumeDB.notice_period.ilike(f"%{notice_period}%"))
+    if current_location:
+        fq = fq.filter(ResumeDB.location.ilike(f"%{current_location}%"))
+    if preferred_location:
+        fq = fq.filter(ResumeDB.preferred_location.ilike(f"%{preferred_location}%"))
+    if employment_type:
+        fq = fq.filter(ResumeDB.employment_type.ilike(f"%{employment_type}%"))
+    if candidate_status:
+        fq = fq.filter(ResumeDB.candidate_status.ilike(f"%{candidate_status}%"))
+    if min_score is not None:
+        fq = fq.filter(ResumeDB.resume_score >= min_score)
+    if qualification:
+        fq = fq.filter(ResumeDB.qualification.ilike(f"%{qualification}%"))
+    if college_name:
+        fq = fq.filter(ResumeDB.college_name.ilike(f"%{college_name}%"))
+    if candidate_source:
+        fq = fq.filter(or_(
+            ResumeDB.candidate_source.ilike(f"%{candidate_source}%"),
+            ResumeDB.source.ilike(f"%{candidate_source}%"),
+        ))
+    if shortlisted is not None:
+        fq = fq.filter(ResumeDB.is_shortlisted == shortlisted)
+    if added_after:
+        try:
+            dt = datetime.fromisoformat(added_after.replace("Z", "+00:00"))
+            fq = fq.filter(ResumeDB.created_at >= dt)
+        except Exception:
+            pass
+    if added_before:
+        try:
+            dt = datetime.fromisoformat(added_before.replace("Z", "+00:00"))
+            end_of_day = datetime.combine(dt.date(), time(23, 59, 59, 999999))
+            fq = fq.filter(ResumeDB.created_at <= end_of_day)
+        except Exception:
+            pass
+
+    filtered_count = fq.count()
+
+    # Sort
+    sort_map = {
+        "created_at": ResumeDB.created_at, "date_added": ResumeDB.created_at,
+        "name": ResumeDB.name, "experience": ResumeDB.experience_years,
+        "current_salary": ResumeDB.current_salary, "expected_salary": ResumeDB.expected_salary,
+        "notice_period": ResumeDB.notice_period, "primary_role": ResumeDB.role,
+        "candidate_status": ResumeDB.candidate_status, "resume_score": ResumeDB.resume_score,
+        "company_name": ResumeDB.current_company, "current_location": ResumeDB.location,
+        "shortlisted": ResumeDB.is_shortlisted,
+    }
+    order_col = sort_map.get((sort_by or "created_at"), ResumeDB.created_at)
+    fq = fq.order_by(order_col.asc().nulls_last() if sort_order == "asc"
+                     else order_col.desc().nulls_last())
+
+    # Paginate
+    page = max(1, int(page or 1))
+    page_size = min(200, max(1, int(page_size or 20)))
+    rows = fq.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {
+        "rows": [_resume_to_dict(r) for r in rows],
+        "total": total_all,
+        "filtered": filtered_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (filtered_count + page_size - 1) // page_size),
+        "summary": {
+            "total": total_all,
+            "showing": filtered_count,
+            "shortlisted": shortlisted_all,
+            "immediate_joiners": immediate_all,
+            "avg_experience": round(float(avg_exp), 1) if avg_exp is not None else 0.0,
+        },
+    }
+
+
+@app.get("/resumes/facets", tags=["Resumes"])
+def resume_facets(db: Session = Depends(get_db)):
+    """Role-category tabs with candidate counts (each candidate counted once,
+    under its classified `role`), plus distinct values for the dropdown filters."""
+    base = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+    total = base.count()
+
+    role_rows = (
+        db.query(ResumeDB.role, func.count(ResumeDB.id))
+        .filter(ResumeDB.deleted_at == None, ResumeDB.role.isnot(None), ResumeDB.role != "")
+        .group_by(ResumeDB.role)
+        .order_by(func.count(ResumeDB.id).desc())
+        .all()
+    )
+    # Keep "Other" last regardless of count.
+    roles = [{"role": r, "count": int(c)} for r, c in role_rows if r and r != "Other"]
+    other = [{"role": r, "count": int(c)} for r, c in role_rows if r == "Other"]
+    roles = roles + other
+
+    def _distinct(col):
+        vals = (
+            db.query(col)
+            .filter(ResumeDB.deleted_at == None, col.isnot(None), col != "")
+            .distinct().all()
+        )
+        return sorted({(v[0] or "").strip() for v in vals if (v[0] or "").strip()})
+
+    return {
+        "total": total,
+        "roles": roles,
+        "statuses": _distinct(ResumeDB.candidate_status),
+        "employment_types": _distinct(ResumeDB.employment_type),
+        "sources": _distinct(ResumeDB.candidate_source),
+        "locations": _distinct(ResumeDB.location),
+    }
 
 
 @app.post("/resumes/{resume_id}/reextract-skills", tags=["Resumes"])
@@ -1345,10 +2202,10 @@ def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
     if not skills:
         return {"updated": False, "skills": [], "message": "No skills found in resume text."}
 
-    resume.skills = ", ".join(skills)
-    resume.key_skills = ", ".join(key_skills) if key_skills else None
-    resume.primary_skills = ", ".join(primary_skills) if primary_skills else None
-    resume.other_skills = ", ".join(other_skills) if other_skills else None
+    resume.skills = _dump_text_list(skills)
+    resume.key_skills = _dump_text_list(key_skills)
+    resume.primary_skills = _dump_text_list(primary_skills)
+    resume.other_skills = _dump_text_list(other_skills)
     db.add(resume)
     db.commit()
     db.refresh(resume)
@@ -1358,6 +2215,50 @@ def reextract_skills(resume_id: str, db: Session = Depends(get_db)):
         "skills": skills,
         "primary_skills": primary_skills,
         "other_skills": other_skills,
+    }
+
+
+@app.post("/resumes/{resume_id}/reextract-name", tags=["Resumes"])
+def reextract_name(resume_id: str, db: Session = Depends(get_db)):
+    """Re-extract candidate name from stored PDF/DOCX (email-validated)."""
+    resume = (
+        db.query(ResumeDB)
+        .filter(ResumeDB.id == resume_id, ResumeDB.deleted_at == None)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    if not resume.source_file:
+        raise HTTPException(status_code=400, detail="No source_file stored for this resume")
+
+    file_path = os.path.join(UPLOAD_DIR, resume.source_file)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Stored resume file not found on server")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        resume_text = extract_text_from_pdf(file_path)
+    elif ext in (".docx", ".doc"):
+        resume_text = extract_text_from_docx(file_path)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    extracted = extract_resume(resume_text)
+    new_name = (extracted.get("name") or "").strip()
+    if not new_name or new_name.lower() in {"unknown", "unknown candidate"}:
+        return {"updated": False, "name": resume.name, "message": "Could not extract a reliable name."}
+
+    old_name = resume.name
+    resume.name = new_name[:120]
+    if extracted.get("email"):
+        resume.email = extracted["email"]
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+    return {
+        "updated": old_name != new_name,
+        "name": new_name,
+        "resume": _resume_to_dict(resume),
     }
 
 
@@ -1485,6 +2386,181 @@ def reextract_key_skills(resume_id: str, db: Session = Depends(get_db)):
     }
 
 
+
+
+def _rebuild_resume_from_source(resume: ResumeDB) -> dict:
+    """
+    Re-run extraction against the stored source file and update the row in place.
+    Returns a small status payload for batch repair operations.
+    """
+    file_path = _resolve_resume_file_path(resume.source_file or "", trusted=True)
+    if not file_path:
+        return {"updated": False, "reason": "source_file_missing"}
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        resume_text = extract_text_from_pdf(file_path)
+    elif ext in (".docx", ".doc"):
+        resume_text = extract_text_from_docx(file_path)
+    else:
+        return {"updated": False, "reason": f"unsupported_file_type:{ext}"}
+
+    extracted = extract_resume(resume_text)
+    try:
+        norm_text, _ = normalize_resume_text(resume_text or "")
+        repaired, _added = validate_and_repair_extraction(extracted, norm_text)
+        extracted.update(repaired)
+    except Exception as exc:
+        logger.debug("Validation/repair skipped for %s: %s", resume.source_file, exc)
+
+    name = (extracted.get("name") or "").strip()
+    if name and name.lower() not in {"unknown", "unknown candidate", "candidate"}:
+        resume.name = name[:120]
+
+    email = (extracted.get("email") or "").strip()
+    if email:
+        resume.email = email[:255]
+
+    phone = (extracted.get("phone") or "").strip()
+    if phone:
+        resume.phone = phone[:255]
+
+    location = (extracted.get("location") or "").strip()
+    if location:
+        resume.location = location[:255]
+
+    skills = extracted.get("skills") or []
+    key_skills = extracted.get("key_skills") or (skills[:15] if skills else [])
+    primary_skills = extracted.get("primary_skills") or []
+    other_skills = extracted.get("other_skills") or []
+
+    resume.skills = _dump_text_list(skills)
+    resume.key_skills = _dump_text_list(key_skills)
+    resume.primary_skills = _dump_text_list(primary_skills)
+    resume.other_skills = _dump_text_list(other_skills)
+    resume.raw_skills_text = extracted.get("raw_skills_text") or resume.raw_skills_text
+
+    yrs = float(extracted.get("experience_years") or 0.0)
+    if yrs > 0:
+        resume.experience_years = yrs
+        resume.total_experience_years = float(extracted.get("total_experience_years") or yrs)
+        resume.experience_level = extracted.get("experience_level") or resume.experience_level
+        resume.internship_present = bool(extracted.get("internship_present") or False)
+        resume.experience_notes = extracted.get("experience_notes") or resume.experience_notes
+        resume.experience_summary = extracted.get("experience_summary") or resume.experience_summary
+
+    summary = extracted.get("summary") or ""
+    if summary:
+        resume.summary = summary
+
+    current_role = extracted.get("current_role") or ""
+    if current_role:
+        resume.role = current_role
+
+    companies = extracted.get("companies_worked_at") or []
+    if companies:
+        resume.companies_worked_at = ", ".join(str(x).strip() for x in companies if str(x).strip()) or None
+
+    important_keywords = extracted.get("important_keywords") or []
+    if important_keywords:
+        resume.important_keywords = ", ".join(str(x).strip() for x in important_keywords if str(x).strip()) or None
+
+    resume.experience_line = extracted.get("experience_line") or resume.experience_line
+    if extracted.get("experience_tags"):
+        resume.experience_tags = ", ".join(str(x).strip() for x in extracted.get("experience_tags") if str(x).strip()) or None
+
+    embedding_text = _sanitize_embedding_text(
+        "\n".join(
+            [
+                f"Name: {resume.name or ''}",
+                f"Email: {resume.email or ''}",
+                f"Phone: {resume.phone or ''}",
+                f"Location: {resume.location or ''}",
+                f"Skills: {', '.join(_parse_text_list(resume.skills))}",
+                f"Experience: {resume.experience_years or 0} years",
+                f"Summary: {resume.experience_summary or ''}",
+                f"Education: {', '.join(_parse_text_list(resume.education))}",
+                f"Role: {resume.role or ''}",
+                f"Companies: {resume.companies_worked_at or ''}",
+                f"Keywords: {resume.important_keywords or ''}",
+            ]
+        ).strip()
+    )
+    try:
+        old_vector_id = resume.vector_id
+        vector_id, embedding = _encode_embedding(embedding_text)
+        if old_vector_id:
+            try:
+                _get_embedding_manager().collection.delete(ids=[old_vector_id])
+            except Exception:
+                pass
+        _chroma_add(vector_id, embedding, embedding_text, resume.source_file or "", resume.name or "")
+        resume.vector_id = vector_id
+    except Exception as exc:
+        logger.debug("Embedding refresh skipped for %s: %s", resume.source_file, exc)
+
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+    return {
+        "updated": True,
+        "resume": _resume_to_dict(resume),
+    }
+
+
+@app.post("/resumes/backfill-extractions", tags=["Resumes"])
+def backfill_extractions(
+    resume_ids: Optional[str] = None,
+    limit: int = 0,
+    db: Session = Depends(get_db),
+):
+    """
+    Re-run extraction for existing uploaded resumes using the stored source files.
+    If resume_ids is omitted, all active resumes with source files are processed.
+    """
+    query = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
+    if resume_ids:
+        id_list = [x.strip() for x in resume_ids.split(",") if x.strip()]
+        if not id_list:
+            raise HTTPException(status_code=400, detail="resume_ids was provided but empty")
+        query = query.filter(ResumeDB.id.in_(id_list))
+    if limit and limit > 0:
+        query = query.limit(limit)
+
+    rows = query.all()
+    if not rows:
+        return {"updated_count": 0, "skipped_count": 0, "results": []}
+
+    results = []
+    updated_count = 0
+    skipped_count = 0
+    for resume in rows:
+        try:
+            payload = _rebuild_resume_from_source(resume)
+            results.append({"resume_id": str(resume.id), **payload})
+            if payload.get("updated"):
+                updated_count += 1
+            else:
+                skipped_count += 1
+        except Exception as exc:
+            skipped_count += 1
+            results.append(
+                {
+                    "resume_id": str(resume.id),
+                    "updated": False,
+                    "reason": "error",
+                    "message": str(exc),
+                }
+            )
+
+    return {
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "processed_count": len(rows),
+        "results": results,
+    }
+
+
 @app.get("/resumes/compare", tags=["Resumes"])
 def compare_resumes(
     ids: str,
@@ -1494,30 +2570,70 @@ def compare_resumes(
     id_list = [x.strip() for x in ids.split(",") if x.strip()][:5]
     if not id_list:
         raise HTTPException(status_code=400, detail="ids required")
-    rows = db.query(ResumeDB).filter(
-        ResumeDB.id.in_(id_list), ResumeDB.deleted_at == None
-    ).all()
-    result = [_resume_to_dict(r) for r in rows]
+    
+    result = []
+    for x in id_list:
+        is_uuid = False
+        try:
+            uuid.UUID(x)
+            is_uuid = True
+        except ValueError:
+            pass
+            
+        if is_uuid:
+            r = db.query(ResumeDB).filter(ResumeDB.id == x, ResumeDB.deleted_at == None).first()
+            if r:
+                result.append(_resume_to_dict(r))
+        else:
+            # Try to fetch from employees table!
+            emp_row = db.execute(text(
+                "SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills, d.title as designation "
+                "FROM employees e "
+                "LEFT JOIN designations d ON e.designation_id = d.id "
+                "WHERE CAST(e.id AS VARCHAR) = :eid"
+            ), {"eid": x}).first()
+            
+            if emp_row:
+                # Calculate experience from date_of_joining if available
+                doj_row = db.execute(text("SELECT date_of_joining FROM employees WHERE id = :eid"), {"eid": emp_row[0]}).scalar()
+                experience_years = 0.0
+                if doj_row:
+                    import datetime
+                    if isinstance(doj_row, str):
+                        try:
+                            doj_dt = datetime.datetime.strptime(doj_row, "%Y-%m-%d").date()
+                        except Exception:
+                            doj_dt = None
+                    else:
+                        doj_dt = doj_row
+                        
+                    if doj_dt:
+                        experience_years = round((datetime.date.today() - doj_dt).days / 365.25, 1)
+
+                emp_dict = {
+                    "id": str(emp_row[0]),
+                    "name": f"{emp_row[1]} {emp_row[2]} (Employee)",
+                    "email": emp_row[3] or "",
+                    "skills": [s.strip() for s in (emp_row[4] or "").split(",") if s.strip()],
+                    "primary_skills": [s.strip() for s in (emp_row[4] or "").split(",") if s.strip()][:3],
+                    "experience_years": experience_years,
+                    "role": emp_row[5] or "Employee",
+                    "summary": f"Active employee. Role: {emp_row[5] or 'N/A'}.",
+                    "experience_summary": f"Worked as {emp_row[5] or 'Employee'} since {doj_row}."
+                }
+                result.append(emp_dict)
+
     if job_description and result:
         for r in result:
-            # Provide richer evidence for fit analysis without changing API shape.
             skills = ", ".join((r.get("skills") or [])[:30])
-            key_skills = ", ".join((r.get("key_skills") or [])[:15])
             primary = ", ".join((r.get("primary_skills") or [])[:10])
-            tags = ", ".join((r.get("experience_tags") or [])[:15])
-            companies = ", ".join((r.get("companies_worked_at") or [])[:8])
-            education = ", ".join((r.get("education") or [])[:6])
             context = "\n".join(
                 [
                     f"Name: {r.get('name','')}",
                     f"Role: {r.get('role','')}",
                     f"Experience: {r.get('experience_years')} years",
                     f"Primary skills: {primary}",
-                    f"Key skills: {key_skills}",
                     f"Skills: {skills}",
-                    f"Experience tags: {tags}",
-                    f"Companies: {companies}",
-                    f"Education: {education}",
                     f"Summary: {r.get('summary','')}",
                     f"Experience summary: {r.get('experience_summary','')}",
                 ]
@@ -1525,7 +2641,9 @@ def compare_resumes(
             fit = analyze_fit(job_description, context)
             r["fit_score"] = fit.get("score_1_10")
             r["fit_summary"] = fit.get("fit_summary", "")
+            
     return result
+
 
 
 @app.get("/resumes/by-field", tags=["Resumes"])
@@ -1542,7 +2660,7 @@ def list_resumes_by_field(
     if not field_norm:
         raise HTTPException(status_code=400, detail="field required")
 
-    # Map UI field → canonical token we can expand
+    # Map UI field -> canonical token we can expand
     field_to_token = {
         ".net": ".net",
         "dotnet": ".net",
@@ -1574,7 +2692,7 @@ def list_resumes_by_field(
             "experience_years": r.experience_years,
             "primary_skills": [s.strip() for s in (_safe_get(r, "primary_skills") or "").split(",") if s.strip()],
             "resume_link": r.resume_link,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         }
         for r in rows
     ]
@@ -1595,22 +2713,22 @@ def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
 async def get_resume(resume_id: str, db: Session = Depends(get_db)):
     resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
     if resume and resume.source_file:
-        file_path = os.path.join(UPLOAD_DIR, resume.source_file)
-        if os.path.exists(file_path):
+        file_path = _resolve_resume_file_path(resume.source_file, trusted=True)
+        if file_path and os.path.exists(file_path):
             return FileResponse(
                 file_path,
                 filename=resume.source_file,
-                media_type="application/pdf",
+                media_type=_resume_file_media_type(resume.source_file),
             )
     raise HTTPException(status_code=404, detail="Resume file not found")
 
 
 @app.get("/files/{filename}", tags=["Files"])
 def serve_file(filename: str):
-    file_path = os.path.join(UPLOAD_DIR, filename)
-    if not os.path.exists(file_path):
+    file_path = _resolve_resume_file_path(filename)
+    if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path=file_path, media_type="application/pdf")
+    return FileResponse(path=file_path, media_type=_resume_file_media_type(filename))
 
 
 # ---------------------------------------------------------------------------
@@ -1657,13 +2775,103 @@ def bulk_delete(body: BulkDeleteRequest, db: Session = Depends(get_db)):
         # Remove vector from ChromaDB if present
         if getattr(r, "vector_id", None):
             try:
-                embedding_manager.collection.delete(ids=[r.vector_id])
+                _get_embedding_manager().collection.delete(ids=[r.vector_id])
             except Exception:
                 pass
         # Hard delete candidate row so it is fully removed from the database
         db.delete(r)
     db.commit()
     return {"status": "ok", "deleted_count": len(body.resume_ids)}
+
+
+@app.put("/resumes/{resume_id}/details", tags=["Resumes"])
+def update_candidate_details(
+    resume_id: str,
+    details: CandidateDetailsUpdate,
+    db: Session = Depends(get_db)
+):
+    try:
+        r_id = uuid.UUID(resume_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    r = db.query(ResumeDB).filter(ResumeDB.id == r_id, ResumeDB.deleted_at == None).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    if details.name is not None:
+        r.name = details.name
+    if details.email is not None:
+        r.email = details.email
+    if details.phone is not None:
+        r.phone = details.phone
+    if details.role is not None:
+        r.role = details.role
+    if details.experience_years is not None:
+        r.experience_years = details.experience_years
+    if details.total_experience_years is not None:
+        r.total_experience_years = details.total_experience_years
+    if details.experience_level is not None:
+        r.experience_level = details.experience_level
+    if details.experience_summary is not None:
+        r.experience_summary = details.experience_summary
+    if details.experience_notes is not None:
+        r.experience_notes = details.experience_notes
+    if details.summary is not None:
+        r.summary = details.summary
+    if details.skills is not None:
+        r.skills = _csv_join(details.skills)
+    if details.key_skills is not None:
+        r.key_skills = _csv_join(details.key_skills)
+    if details.primary_skills is not None:
+        r.primary_skills = _csv_join(details.primary_skills)
+    if details.other_skills is not None:
+        r.other_skills = _csv_join(details.other_skills)
+    if details.education is not None:
+        r.education = _csv_join(details.education)
+    if details.projects is not None:
+        r.projects = _csv_join(details.projects)
+    if details.companies_worked_at is not None:
+        r.companies_worked_at = _csv_join(details.companies_worked_at)
+    if details.important_keywords is not None:
+        r.important_keywords = _csv_join(details.important_keywords)
+    if details.current_salary is not None:
+        r.current_salary = details.current_salary
+    if details.expected_salary is not None:
+        r.expected_salary = details.expected_salary
+    if details.notice_period is not None:
+        r.notice_period = details.notice_period
+    if details.availability_ftf is not None:
+        r.availability_ftf = details.availability_ftf
+    if details.current_company is not None:
+        r.current_company = details.current_company
+    if details.location is not None:
+        r.location = details.location
+    if details.ready_to_relocate is not None:
+        r.ready_to_relocate = details.ready_to_relocate
+    if details.reason_job_change is not None:
+        r.reason_job_change = details.reason_job_change
+    # ATS / Candidate Overview fields
+    if details.candidate_status is not None:
+        r.candidate_status = details.candidate_status
+    if details.employment_type is not None:
+        r.employment_type = details.employment_type
+    if details.preferred_location is not None:
+        r.preferred_location = details.preferred_location
+    if details.resume_score is not None:
+        r.resume_score = details.resume_score
+    if details.remarks is not None:
+        r.remarks = details.remarks
+    if details.candidate_source is not None:
+        r.candidate_source = details.candidate_source
+    if details.qualification is not None:
+        r.qualification = details.qualification
+    if details.college_name is not None:
+        r.college_name = details.college_name
+
+    db.commit()
+    db.refresh(r)
+    return _resume_to_dict(r)
 
 
 # ---------------------------------------------------------------------------
@@ -1688,7 +2896,7 @@ def get_notes(resume_id: str, db: Session = Depends(get_db)):
             "id": str(n.id),
             "note": n.note,
             "status": n.status,
-            "created_at": n.created_at.isoformat() if n.created_at else None,
+            "created_at": (n.created_at.isoformat() + "Z") if n.created_at else None,
         }
         for n in notes
     ]
@@ -1729,7 +2937,7 @@ def delete_note(resume_id: str, note_id: str, db: Session = Depends(get_db)):
 # Chat endpoints
 # ---------------------------------------------------------------------------
 
-# Skill/keyword groups for candidate search (query → DB filter)
+# Skill/keyword groups for candidate search (query -> DB filter)
 _SEARCH_SKILL_GROUPS = {
     "dotnet": [".net", "dotnet", "asp.net", "c#", "c sharp", "asp.net core", "entity framework"],
     "python": ["python", "django", "flask", "fastapi", "pandas", "numpy"],
@@ -1739,27 +2947,59 @@ _SEARCH_SKILL_GROUPS = {
     "devops": ["devops", "docker", "kubernetes", "aws", "azure", "ci/cd"],
 }
 
-def _extract_search_intent(question: str) -> tuple[list[str], float]:
+def _extract_search_intent(question: str) -> tuple[list[str], float, float | None]:
     """
-    Detect if the question is a candidate search and extract skill keywords and min experience.
-    Returns (list of search terms for DB ilike, min_experience in years or 0).
+    Detect if the question is a candidate search and extract skill keywords plus an experience range.
+    Returns (list of search terms for DB ilike, min_experience in years, max_experience if specified).
     """
     q = (question or "").lower().strip()
     search_terms: list[str] = []
     min_exp = 0.0
+    max_exp: float | None = None
 
-    # Min experience: e.g. "3+ years", "1 year", "5 years experience"
-    exp_match = re.search(r"(\d+)\s*\+\s*years?", q)
-    if exp_match:
-        min_exp = float(exp_match.group(1))
+    # Experience patterns:
+    # - "3+ years"
+    # - "1 year"
+    # - "0-1 year" / "0 to 1 years"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*years?", q)
+    if range_match:
+        min_exp = float(range_match.group(1))
+        max_exp = float(range_match.group(2))
+        if max_exp < min_exp:
+            min_exp, max_exp = max_exp, min_exp
     else:
-        exp_match = re.search(r"(?:with|having)?\s*(\d+)\s*years?\s*(?:experience|exp)?", q)
+        exp_match = re.search(r"(\d+(?:\.\d+)?)\s*\+\s*years?", q)
         if exp_match:
             min_exp = float(exp_match.group(1))
+        else:
+            exp_match = re.search(r"(?:with|having)?\s*(\d+(?:\.\d+)?)\s*years?\s*(?:experience|exp)?", q)
+            if exp_match:
+                min_exp = float(exp_match.group(1))
 
     for key, tokens in _SEARCH_SKILL_GROUPS.items():
-        if any(t in q for t in tokens):
-            search_terms.extend(tokens)
+        matched = [t for t in tokens if t in q]
+        if matched:
+            # Keep the query narrow. If the user asks for TypeScript, do not
+            # expand into the whole frontend bucket (React/Angular/Vue/HTML/CSS).
+            if key == "frontend":
+                if "typescript" in matched:
+                    search_terms.extend(["typescript", "ts"])
+                elif "javascript" in matched:
+                    search_terms.extend(["javascript", "js"])
+                elif "react" in matched:
+                    search_terms.extend(["react", "reactjs", "react.js", "next.js", "nextjs"])
+                elif "angular" in matched:
+                    search_terms.extend(["angular"])
+                elif "vue" in matched:
+                    search_terms.extend(["vue"])
+                elif "html" in matched:
+                    search_terms.extend(["html"])
+                elif "css" in matched:
+                    search_terms.extend(["css"])
+                elif "frontend" in matched:
+                    search_terms.extend(["frontend"])
+            else:
+                search_terms.extend(matched)
     # Also single-word tech mentions
     for word in ["developer", "developers", "candidates", "show", "find", "list"]:
         q = q.replace(word, " ")
@@ -1769,34 +3009,37 @@ def _extract_search_intent(question: str) -> tuple[list[str], float]:
             if any(tech in w or w in tech for tech in [".net", "python", "react", "java", "node", "sql", "vue", "angular"]):
                 search_terms.append(w)
     search_terms = list(dict.fromkeys(search_terms))[:15]  # dedupe, cap
-    return search_terms, min_exp
-
+    return search_terms, min_exp, max_exp
 
 def _db_search_candidates(
     db: Session,
     skill_terms: list[str],
     min_experience: float,
+    max_experience: float | None = None,
     limit: int = 50,
 ) -> list:
-    """Return resume ORM objects matching any of the skill terms and optional min experience."""
-    if not skill_terms and min_experience <= 0:
+    """Return resume ORM objects matching any of the skill terms and optional experience range."""
+    if not skill_terms and min_experience <= 0 and max_experience is None:
         return []
     q = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
     if min_experience > 0:
         q = q.filter(ResumeDB.experience_years >= min_experience)
+    if max_experience is not None:
+        q = q.filter(ResumeDB.experience_years <= max_experience)
     rows = q.order_by(ResumeDB.created_at.desc()).limit(limit * 2).all()  # fetch extra then filter
     if not skill_terms:
         return rows[:limit]
     combined = []
     for r in rows:
+        # For skill lookups, match only the explicit skill columns.
+        # Projects / summary text can mention technologies in narrative form
+        # and should not make a candidate appear as a skill match.
         blob = " ".join([
             (r.skills or ""),
             (_safe_get(r, "primary_skills") or ""),
             (_safe_get(r, "key_skills") or ""),
-            (r.experience_summary or ""),
-            (r.projects or ""),
         ]).lower()
-        if any(term in blob for term in skill_terms):
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", blob) for term in skill_terms):
             combined.append(r)
     return combined[:limit]
 
@@ -1821,15 +3064,13 @@ def _apply_skill_filter(question: str, resumes: list) -> list:
             str(r.skills or ""),
             str(_safe_get(r, "primary_skills") or ""),
             str(_safe_get(r, "key_skills") or ""),
-            str(r.experience_summary or ""),
-            str(r.projects or ""),
         ]).lower()
-        if any(tok in blob for tok in must_tokens):
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(tok)}(?![a-z0-9])", blob) for tok in must_tokens):
             filtered.append(r)
     return filtered if filtered else resumes
 
 
-def _resume_row_for_chat(r: ResumeDB) -> dict:
+def _resume_row_for_chat(r: ResumeDB, *, match_score: float | None = None) -> dict:
     """One row for global chat best_matches table (same shape as resume table for consistent UI)."""
     primary = [
         s.strip() for s in (_safe_get(r, "primary_skills") or "").split(",") if s.strip()
@@ -1846,16 +3087,44 @@ def _resume_row_for_chat(r: ResumeDB) -> dict:
             s.strip() for s in (_safe_get(r, "companies_worked_at") or "").split(",") if s.strip()
         ]),
         "resume_link": r.resume_link,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
         "is_shortlisted": getattr(r, "is_shortlisted", False) or False,
         "skills": r.skills,
+        "match_score": match_score,
     }
 
 
 def _encode_question(question: str):
     """Blocking: encode question for vector search. Run in thread pool."""
-    q_vec = embedding_manager.embedder.encode(question)
+    q_vec = _get_embedding_manager().embedder.encode(question)
     return q_vec[0] if len(q_vec.shape) == 2 else q_vec
+
+
+def _safe_chroma_query(query_embeddings, n_results: int) -> dict:
+    """
+    Best-effort Chroma query wrapper.
+    If the collection has an internal metadata/segment problem, return an empty
+    result instead of failing the whole chat request.
+    """
+    try:
+        collection = getattr(_get_embedding_manager(), "collection", None)
+        if collection is None:
+            return {}
+        return collection.query(query_embeddings=query_embeddings, n_results=n_results)
+    except Exception as exc:
+        logger.warning("Chroma query skipped after failure: %s", exc)
+        return {}
+
+
+def _safe_chroma_count() -> int:
+    try:
+        collection = getattr(_get_embedding_manager(), "collection", None)
+        if collection is None:
+            return 0
+        return int(collection.count())
+    except Exception as exc:
+        logger.warning("Chroma count skipped after failure: %s", exc)
+        return 0
 
 
 @app.post("/chat", tags=["Chat"])
@@ -1865,61 +3134,33 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
         return {"answer": "Please ask a question."}
 
     # Detect candidate-search intent and run DB search for multiple matches
-    skill_terms, min_exp = _extract_search_intent(question)
-    is_search_like = bool(skill_terms or min_exp > 0) or any(
+    skill_terms, min_exp, max_exp = _extract_search_intent(question)
+    is_search_like = bool(skill_terms or min_exp > 0 or max_exp is not None) or any(
         x in question.lower() for x in ["show", "find", "list", "candidates", "developers", "who has"]
     )
 
-    # Vector search: run embedding encode in thread pool to avoid blocking the event loop
     executor = getattr(request.app.state, "executor", None)
     loop = asyncio.get_event_loop()
-    if executor:
-        q_vec = await loop.run_in_executor(executor, _encode_question, question)
-    else:
-        q_vec = _encode_question(question)
 
-    try:
-        coll_count = embedding_manager.collection.count()
-    except Exception:
-        coll_count = 25
-    n_vector = 25
-    n_results = min(n_vector, max(1, coll_count))
-    results = embedding_manager.collection.query(
-        query_embeddings=[q_vec.tolist()], n_results=n_results
-    )
-
-    vector_resumes: list = []
-    if results.get("metadatas") and results["metadatas"][0]:
-        vector_ids = [m.get("vector_id") for m in results["metadatas"][0] if m.get("vector_id")]
-        if vector_ids:
-            rows = db.query(ResumeDB).filter(ResumeDB.vector_id.in_(vector_ids)).all()
-            by_vid = {r.vector_id: r for r in rows if r.vector_id}
-            vector_resumes = [by_vid[vid] for vid in vector_ids if vid in by_vid]
-
-    # When search-like, also run DB filter by skills/experience and merge with vector results
+    # Keep chat independent from Chroma/embedding persistence. Search-like
+    # questions are answered from stored resume rows only.
     seen_ids = set()
     merged: list = []
-    if is_search_like and (skill_terms or min_exp > 0):
-        db_resumes = _db_search_candidates(db, skill_terms, min_exp, limit=50)
+    if is_search_like and (skill_terms or min_exp > 0 or max_exp is not None):
+        db_resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
         for r in db_resumes:
             if r.id not in seen_ids:
                 seen_ids.add(r.id)
                 merged.append(r)
-    for r in vector_resumes:
-        if r.id not in seen_ids:
-            seen_ids.add(r.id)
-            merged.append(r)
-    if not merged and vector_resumes:
-        merged = vector_resumes
     resumes = _apply_skill_filter(question, merged) if merged else merged
-    if not resumes and vector_resumes:
-        resumes = vector_resumes
+    if not resumes and is_search_like and skill_terms:
+        resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
+    if not resumes and is_search_like:
+        resumes = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).limit(50).all()
 
     if not resumes:
         return {"answer": "No matching candidates found.", "best_matches": []}
 
-    # Deterministic ranking: combine embedding shortlist with skill/experience relevance.
-    # (No response shape changes; only ordering changes.)
     if is_search_like and resumes:
         terms = [t.strip().lower() for t in (skill_terms or []) if t and t.strip()][:25]
 
@@ -1945,15 +3186,25 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
                 y = 0.0
             if min_exp and y >= float(min_exp):
                 score += 8.0
+            if max_exp is not None and y <= float(max_exp):
+                score += 8.0
             # Penalty for tool-dump strings (lots of commas / extremely long skills blobs)
             if len(skills_blob) > 900 or skills_blob.count(",") > 60:
                 score -= 4.0
             return score
 
-        resumes = sorted(resumes, key=_rank_score, reverse=True)
+        scored_resumes = [(r, _rank_score(r)) for r in resumes]
+        scored_resumes.sort(key=lambda item: item[1], reverse=True)
 
-    # Return table-ready rows for all matched candidates (up to 50)
-    best_matches = [_resume_row_for_chat(r) for r in resumes[:50]]
+        # Return table-ready rows for all matched candidates (up to 50)
+        top_scores = [score for _, score in scored_resumes[:50]]
+        max_score = max(top_scores) if top_scores else 0.0
+        best_matches = [
+            _resume_row_for_chat(r, match_score=round((score / max_score) * 100) if max_score > 0 else 0)
+            for r, score in scored_resumes[:50]
+        ]
+    else:
+        best_matches = [_resume_row_for_chat(r) for r in resumes[:50]]
 
     # For search-like questions, deterministic summary; otherwise run LLM in thread pool
     if is_search_like:
@@ -1963,11 +3214,11 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
             nm = (m.get("name") or "").strip() or (m.get("email") or "").strip() or f"Candidate {i}"
             exp = m.get("experience_years")
             try:
-                exp_s = f"{float(exp):g} yr" if exp is not None else "—"
+                exp_s = f"{float(exp):g} yr" if exp is not None else "N/A"
             except Exception:
-                exp_s = "—"
-            skills = (m.get("primary_skills") or "").strip() or "—"
-            lines.append(f"{i}. {nm} • Exp: {exp_s} • Skills: {skills}")
+                exp_s = "N/A"
+            skills = (m.get("primary_skills") or "").strip() or "N/A"
+            lines.append(f"{i}. {nm} | Exp: {exp_s} | Skills: {skills}")
         answer = "\n".join(lines)
     else:
         context = ""
@@ -2134,3 +3385,339 @@ async def upload_bulk_zip(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
     return results
+
+
+class ExportSheetsRequest(BaseModel):
+    sheet_name: str
+    creds_json: str
+
+@app.post("/resumes/export-sheets", tags=["Resumes"])
+def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
+    try:
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Google Sheets export dependencies are missing. Install gspread and oauth2client."
+        )
+
+    # 1. Fetch resumes
+    candidates = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).all()
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No resumes found in the database.")
+
+    # 2. Structure data
+    rows_data = []
+    for c in candidates:
+        rows_data.append({
+            "id": str(c.id),
+            "candidate_name": c.name or "",
+            "email": c.email or "",
+            "phone": c.phone or "",
+            "primary_skills": c.primary_skills or c.key_skills or c.skills or "",
+            "other_skills": c.other_skills or "",
+            "experience": float(c.experience_years or 0.0),
+            "resume_link": c.resume_link or "",
+            "created_at": (c.created_at.isoformat() + "Z") if c.created_at else "",
+        })
+    df = pd.DataFrame(rows_data)
+
+    # 3. Authenticate and connect
+    try:
+        creds_dict = json.loads(req.creds_json.strip())
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+            creds_dict, scopes=scope
+        )
+        client = gspread.authorize(credentials)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="The pasted credentials are not valid JSON.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+
+    try:
+        sh = client.open(req.sheet_name.strip())
+    except gspread.SpreadsheetNotFound:
+        try:
+            sh = client.create(req.sheet_name.strip())
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to create spreadsheet: {str(e)}")
+
+    try:
+        ws = sh.sheet1
+    except Exception:
+        ws = sh.add_worksheet(title="Sheet1", rows="1000", cols="20")
+
+    # 4. Get existing IDs
+    try:
+        vals = ws.col_values(1) if ws.get_all_values() else []
+    except Exception:
+        vals = []
+        
+    existing_ids = set()
+    if vals:
+        existing_ids = {str(v).strip() for v in vals[1:] if str(v).strip()}
+
+    new_rows = df[~df["id"].isin(existing_ids)]
+    if not new_rows.empty:
+        headers = list(new_rows.columns)
+        rows = new_rows.values.tolist()
+        if not ws.get_all_values():
+            ws.append_row(headers)
+        ws.append_rows(rows, value_input_option="RAW")
+
+    return {"status": "success", "spreadsheet_url": sh.url}
+
+
+# ===========================================================================
+# Secure API Authentication & Employee Skills Endpoints
+# ===========================================================================
+
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt
+
+# Must be the SAME secret the HRMS app signs with, because this API is mounted
+# inside it and validates the tokens it issues. Read from the environment --
+# this used to be the literal "abc2025", a 7-character key committed to git,
+# which let anyone forge an Admin token for BOTH apps.
+def _resolve_shared_secret_key() -> str:
+    """Find the JWT secret the HRMS app signs with.
+
+    Checked in order, because load_dotenv() here may have picked up the
+    repo-root .env while the authoritative value lives in the HRMS backend's
+    own .env:
+      1. the process environment
+      2. the HRMS settings object, if it is importable (unified deployment)
+      3. the HRMS backend .env file, read directly
+    """
+    key = os.getenv("SECRET_KEY", "").strip()
+    if key:
+        return key
+
+    try:
+        from app.core.config import get_settings as _hrms_settings  # type: ignore
+        key = (_hrms_settings().secret_key or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    hrms_env = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "Attendance Management", "backend", ".env",
+    )
+    try:
+        with open(hrms_env, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("SECRET_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "SECRET_KEY is not set. The Resume Analyzer validates the JWTs the HRMS "
+        "app issues, so it must use the same secret. Set SECRET_KEY in the "
+        'environment or in "Attendance Management/backend/.env" (generate one '
+        'with: python -c "import secrets; print(secrets.token_urlsafe(64))").'
+    )
+
+
+SECRET_KEY = _resolve_shared_secret_key()
+ALGORITHM = "HS256"
+
+security_bearer = HTTPBearer(auto_error=False)
+
+def get_current_user_from_token(token: str, db: Session) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+            
+        user_res = db.execute(
+            text("SELECT id, username, employee_id, is_active FROM users WHERE id = :uid LIMIT 1"),
+            {"uid": int(user_id)}
+        ).first()
+        if not user_res:
+            return None
+        
+        if not user_res[3]:  # is_active check
+            return None
+            
+        roles_res = db.execute(
+            text("SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = :uid"),
+            {"uid": user_res[0]}
+        ).all()
+        roles = [row[0] for row in roles_res]
+        
+        return {
+            "id": user_res[0],
+            "username": user_res[1],
+            "employee_id": user_res[2],
+            "roles": roles
+        }
+    except Exception as e:
+        logger.error("Token validation error: %s", e)
+        return None
+
+
+def require_admin_or_hr(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+    db: Session = Depends(get_db)
+) -> dict:
+    token = None
+    if credentials:
+        token = credentials.credentials
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        token = request.cookies.get("token")
+        
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+        
+    user = get_current_user_from_token(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        
+    if not any(role in user["roles"] for role in ["Admin", "HR"]):
+        raise HTTPException(status_code=403, detail="Insufficient permissions: Admin or HR access required")
+        
+    return user
+
+
+@app.get("/employees/skills", tags=["Employee Skills"])
+def get_all_employee_skills(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Get skills of all employees.
+    """
+    query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        ORDER BY e.first_name, e.last_name
+    """
+    res = db.execute(text(query)).all()
+    results = []
+    for row in res:
+        results.append({
+            "employee_id": row[0],
+            "first_name": row[1],
+            "last_name": row[2],
+            "full_name": f"{row[1]} {row[2]}",
+            "email": row[3],
+            "skills": row[4] or ""
+        })
+    return results
+
+
+@app.get("/employees/skills/search", tags=["Employee Skills"])
+def search_employee_skills(
+    query: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Search employee skills by employee name or skill keyword.
+    """
+    sql_query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        WHERE LOWER(e.first_name) LIKE :q 
+           OR LOWER(e.last_name) LIKE :q 
+           OR LOWER(e.skills) LIKE :q
+        ORDER BY e.first_name, e.last_name
+    """
+    res = db.execute(text(sql_query), {"q": f"%{query.lower()}%"}).all()
+    results = []
+    for row in res:
+        results.append({
+            "employee_id": row[0],
+            "first_name": row[1],
+            "last_name": row[2],
+            "full_name": f"{row[1]} {row[2]}",
+            "email": row[3],
+            "skills": row[4] or ""
+        })
+    return results
+
+
+@app.get("/employees/{employee_id}/skills", tags=["Employee Skills"])
+def get_skills_by_employee(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin_or_hr)
+):
+    """
+    Get skills for a specific employee.
+    """
+    query = """
+        SELECT e.id, e.first_name, e.last_name, e.official_email, e.skills
+        FROM employees e
+        WHERE e.id = :eid
+        LIMIT 1
+    """
+    row = db.execute(text(query), {"eid": employee_id}).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Employee not found")
+        
+    return {
+        "employee_id": row[0],
+        "first_name": row[1],
+        "last_name": row[2],
+        "full_name": f"{row[1]} {row[2]}",
+        "email": row[3],
+        "skills": row[4] or ""
+    }
+
+
+@app.middleware("http")
+async def secure_endpoints_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if (
+        path.startswith("/resumes") or
+        path.startswith("/resume") or
+        path.startswith("/upload") or
+        path.startswith("/extract") or
+        path.startswith("/files")
+    ):
+        if path in ("/health", "/api-version"):
+            return await call_next(request)
+            
+        token = None
+        auth_hdr = request.headers.get("Authorization")
+        if auth_hdr and auth_hdr.startswith("Bearer "):
+            token = auth_hdr.split(" ")[1]
+        if not token:
+            token = request.query_params.get("token")
+        if not token:
+            token = request.cookies.get("token")
+            
+        if not token:
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            
+        db = SessionLocal()
+        try:
+            user = get_current_user_from_token(token, db)
+            if not user:
+                return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+            if not any(role in user["roles"] for role in ["Admin", "HR"]):
+                return JSONResponse(status_code=403, content={"detail": "Insufficient permissions: Admin or HR access required"})
+        finally:
+            db.close()
+            
+    return await call_next(request)
+
+
+
+

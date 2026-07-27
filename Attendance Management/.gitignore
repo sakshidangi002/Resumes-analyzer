@@ -1,0 +1,18 @@
+# Production frontend copy served by FastAPI (regenerate with build-frontend.bat)
+backend/frontend_build/**
+!backend/frontend_build/.gitkeep
+
+# PyInstaller
+backend/build/
+backend/dist/
+backend/*.spec
+release/
+
+# Python
+**/__pycache__/
+**/*.pyc
+backend/venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/

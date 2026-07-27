@@ -25,6 +25,20 @@ backend/resume.db
 backend/temp_*.pdf
 chromadb/
 
+# Runtime uploads (user resumes / PII — never commit)
+uploads/
+**/uploads/
+
+# Python virtualenvs (Attendance backend uses `venv`, not `.venv`)
+venv/
+**/venv/
+
+# Packaged release output & scratch
+release/
+**/release/
+**/scratch/
+**/*.spec
+
 # IDE
 .idea/
 .vscode/
@@ -34,3 +48,19 @@ chromadb/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node
+node_modules/
+**/node_modules/
+
+# Deploy sync (local SSH credentials)
+scripts/sync_to_server.json
+scripts/sync.log
+
+# Build artifacts (generated — shipped via package script, not committed)
+deploy/
+**/frontend_build/
+**/data/face_uploads/
+**/data/policy_attachments/
+**/data/resumes_data.xlsx
+**/chromadb_backup_*/

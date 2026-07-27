@@ -1,0 +1,56 @@
+# Web
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+aiofiles>=23.0.0
+
+# Database - PostgreSQL
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# Auth & security (uses native bcrypt in app/core/security.py)
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.1,<5
+python-multipart>=0.0.6
+
+# Validation & env
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+tomli; python_version < "3.11"
+
+# Email - SMTP
+# Standard library smtplib used; no extra package needed for basic SMTP
+
+# Reports
+openpyxl>=3.1.0
+
+# PDF generation (used for letter email attachments). Pure-Python, no native deps.
+fpdf2>=2.8.0
+beautifulsoup4>=4.12.0
+
+# Utils
+python-dotenv>=1.0.0
+jinja2>=3.1.0
+
+# Scheduled jobs (daily 5 PM IST DSR reminder etc.)
+apscheduler>=3.10.4
+tzdata>=2024.1
+
+# Web Push notifications (5 PM IST DSR reminder OS-level popup)
+pywebpush>=2.0.0
+
+
+# Face recognition / CCTV
+numpy>=1.24.0
+pillow>=10.0.0
+# IMPORTANT: use ONLY opencv-python (includes FFmpeg+RTSP).
+# Do NOT install opencv-python-headless or opencv-contrib-python alongside it
+# as they overwrite cv2.so and break FFmpeg/RTSP support.
+opencv-python>=4.8.0
+insightface>=0.7.3
+onnxruntime>=1.16.0
+scikit-image>=0.21.0
+# Person detection + tracking (YOLO11 + ByteTrack) for MONITOR cameras: draws a
+# box on every person in view and binds an employee name when a face matches.
+# Requires torch (already a dependency). Needs models/yolo11n.pt present.
+ultralytics>=8.0.0

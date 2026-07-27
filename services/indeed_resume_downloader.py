@@ -8,6 +8,7 @@ Constraints:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -22,6 +23,31 @@ logger = logging.getLogger(__name__)
 INDEED_ACCOUNT_BLOCKLIST = ("account.indeed.com",)
 INDEED_PREFERRED_SUBSTRINGS = ("employers.indeed.com/candidates",)
 INDEED_REQUIRED_SUBSTRING = "employers.indeed.com/candidates/resume"
+
+# Shared browser fingerprint — MUST be identical between the login-setup script
+# and the downloader. Cloudflare binds its `cf_clearance` cookie to the exact
+# user-agent (and IP); if the login captures clearance under one UA and the
+# downloader replays it under another, Cloudflare rejects it and we get blocked
+# despite being logged in. Keep these in ONE place so they can never drift.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
+BROWSER_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+]
+
+
+def browser_context_kwargs(accept_downloads: bool = True) -> dict:
+    """Context settings shared by the login setup and the downloader."""
+    return {
+        "accept_downloads": accept_downloads,
+        "locale": "en-US",
+        "timezone_id": "Asia/Kolkata",
+        "viewport": {"width": 1365, "height": 768},
+        "user_agent": BROWSER_USER_AGENT,
+    }
 
 
 def normalize_indeed_resume_url(url: str) -> Optional[str]:
@@ -308,25 +334,60 @@ async def download_resume_with_playwright(
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=headless_mode,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                ],
+                args=list(BROWSER_LAUNCH_ARGS),
             )
-            context_kwargs = {
-                "accept_downloads": True,
-                "locale": "en-US",
-                "timezone_id": "Asia/Kolkata",
-                "viewport": {"width": 1365, "height": 768},
-                "user_agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-                ),
-            }
+            context_kwargs = browser_context_kwargs(accept_downloads=True)
             if use_storage_state and storage_state_ok:
                 context_kwargs["storage_state"] = storage_state_path
             context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
+
+            # ── Direct-download capture (Bonus) ────────────────────────────
+            # Prefer a direct file response over clicking the button. Indeed may
+            # stream the resume as a PDF/DOCX response (content-type or
+            # Content-Disposition: attachment) during page load. Capturing it
+            # avoids depending on the button's DOM and is faster/more reliable.
+            # Uses the SAME authenticated context, so no separate auth needed.
+            captured: dict = {"bytes": None, "ext": ""}
+
+            async def _on_response(resp):
+                if captured["bytes"] is not None:
+                    return
+                try:
+                    headers = await resp.all_headers()
+                except Exception:
+                    return
+                ctype = (headers.get("content-type") or "").lower()
+                disp = (headers.get("content-disposition") or "").lower()
+                ext = ""
+                if "application/pdf" in ctype or ".pdf" in disp:
+                    ext = ".pdf"
+                elif "wordprocessingml" in ctype or "msword" in ctype or ".docx" in disp:
+                    ext = ".docx"
+                elif "attachment" in disp:
+                    ext = ".pdf"
+                if not ext:
+                    return
+                try:
+                    body = await resp.body()
+                except Exception:
+                    return
+                if body and len(body) > 0:
+                    captured["bytes"] = body
+                    captured["ext"] = ext
+                    logger.info("Playwright: captured direct %s response (%d bytes) from %s",
+                                ext, len(body), (resp.url or "")[:120])
+
+            page.on("response", lambda r: asyncio.ensure_future(_on_response(r)))
+
+            async def _save_captured() -> str:
+                fname = _safe_basename(f"{uuid.uuid4().hex}{captured['ext']}")
+                out_path = os.path.join(save_dir, fname)
+                with open(out_path, "wb") as f:
+                    f.write(captured["bytes"])
+                logger.info("Playwright: saved direct-download resume -> %s", out_path)
+                return out_path
+
             try:
                 # Reduce basic bot signals (best-effort; not a full stealth plugin).
                 try:
@@ -353,6 +414,12 @@ async def download_resume_with_playwright(
                     await page.wait_for_timeout(350)
                 except Exception:
                     pass
+
+                # BONUS fast-path: if the page already streamed the resume file
+                # directly (no click needed), save it and return immediately.
+                if captured["bytes"] is not None:
+                    out_path = await _save_captured()
+                    return PlaywrightDownloadResult(ok=True, file_path=out_path, mode="direct", url=page.url or url)
 
                 if await _looks_blocked(page=page):
                     html_path = await _save_html_debug(page=page, save_dir=save_dir, prefix=prefix)
@@ -408,9 +475,18 @@ async def download_resume_with_playwright(
                         screenshot_debug_path=png_path,
                     )
 
-                async with page.expect_download(timeout=timeout_ms) as dl_info:
-                    await download_btn.first.click(timeout=timeout_ms)
-                dl = await dl_info.value
+                try:
+                    async with page.expect_download(timeout=timeout_ms) as dl_info:
+                        await download_btn.first.click(timeout=timeout_ms)
+                    dl = await dl_info.value
+                except Exception:
+                    # The click may have triggered an in-page fetch instead of a
+                    # browser download — fall back to the captured direct response.
+                    await page.wait_for_timeout(1500)
+                    if captured["bytes"] is not None:
+                        out_path = await _save_captured()
+                        return PlaywrightDownloadResult(ok=True, file_path=out_path, mode="direct", url=page.url or url)
+                    raise
 
                 suggested = (dl.suggested_filename or "").strip()
                 ext = os.path.splitext(suggested)[1].lower() if suggested else ""
@@ -452,28 +528,33 @@ async def download_resume_with_playwright(
                 except Exception:
                     pass
 
-    # Retry strategy (best-effort):
-    # 1) headless, no storage state
-    # 2) headed (often less blocked)
-    # 3) if available, use storage_state (headed then headless)
-    r1 = await attempt(headless_mode=headless, use_storage_state=False)
-    if r1.ok:
-        return r1
-    if "Blocked by Indeed" in (r1.error or "") and headless:
-        r2 = await attempt(headless_mode=False, use_storage_state=False)
-        if r2.ok:
-            return r2
-        if storage_state_ok:
-            r3 = await attempt(headless_mode=False, use_storage_state=True)
-            if r3.ok:
-                return r3
+    # Retry strategy, best shot first. Cloudflare + Indeed's employer login are
+    # both far more permissive to a HEADED browser carrying the logged-in session
+    # (which also holds the cf_clearance cookie captured during login), so try
+    # that first when a storage state exists; fall back through weaker combos.
+    attempts: list[tuple[bool, bool]] = []
     if storage_state_ok:
-        r4 = await attempt(headless_mode=headless, use_storage_state=True)
-        if r4.ok:
-            return r4
-        # Prefer the more informative error (usually includes blocked detection assets)
-        return r4 if (r4.html_debug_path or r4.screenshot_debug_path) else r1
-    return r1
+        attempts.append((False, True))   # headed + login  (best)
+        attempts.append((True, True))    # headless + login
+    attempts.append((False, False))      # headed, no login
+    attempts.append((headless, False))   # as-requested, no login
+
+    last: Optional[PlaywrightDownloadResult] = None
+    seen: set = set()
+    for headless_mode, use_ss in attempts:
+        key = (headless_mode, use_ss)
+        if key in seen:
+            continue
+        seen.add(key)
+        res = await attempt(headless_mode=headless_mode, use_storage_state=use_ss)
+        if res.ok:
+            return res
+        # Keep the most informative failure (one with debug artifacts).
+        if last is None or (res.html_debug_path or res.screenshot_debug_path):
+            last = res
+    return last or PlaywrightDownloadResult(
+        ok=False, file_path="", mode="playwright", url=url, error="all_attempts_failed"
+    )
 
 
 def _load_storage_state_path() -> str:

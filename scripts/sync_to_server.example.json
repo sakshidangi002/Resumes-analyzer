@@ -1,0 +1,10 @@
+{
+  "host": "192.168.1.50",
+  "port": 22,
+  "app_port": 5001,
+  "user": "Administrator",
+  "key_path": "C:/Users/YOUR_USER/.ssh/id_ed25519",
+  "remote_path": "C:/SoftwizApp",
+  "service_name": "SoftwizApp",
+  "restart_on_backend_change": true
+}

@@ -97,10 +97,7 @@ def enrich_upload_with_candidate(db: Session, upload_out: dict) -> Optional[dict
     status = upload_out.get("status")
     if status not in {"success", "duplicate"} or not rid:
         return None
-    try:
-        from backend.api import ResumeDB, _resume_to_dict
-    except ImportError:
-        from api import ResumeDB, _resume_to_dict  # type: ignore
+    from .api import ResumeDB, _resume_to_dict
     try:
         uid = UUID(str(rid))
     except Exception:

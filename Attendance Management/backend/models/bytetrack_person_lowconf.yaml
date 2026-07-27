@@ -1,0 +1,33 @@
+# PERMISSIVE ByteTrack config — for cameras mounted at a STEEP top-down angle.
+#
+# Use this only for cameras where people are seen from above/behind, hunched at a
+# desk with their body hidden by the chair. Measured on such a camera: real people
+# score only 0.11 - 0.13 (a well-aimed camera scores them 0.36 - 0.67). The normal
+# config's 0.30 bar therefore throws every real person away and the room shows
+# "People: 0" or 1.
+#
+# This config drops the bar to 0.10 so those people at least get DETECTED and
+# boxed (as "Person #N"). It is deliberately NOT used for well-aimed cameras,
+# where a 0.10 bar would start boxing empty chairs and giving them names.
+#
+# NOTE: this only fixes DETECTION. Identification still cannot work at this angle
+# — the face is 20-30 px, far below the ~80 px ArcFace needs.
+
+tracker_type: bytetrack
+
+# Real people here measure 0.11 - 0.13, so stage-1 must sit below that.
+track_high_thresh: 0.10
+
+# Stage-2: very weak boxes may only EXTEND an existing person's track.
+track_low_thresh: 0.04
+
+# Creating a track needs 0.10 — low enough to admit these people, and person-class
+# noise is rare in this scene (measured: at conf 0.03 the whole frame produced only
+# 2 person detections, both on a real person).
+new_track_thresh: 0.10
+
+# Frames (analysis ticks) a lost track is kept alive.
+track_buffer: 8
+
+match_thresh: 0.8
+fuse_score: true
