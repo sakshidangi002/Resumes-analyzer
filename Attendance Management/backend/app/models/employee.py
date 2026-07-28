@@ -1,8 +1,9 @@
 """Employee master, department, designation, bank details."""
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, Date, ForeignKey, Boolean, DateTime, Enum, Float, LargeBinary
+from sqlalchemy import Column, Integer, String, Date, ForeignKey, Boolean, DateTime, Enum, Float
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
+from app.core.encrypted_types import EncryptedBinary
 import enum
 
 
@@ -74,10 +75,10 @@ class Employee(Base):
     driving_license_number = Column(String(50), nullable=True)
     driving_license_expiry_date = Column(Date, nullable=True)
     photo_path = Column(String(500), nullable=True)
-    embedding = Column(LargeBinary, nullable=True)
+    embedding = Column(EncryptedBinary, nullable=True)
     sample_count = Column(Integer, default=0, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
+    updated_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, onupdate=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
 
     designation = relationship("Designation", back_populates="employees")
     department = relationship("Department", back_populates="employees")
@@ -106,8 +107,8 @@ class EmployeeBankDetail(Base):
     ifsc_code = Column(String(20), nullable=False)
     account_type = Column(String(20), default=AccountType.SAVINGS.value)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
+    updated_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, onupdate=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
 
     employee = relationship("Employee", back_populates="bank_details")
 

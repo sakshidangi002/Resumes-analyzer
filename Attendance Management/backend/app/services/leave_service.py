@@ -81,8 +81,19 @@ def count_hr_direct_paid_leave_days(
 
     Approved leave already increments ``used_days`` and sets matching attendance
     rows — counting those attendance rows again would double the used total.
+
+    Non-employee staff (housekeeping, security, …) are on a fixed salary with no
+    daily-hours target, so their short days are not leave at all and must not be
+    charged here. They typically hold a ZERO Paid-Leave allocation, so counting
+    them produced a nonsensical "3.5 used of 0 allocated" and a negative balance.
     """
     from app.models.attendance import AttendanceRecord
+    from app.core.staff_policy import is_fixed_salary_staff
+    from app.models.employee import Employee
+
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if employee is not None and is_fixed_salary_staff(employee):
+        return Decimal("0")
 
     approved_dates = _approved_leave_dates(
         db, employee_id, pl_leave_type_id, fy_start, fy_end

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { attendance as api, employees as employeesApi } from "../api/client";
 import CustomSelect from "../components/CustomSelect";
@@ -620,9 +620,29 @@ export default function Attendance() {
 
   const activeRoster = rosterTab === "staff" ? staffMembers : employees;
 
-  const employeeRows = [...activeRoster]
-    .sort((a, b) => (Number(a.employee_code) || 0) - (Number(b.employee_code) || 0))
-    .map(e => ({ info: e, rec: records.find(r => r.employee_id === e.id && r.date === selectedDate) }));
+  // Index the day's records by employee id, once.
+  //
+  // This used to be `records.find(...)` called from inside the .map() below —
+  // a linear scan of every record for every employee, so the cost was
+  // employees x records. A 200-person roster with a month of history is well
+  // over a million comparisons, and because none of this was memoised it ran
+  // again on EVERY render: each keystroke in the search box, every sort click.
+  // One pass to build the index, then O(1) lookups.
+  const recordsForSelectedDate = useMemo(() => {
+    const byEmployee = new Map<number, (typeof records)[number]>();
+    for (const r of records) {
+      if (r.date === selectedDate) byEmployee.set(r.employee_id, r);
+    }
+    return byEmployee;
+  }, [records, selectedDate]);
+
+  const employeeRows = useMemo(
+    () =>
+      [...activeRoster]
+        .sort((a, b) => (Number(a.employee_code) || 0) - (Number(b.employee_code) || 0))
+        .map(e => ({ info: e, rec: recordsForSelectedDate.get(e.id) })),
+    [activeRoster, recordsForSelectedDate],
+  );
 
   const dayCounts = employeeRows.reduce((acc, { rec }) => {
     const s = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");

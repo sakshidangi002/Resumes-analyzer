@@ -5,13 +5,12 @@ const apiBase = (rawBase == null || rawBase === "" ? "/api" : String(rawBase).re
 
 const api = axios.create({
   baseURL: apiBase,
+  withCredentials: true,
   headers: { "Content-Type": "application/json" },
   timeout: 15000, // 15 second timeout — prevents login from hanging indefinitely
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = "Bearer " + token;
   // For file uploads (FormData), drop the default application/json header so the
   // browser sets multipart/form-data with the correct boundary; otherwise the
   // backend can't parse the form fields (HTTP 422).
@@ -29,6 +28,17 @@ api.interceptors.request.use((config) => {
 // real navigation (/auth/me, /employees, …) and log out normally.
 const BACKGROUND_POLL_PATHS = ["/dvr/", "/recognize-", "/live/"];
 
+// Endpoints that ASK whether there is a session. A 401 from these is the normal
+// answer for a logged-out visitor, not an expired session, so it must never
+// trigger the redirect below.
+//
+// This matters because the session token is an HttpOnly cookie: JavaScript
+// cannot read it, so AuthContext has to probe /auth/me on every mount to find
+// out whether anyone is logged in. Treating that probe's 401 as "session lost"
+// meant: mount -> /auth/me -> 401 -> window.location.href -> full page reload
+// -> mount -> ... an endless refresh that never let the login form be used.
+const SESSION_PROBE_PATHS = ["/auth/me", "/auth/can-signup"];
+
 api.interceptors.response.use(
   (r) => r,
   (err) => {
@@ -37,16 +47,19 @@ api.interceptors.response.use(
       // Don't redirect if it's a login attempt, otherwise error message in Login.tsx disappears on refresh
       const isLoginRequest = url.includes("/auth/login");
       const isBackgroundPoll = BACKGROUND_POLL_PATHS.some((p) => url.includes(p));
+      const isSessionProbe = SESSION_PROBE_PATHS.some((p) => url.includes(p));
 
-      if (isBackgroundPoll) {
-        // Let the individual poller handle/ignore it; keep the session.
+      if (isBackgroundPoll || isSessionProbe) {
+        // Let the caller handle it; do not tear the page down.
         return Promise.reject(err);
       }
 
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-
-      if (!isLoginRequest) {
+      // Assigning window.location.href while already ON /login still performs a
+      // navigation, so any 401 raised from the login page would reload it — and
+      // reload it again on the next mount. Second line of defence against the
+      // loop above: only leave the page if we are not already there.
+      const alreadyOnLogin = window.location.pathname === "/login";
+      if (!isLoginRequest && !alreadyOnLogin) {
         window.location.href = "/login";
       }
     }
@@ -58,12 +71,18 @@ export default api;
 
 export const auth = {
   login: (username: string, password: string) =>
-    api.post("/auth/login", { username, password }),
+    api.post<{ access_token: string; token_type: string; user_id: number; username: string; roles: string[]; employee_id: number | null; employee_code?: string | null; designation?: string | null; must_change_password?: boolean }>("/auth/login", { username, password }),
   signup: (username: string, password: string, official_email?: string) =>
     api.post("/auth/signup", { username, password, official_email }),
   canSignup: () => api.get<{ allowed: boolean }>("/auth/can-signup"),
   me: () => api.get("/auth/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    api.post<{ detail: string; access_token: string; token_type: string }>(
+      "/auth/change-password",
+      { current_password, new_password },
+    ),
   forgotPassword: (username: string) => api.post("/auth/forgot-password", { username }),
+  logout: () => api.post("/auth/logout"),
 };
 
 export const users = {
@@ -409,6 +428,38 @@ export const activity = {
   delete: (id: number) => api.delete("/activity/notifications/" + id),
 };
 
+// Government IDs and bank account numbers arrive MASKED from the normal
+// employee endpoints. These two return the full value, are Admin/HR-only, and
+// write an audit row on every call — so only fetch them on explicit user action.
+export const sensitiveData = {
+  identifiers: (employeeId: number) =>
+    api.post<{
+      pan_number: string | null;
+      aadhar_number: string | null;
+      passport_number: string | null;
+      driving_license_number: string | null;
+    }>(`/employees/${employeeId}/sensitive`),
+  bankAccount: (employeeId: number) =>
+    api.post<{ account_number: string }>(`/employees/${employeeId}/bank/reveal`),
+};
+
+export type AuditLogRow = {
+  id: number;
+  user_id: number | null;
+  username: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  details: string | null;
+  ip_address: string | null;
+  created_at: string;
+};
+
+export const audit = {
+  list: (params?: { limit?: number; action?: string }) =>
+    api.get<AuditLogRow[]>("/audit", { params }),
+};
+
 export type OnboardingTaskRow = {
   id: number;
   employee_id: number;
@@ -596,8 +647,16 @@ export const cameras = {
   stop: (id: number) => api.post(`/cameras/${id}/stop`),
   restart: (id: number) => api.post(`/cameras/${id}/restart`),
   status: (id: number) => api.get(`/cameras/${id}/status`),
-  previewUrl: (id: number) => `/api/cameras/${id}/preview`,
-  streamUrl: (id: number) => `/api/cameras/${id}/stream.mjpg`,
+  // Live camera media is rendered by <img src>, which cannot send an
+  // Authorization header. Mint a short-lived scoped token and pass it as ?t=.
+  mediaToken: () =>
+    api.post<{ token: string; expires_in: number }>("/cameras/media-token"),
+  previewUrl: (id: number, token: string, nonce?: string | number) =>
+    `/api/cameras/${id}/preview?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
+  streamUrl: (id: number, token: string, nonce?: string | number) =>
+    `/api/cameras/${id}/stream.mjpg?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
   testConnection: (data: { source_url: string; source_type?: string }) =>
     api.post("/cameras/test-connection", data),
   stats: () => api.get("/cameras/stats"),
@@ -616,8 +675,11 @@ export const dvr = {
     api.post(`/dvr/cameras/${channelId}/recognition`, null, { params: { enabled } }),
   startAll: () => api.post("/dvr/cameras/start-all"),
   stopAll: () => api.post("/dvr/cameras/stop-all"),
-  previewUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/preview`,
-  streamUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/stream`,
+  previewUrl: (channelId: number, token: string, nonce?: string | number) =>
+    `/api/dvr/cameras/${channelId}/preview?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
+  streamUrl: (channelId: number, token: string) =>
+    `/api/dvr/cameras/${channelId}/stream?t=${encodeURIComponent(token)}`,
 };
 
 // ---- Employee ↔ HR Queries (Feature 2) ----

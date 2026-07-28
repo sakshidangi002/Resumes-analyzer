@@ -25,7 +25,7 @@ class LetterInstance(Base):
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
     template_id = Column(Integer, ForeignKey("letter_templates.id"), nullable=False)
     generated_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    generated_at = Column(DateTime, default=datetime.utcnow)
+    generated_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
     data_snapshot = Column(Text, nullable=True)  # JSON
     subject = Column(String(255), nullable=True)
     body = Column(Text, nullable=True)
@@ -44,6 +44,6 @@ class LetterReply(Base):
     author_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     author_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     message = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
 
     letter = relationship("LetterInstance", backref="replies")

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { cameras as camerasApi } from "../api/client";
+import { useMediaToken } from "../hooks/useMediaToken";
 
 // ─── DVR Discovery Types ─────────────────────────────────────────────────────
 type DiscoveredChannel = {
@@ -179,6 +180,8 @@ export default function CctvCameraManager() {
   // Preview modal
   const [previewId, setPreviewId] = useState<number | null>(null);
   const [previewTs, setPreviewTs] = useState(Date.now());
+  // Only mint media tokens while the preview modal is actually open.
+  const { mediaToken } = useMediaToken(previewId != null);
   const previewTimerRef = useRef<number | null>(null);
 
   // Delete confirm
@@ -797,18 +800,26 @@ export default function CctvCameraManager() {
           <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.85rem" }}>
             Camera #{previewId} – Live Preview (refreshes every 1.5s)
           </div>
-          <img
-            src={`${camerasApi.previewUrl(previewId)}?t=${previewTs}`}
-            alt="Camera preview"
-            style={{
-              maxWidth: "90vw", maxHeight: "75vh", borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.15)",
-              objectFit: "contain", background: "#000",
-            }}
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
-            }}
-          />
+          {/* Wait for the media token — rendering the <img> without one fires a
+              request the server rejects, and the onError below hides it. */}
+          {mediaToken ? (
+            <img
+              src={camerasApi.previewUrl(previewId, mediaToken, previewTs)}
+              alt="Camera preview"
+              style={{
+                maxWidth: "90vw", maxHeight: "75vh", borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.15)",
+                objectFit: "contain", background: "#000",
+              }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          ) : (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
+              Authorising preview…
+            </div>
+          )}
           <button style={btnStyle("secondary")} onClick={() => setPreviewId(null)}>✕ Close Preview</button>
         </div>
       )}

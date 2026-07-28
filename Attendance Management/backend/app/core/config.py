@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -27,6 +28,13 @@ class Settings(BaseSettings):
     # App
     app_name: str = "Attendance & HRMS"
     debug: bool = False
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        if isinstance(value, str) and value.strip().lower() in {"release", "production", "prod", "0", "false", "no"}:
+            return False
+        return value
 
     # PostgreSQL (override via .env on each system)
     postgres_host: str = "localhost"
@@ -51,6 +59,21 @@ class Settings(BaseSettings):
     # Long-lived session: the user stays logged in until they explicitly log
     # out (default 30 days). Override with ACCESS_TOKEN_EXPIRE_MINUTES.
     access_token_expire_minutes: int = 60 * 24 * 30
+
+    # Key used to encrypt stored face embeddings (see core/encrypted_types.py).
+    #
+    # SEPARATE from secret_key on purpose. These two keys have opposite
+    # lifecycles: a JWT secret SHOULD be rotated (the startup check nags about
+    # it, and rotating only forces users to log in again), whereas this one can
+    # never be rotated without re-enrolling every employee's face, because the
+    # embeddings already in the database can only be decrypted with the key that
+    # wrote them. Sharing one value silently turns routine JWT hygiene into
+    # destruction of biometric data.
+    #
+    # Empty falls back to secret_key so existing installations keep reading the
+    # rows they already have. Set EMBEDDING_ENCRYPTION_KEY before rotating
+    # SECRET_KEY: pin it to the OLD secret_key value and the embeddings survive.
+    embedding_encryption_key: str = ""
 
     # SMTP (simple SMTP for all email)
     smtp_host: str = "localhost"

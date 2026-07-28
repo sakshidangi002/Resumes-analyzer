@@ -71,6 +71,8 @@ def list_positions(
 def list_interview_questions(
     position: str | None = Query(None, description="Filter by exact hiring position"),
     search: str | None = Query(None, description="Search in title or position"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
@@ -86,7 +88,12 @@ def list_interview_questions(
                 func.lower(InterviewQuestion.position).like(like),
             )
         )
-    return q.order_by(InterviewQuestion.created_at.desc(), InterviewQuestion.id.desc()).all()
+    return (
+        q.order_by(InterviewQuestion.created_at.desc(), InterviewQuestion.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
 
 @router.post("", response_model=InterviewQuestionResponse)

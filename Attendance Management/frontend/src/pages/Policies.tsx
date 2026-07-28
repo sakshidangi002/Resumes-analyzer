@@ -10,21 +10,16 @@ import { SectionLoader } from "../components/LoadingState";
 import ConfirmModal from "../components/ConfirmModal";
 import RichTextEditor from "../components/RichTextEditor";
 import { formatDate } from "../utils/dateFormatter";
+import DOMPurify from "dompurify";
 
 // Policy text is authored by Admin/HR as rich HTML (bold/size). Strip anything
 // executable before rendering it to viewers.
 function sanitizeHtml(html: string): string {
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html || "";
-  tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta").forEach((n) => n.remove());
-  tpl.content.querySelectorAll("*").forEach((el) => {
-    Array.from(el.attributes).forEach((attr) => {
-      const name = attr.name.toLowerCase();
-      if (name.startsWith("on")) el.removeAttribute(attr.name);
-      if ((name === "href" || name === "src") && /^\s*javascript:/i.test(attr.value)) el.removeAttribute(attr.name);
-    });
+  return DOMPurify.sanitize(html || "", {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["style", "svg", "math", "iframe", "object", "embed", "form"],
+    FORBID_ATTR: ["srcdoc"],
   });
-  return tpl.innerHTML;
 }
 
 // Card excerpts must show readable prose, not the raw HTML the editor stores.

@@ -407,12 +407,20 @@ export default function PayrollManagement() {
     [structures, selectedMonth, selectedYear]
   );
 
+  // Index payslips by employee, so the row build below is a lookup rather than
+  // a scan of every payslip for every employee (employees x payslips).
+  const payslipsByEmployee = useMemo(() => {
+    const byEmployee = new Map<number, (typeof payslips)[number]>();
+    for (const p of payslips) byEmployee.set(p.employee_id, p);
+    return byEmployee;
+  }, [payslips]);
+
   const rows = useMemo(() => {
     return employees
       .filter((emp) => monthStructures.has(emp.id))
       .map((emp) => {
         const structure = monthStructures.get(emp.id)!;
-        const payslip = payslips.find((p) => p.employee_id === emp.id) ?? null;
+        const payslip = payslipsByEmployee.get(emp.id) ?? null;
         const gross = structureMonthlyGross(structure);
         return { employee: emp, structure, payslip, gross };
       })
@@ -427,7 +435,7 @@ export default function PayrollManagement() {
         }
         return ca.raw.localeCompare(cb.raw);
       });
-  }, [employees, monthStructures, payslips]);
+  }, [employees, monthStructures, payslipsByEmployee]);
 
   type PayrollRow = (typeof rows)[number];
 

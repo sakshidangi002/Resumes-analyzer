@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { recognition as recognitionApi, cameras as camerasApi } from "../api/client";
+import { useMediaToken } from "../hooks/useMediaToken";
 
 type FacePayload = {
   box: number[];
@@ -131,6 +132,8 @@ const panelStyle: React.CSSProperties = {
 export default function CctvAttendance() {
   const scanTimerRef = useRef<number | null>(null);
   const busyRef = useRef(false);
+  // Short-lived token for the <img>-rendered live feed (see useMediaToken).
+  const { mediaToken, mediaTokenError, refreshMediaToken } = useMediaToken();
   const [streamUrl, setStreamUrl] = useState("");
   const [cameraId, setCameraId] = useState("gate-1");
   const [cameraType, setCameraType] = useState("IN");
@@ -416,7 +419,6 @@ export default function CctvAttendance() {
               <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(true)}>Start auto-scan</button>
               <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(false)}>Stop auto-scan</button>
               <NavLink className="btn btn-secondary" to="/attendance">Review Attendance</NavLink>
-              <NavLink className="btn btn-secondary" to="/face-detection">Webcam Mode</NavLink>
               <NavLink className="btn btn-secondary" to="/cctv-cameras">📷 Camera Manager</NavLink>
             </div>
           </div>
@@ -454,11 +456,11 @@ export default function CctvAttendance() {
                   </button>
                 ) : null}
               </div>
-              {selectedCamId !== "" ? (
+              {selectedCamId !== "" && mediaToken ? (
                 <div ref={feedRef} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
                     key={`${selectedCamId}-${feedNonce}`}
-                    src={`${camerasApi.streamUrl(selectedCamId as number)}?n=${feedNonce}`}
+                    src={camerasApi.streamUrl(selectedCamId as number, mediaToken, feedNonce)}
                     alt="Live camera feed"
                     style={{ width: "100%", display: "block", objectFit: "contain", background: "#000" }}
                     onError={() => {
@@ -467,6 +469,9 @@ export default function CctvAttendance() {
                       if (feedRetryRef.current != null) return;
                       feedRetryRef.current = window.setTimeout(() => {
                         feedRetryRef.current = null;
+                        // Mint a fresh media token before retrying — an expired
+                        // one would otherwise fail identically on every retry.
+                        void refreshMediaToken();
                         setFeedNonce((n) => n + 1);
                       }, 2000);
                     }}
@@ -495,7 +500,13 @@ export default function CctvAttendance() {
                   </div>
                 </div>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>Select a camera to see live preview.</div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>
+                  {selectedCamId === ""
+                    ? "Select a camera to see live preview."
+                    : mediaTokenError
+                      ? "Could not authorise the live feed. Check that your account still has camera access."
+                      : "Authorising live feed…"}
+                </div>
               )}
             </div>
           </div>
@@ -645,13 +656,6 @@ export default function CctvAttendance() {
             <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>📷 Camera Manager</div>
             <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Add, configure, and monitor Hikvision DVR cameras.</div>
             <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Manage Cameras</div>
-          </div>
-        </NavLink>
-        <NavLink to="/face-detection" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Webcam Mode</div>
-            <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Switch back to browser webcam recognition.</div>
-            <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Open Webcam UI</div>
           </div>
         </NavLink>
       </section>

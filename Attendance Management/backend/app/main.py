@@ -13,9 +13,13 @@ under the same origin, so the whole product is reachable on a single URL:
 import logging
 import os
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
+from datetime import timezone
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -23,6 +27,7 @@ from starlette.types import Scope
 from sqlalchemy.orm import Session
 from app.api.routes import api_router
 from app.core.config import get_settings
+from app.core.net import client_ip
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models import User
@@ -39,6 +44,11 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+_SENSITIVE_RATE_STATE: dict[tuple[str, str], list[float]] = {}
+_SENSITIVE_RATE_LOCK = threading.Lock()
+
+
+_GENERIC_SERVER_ERROR = "Internal server error. Please try again later."
 
 
 # --- Resume Analyzer integration -------------------------------------------
@@ -48,6 +58,14 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# Tell the Resume API it is running MOUNTED inside HRMS, not standalone. When
+# mounted, this HRMS app's `resume_access_guard` (below) is the single
+# authentication for every /resume-api/* request, so the Resume API skips its
+# own duplicate token check — which also stops it running two synchronous DB
+# queries on the event loop for every resume request. Set before the import so
+# the flag is in place no matter when the middleware reads it.
+os.environ["RESUME_API_MOUNTED"] = "1"
 
 resume_api_app = None
 try:
@@ -90,7 +108,8 @@ def _warn_on_weak_secret_key() -> None:
     The application refuses to boot if SECRET_KEY is missing (Pydantic raises);
     this guard catches the next-worst case: a configured but weak key.
     """
-    s = get_settings().secret_key or ""
+    settings = get_settings()
+    s = settings.secret_key or ""
     KNOWN_WEAK = {"abc2025", "change-me-in-production", "secret", "changeme"}
     if s in KNOWN_WEAK or len(s) < 32:
         logger.warning(
@@ -99,6 +118,14 @@ def _warn_on_weak_secret_key() -> None:
             "BEFORE deploying to production. Existing JWTs will be invalidated on rotation.",
             len(s),
         )
+        if not settings.embedding_encryption_key:
+            logger.warning(
+                "BEFORE ROTATING SECRET_KEY: set EMBEDDING_ENCRYPTION_KEY to the "
+                "CURRENT SECRET_KEY value first. Stored face embeddings are "
+                "encrypted with SECRET_KEY while EMBEDDING_ENCRYPTION_KEY is unset, "
+                "so rotating without pinning it makes every enrolled face "
+                "permanently unreadable and requires re-enrolling all employees."
+            )
 
 
 # In-memory guard: the IST date on which the reminder job last ran to
@@ -141,7 +168,7 @@ def _dsr_reminder_tick():
     try:
         if not enabled:
             return
-        ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         today_ist = ist_now.date()
 
         # Already completed a run today in this process — nothing to do.
@@ -253,6 +280,24 @@ def _sync_blocked_employee_users() -> None:
         logger.exception("Failed to sync resigned/terminated employee access")
 
 
+def _initialize_database_defaults() -> None:
+    """Create one-time default rows during startup, never from GET handlers."""
+    db = SessionLocal()
+    try:
+        from app.services.reminder_settings import get_or_create_config
+        from app.api.routes.leave import _ensure_default_leave_types
+        from app.services.letter_templates_defaults import ensure_default_letter_templates
+
+        get_or_create_config(db)
+        _ensure_default_leave_types(db)
+        ensure_default_letter_templates(db)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to initialize database defaults")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def _unified_lifespan(parent_app: FastAPI):
     """Bridge the Resume API's lifespan so mounted sub-app startup hooks run,
@@ -261,6 +306,7 @@ async def _unified_lifespan(parent_app: FastAPI):
     """
     _warn_on_weak_secret_key()
     _sync_blocked_employee_users()
+    _initialize_database_defaults()
 
     # Capture the running asyncio loop so that synchronous request handlers
     # (e.g. /api/dsr POST) can fan-out real-time WebSocket events via
@@ -286,18 +332,44 @@ async def _unified_lifespan(parent_app: FastAPI):
         logger.exception("Failed to warm embedding cache – first recognitions may be slow")
 
     # --- Start CCTV camera workers -----------------------------------------
-    try:
-        from app.services.camera_service import camera_manager
-        camera_manager.start_all_from_db()
-        logger.info("CCTV camera manager started")
-    except Exception:
-        logger.exception("Failed to start CCTV camera manager – cameras will not run")
+    #
+    # CCTV_WORKERS_ENABLED=0 starts this process WITHOUT the camera pipeline:
+    # no capture threads, no YOLO/ArcFace inference, no DVR connection. The API,
+    # payroll, reports and the Resume Analyzer all still work.
+    #
+    # This exists so camera work can be kept off a process that serves requests
+    # — the inference threads compete with request handling for the same CPU,
+    # and on this box a single monitor-camera cycle is seconds of saturated CPU.
+    # Run one instance with cameras ON and additional API-only instances with it
+    # OFF; attendance is exchanged through the database, so the API instances
+    # see recognition results normally.
+    #
+    # LIMITATION — this is not full process separation. Live preview and the
+    # MJPEG streams serve frames out of THIS process's memory via
+    # camera_manager.get_latest_jpeg(), so an API-only instance has no frames to
+    # hand out and those endpoints return 503 there. Point the camera UI at the
+    # instance that owns the cameras, or put a frame transport (Redis / shared
+    # memory) behind camera_manager before load-balancing them freely.
+    if os.getenv("CCTV_WORKERS_ENABLED", "1").strip().lower() not in ("0", "false", "no"):
+        try:
+            from app.services.camera_service import camera_manager
+            camera_manager.start_all_from_db()
+            logger.info("CCTV camera manager started")
+        except Exception:
+            logger.exception("Failed to start CCTV camera manager – cameras will not run")
+    else:
+        logger.info(
+            "CCTV camera manager DISABLED for this process (CCTV_WORKERS_ENABLED=0). "
+            "Live preview/stream endpoints will not serve frames here."
+        )
 
     # --- Auto-connect DVR and start its streams (opt-in via .env) ----------
     try:
         from app.core.config import get_settings
         _s = get_settings()
-        if _s.dvr_autostart and _s.dvr_ip and _s.dvr_username:
+        if os.getenv("CCTV_WORKERS_ENABLED", "1").strip().lower() in ("0", "false", "no"):
+            _s = None  # camera pipeline is off for this process; skip the DVR too
+        if _s and _s.dvr_autostart and _s.dvr_ip and _s.dvr_username:
             from app.services.dvr_manager import get_dvr_manager
             dvr = get_dvr_manager()
             ok, msg, _dev = dvr.connect(
@@ -341,13 +413,98 @@ app = FastAPI(
     version="1.0.0",
     lifespan=_unified_lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Request validation failed: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=422, content={"detail": "Invalid request data."})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        logger.error("HTTP %s at %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": _GENERIC_SERVER_ERROR},
+            headers=exc.headers,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception at %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": _GENERIC_SERVER_ERROR})
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()] or ["http://127.0.0.1:5001", "http://localhost:5001", "http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
+_SENSITIVE_RATE_WINDOW_SECONDS = 60
+_SENSITIVE_RATE_MAX = int(os.getenv("SENSITIVE_RATE_LIMIT_MAX", "30"))
+
+
+def _prune_sensitive_rate_state(now: float) -> None:
+    """Drop every key whose window has fully expired.
+
+    Without this the dict only ever pruned the key currently being hit, so any
+    (address, path) pair seen once stayed resident forever — a slow leak that
+    grows with the number of distinct clients the server has ever handled.
+    Caller must hold _SENSITIVE_RATE_LOCK.
+    """
+    cutoff = now - _SENSITIVE_RATE_WINDOW_SECONDS
+    for key in [k for k, stamps in _SENSITIVE_RATE_STATE.items() if not stamps or stamps[-1] <= cutoff]:
+        _SENSITIVE_RATE_STATE.pop(key, None)
+
+
+@app.middleware("http")
+async def sensitive_rate_limit(request: Request, call_next):
+    """Small process-local backstop for expensive/authenticated write paths."""
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        path = request.url.path
+        watched = path.startswith("/api/auth/") or path.startswith("/resume-api/upload") or path.endswith("/export-sheets")
+        if watched:
+            # Same address resolution as the login limiter (app/core/net.py), so
+            # the two cannot disagree about who the caller is behind a proxy.
+            key = (client_ip(request), path)
+            now = time.monotonic()
+            # Locked: read-modify-write of the per-key list races across
+            # concurrent requests, which silently undercounts.
+            with _SENSITIVE_RATE_LOCK:
+                _prune_sensitive_rate_state(now)
+                attempts = [
+                    stamp for stamp in _SENSITIVE_RATE_STATE.get(key, [])
+                    if stamp > now - _SENSITIVE_RATE_WINDOW_SECONDS
+                ]
+                if len(attempts) >= _SENSITIVE_RATE_MAX:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Too many requests. Try again later."},
+                        headers={"Retry-After": str(_SENSITIVE_RATE_WINDOW_SECONDS)},
+                    )
+                attempts.append(now)
+                _SENSITIVE_RATE_STATE[key] = attempts
+    return await call_next(request)
 app.include_router(api_router, prefix="/api")
 
 # Real-time notification WebSocket. Mounted at the application root (NOT under
@@ -377,12 +534,30 @@ RESUME_ALLOWED_ROLES = {"Admin", "HR"}
 
 
 def _extract_token(request: Request) -> str:
-    """Pull JWT from Authorization header or `?token=` query string (used by
-    the Resume UI when opened via the HRMS sidebar)."""
+    """Pull JWT from the Authorization header or HttpOnly session cookie."""
     auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
-    return request.query_params.get("token", "").strip()
+    return request.cookies.get("access_token", "").strip()
+
+
+def _token_requires_password_change(token: str) -> bool:
+    """True when the bearer is still on a temporary password.
+
+    HRMS blocks these users via `get_current_user`, but the Resume Analyzer sits
+    behind this middleware instead -- without this check an Admin/HR user on a
+    temp password is locked out of HRMS yet can still read every candidate
+    record through /resume-api/*.
+
+    Read from the `pwd_change` JWT claim so the hot path stays DB-free.
+    /auth/change-password issues a replacement token with the claim cleared.
+    Tokens minted before this claim existed simply lack it and are treated as
+    "no change pending", which matches their pre-existing behaviour.
+    """
+    if not token:
+        return False
+    payload = decode_access_token(token)
+    return bool(payload and payload.get("pwd_change"))
 
 
 def _user_roles_from_token(token: str) -> set[str]:
@@ -431,16 +606,55 @@ async def resume_access_guard(request: Request, call_next):
     if is_ui and path.startswith("/resume/assets/"):
         return await call_next(request)
 
+    # Optional: let the API docs pages (Swagger UI + the OpenAPI schema it
+    # loads) be viewed without a login, so an operator can browse the endpoint
+    # list in a browser. This exposes only the SHAPE of the API (endpoint names
+    # and parameters) -- NOT any candidate data, and NOT the ability to call a
+    # protected endpoint (those still require an Admin/HR token). OFF by default;
+    # turn on per-deployment with RESUME_DOCS_PUBLIC=1 in the environment.
+    if is_api and os.getenv("RESUME_DOCS_PUBLIC", "").strip().lower() in ("1", "true", "yes"):
+        if path.rstrip("/") in ("/resume-api/docs", "/resume-api/redoc",
+                                "/resume-api/openapi.json"):
+            return await call_next(request)
+
     if is_ui or is_api:
-        roles = _user_roles_from_token(_extract_token(request))
+        token = _extract_token(request)
+        roles = _user_roles_from_token(token)
         if not (roles & RESUME_ALLOWED_ROLES):
             if is_api:
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Resume Analyzer is restricted to Admin / HR users."},
                 )
-            # Static UI: send them back to the HRMS login.
-            return RedirectResponse(url="/", status_code=302)
+            # Static UI. Distinguish the two failure modes — sending both to "/"
+            # silently dropped the user on the HRMS dashboard with no clue why,
+            # which is indistinguishable from "the link is broken".
+            if not token:
+                # No session cookie reached us at all. Usually genuinely signed
+                # out, but also what you see if the browser is on a different
+                # host than the one the cookie was issued for (localhost vs
+                # 127.0.0.1 are separate cookie jars).
+                logger.warning(
+                    "Resume UI blocked: no session token on %s (cookie not sent?)",
+                    path,
+                )
+                return RedirectResponse(url="/login", status_code=302)
+            # Token present and valid, but this user is not Admin/HR.
+            logger.warning(
+                "Resume UI blocked: roles %s lack Admin/HR for %s", sorted(roles) or "[]", path
+            )
+            return RedirectResponse(url="/?resume_denied=1", status_code=302)
+        # Correct role, but still on a temporary password -> same treatment as
+        # HRMS gives them. Checked AFTER roles so we never leak "this token is
+        # valid but needs a password change" to an unrelated caller.
+        if _token_requires_password_change(token):
+            if is_api:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Password change required before accessing Resume Analyzer."},
+                    headers={"X-Password-Change-Required": "true"},
+                )
+            return RedirectResponse(url="/change-password", status_code=302)
 
     return await call_next(request)
 

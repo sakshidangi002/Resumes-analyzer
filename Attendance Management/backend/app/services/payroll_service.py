@@ -16,6 +16,7 @@ from app.models import (
     SalaryAdvance,
 )
 from app.core.datetime_utils import get_ist_now
+from app.core.staff_policy import is_fixed_salary_staff as _is_fixed_salary_staff
 from app.services.leave_service import get_current_financial_year
 
 
@@ -87,6 +88,30 @@ def run_payroll_for_period(
     payslips = []
     config = _get_company_config(db)
     weekly_off_days = config.weekly_off_days if config else None
+
+    # Holidays for the whole month, fetched ONCE.
+    #
+    # `_is_holiday()` issues a SELECT per day, and it was called from TWO
+    # per-day loops nested inside the per-employee loop below -- about 2 x 30
+    # queries for every employee (50 employees ≈ 3,000 round trips for data that
+    # is identical on every pass). The database is remote at roughly 29 ms per
+    # round trip (see db/session.py), so this single pattern accounted for
+    # minutes of payroll runtime. One query up front, then a set lookup.
+    #
+    # The range is the FULL calendar month, which always covers the per-employee
+    # [start, end] window computed inside the loop (that window is clamped to
+    # today for the current month, never widened).
+    period_start = date(year, month, 1)
+    period_end = (
+        date(year, 12, 31) if month == 12
+        else date(year, month + 1, 1) - timedelta(days=1)
+    )
+    holiday_dates: set[date] = {
+        row[0]
+        for row in db.query(Holiday.date)
+        .filter(Holiday.date >= period_start, Holiday.date <= period_end)
+        .all()
+    }
     # Salary-advance recovery is idempotent across re-runs: release any advances
     # this period recovered on a previous run so they are re-evaluated below.
     db.query(SalaryAdvance).filter(SalaryAdvance.deducted_period_id == period.id).update(
@@ -152,14 +177,16 @@ def run_payroll_for_period(
         # policy — those days are marked ON_LEAVE at approval and must still be
         # deducted. Scoping this query to [start, end] guarantees a future
         # month's leave never affects the current month's salary.
-        _status_by_date = {
-            r.date: r.status
-            for r in db.query(AttendanceRecord).filter(
-                AttendanceRecord.employee_id == emp.id,
-                AttendanceRecord.date >= start,
-                AttendanceRecord.date <= end,
-            ).all()
-        }
+        # Fetched ONCE and reused below as `records`. This exact query used to be
+        # issued a second time further down the same iteration -- identical
+        # employee, identical date range -- doubling the per-employee attendance
+        # round trips for no benefit.
+        records = db.query(AttendanceRecord).filter(
+            AttendanceRecord.employee_id == emp.id,
+            AttendanceRecord.date >= start,
+            AttendanceRecord.date <= end,
+        ).all()
+        _status_by_date = {r.date: r.status for r in records}
         for req, lt in all_leave_reqs:
             d = max(req.start_date, start)
             last = min(req.end_date, end)
@@ -187,14 +214,9 @@ def run_payroll_for_period(
         wo_and_holiday_days = Decimal("0")
         current = start
         for _ in range(actual_days):
-            if _is_weekly_off(current, weekly_off_days) or _is_holiday(db, current):
+            if _is_weekly_off(current, weekly_off_days) or current in holiday_dates:
                 wo_and_holiday_days += Decimal("1")
             current = current + timedelta(days=1)
-        records = db.query(AttendanceRecord).filter(
-            AttendanceRecord.employee_id == emp.id,
-            AttendanceRecord.date >= start,
-            AttendanceRecord.date <= end,
-        ).all()
 
         # If there is no meaningful attendance recorded at all for this employee
         # in the month (no Time In / Time Out / status), skip salary calculation.
@@ -209,7 +231,7 @@ def run_payroll_for_period(
         curr = start
         while curr <= end:
             # Default: Working days = 1 (Unpaid), Non-working (WO/Holiday) = 0 (Paid)
-            if _is_weekly_off(curr, weekly_off_days) or _is_holiday(db, curr):
+            if _is_weekly_off(curr, weekly_off_days) or curr in holiday_dates:
                 day_unpaid_frac[curr] = Decimal("0")
             else:
                 day_unpaid_frac[curr] = Decimal("1")
@@ -298,20 +320,20 @@ def run_payroll_for_period(
         # Rule: If absent (unpaid) on both sides of a non-working block, the block becomes LOP.
         curr = start
         while curr <= end:
-            if _is_weekly_off(curr, weekly_off_days) or _is_holiday(db, curr):
+            if _is_weekly_off(curr, weekly_off_days) or curr in holiday_dates:
                 block = []
                 temp = curr
-                while temp <= end and (_is_weekly_off(temp, weekly_off_days) or _is_holiday(db, temp)):
+                while temp <= end and (_is_weekly_off(temp, weekly_off_days) or temp in holiday_dates):
                     block.append(temp)
                     temp += timedelta(days=1)
-                
+
                 # Find boundary working days
                 prev_wd = curr - timedelta(days=1)
-                while prev_wd >= start and (_is_weekly_off(prev_wd, weekly_off_days) or _is_holiday(db, prev_wd)):
+                while prev_wd >= start and (_is_weekly_off(prev_wd, weekly_off_days) or prev_wd in holiday_dates):
                     prev_wd -= timedelta(days=1)
-                
+
                 next_wd = temp
-                while next_wd <= end and (_is_weekly_off(next_wd, weekly_off_days) or _is_holiday(db, next_wd)):
+                while next_wd <= end and (_is_weekly_off(next_wd, weekly_off_days) or next_wd in holiday_dates):
                     next_wd += timedelta(days=1)
 
                 # Sandwich if both boundaries are within month and are ABSENT (Full LOP)
@@ -332,8 +354,28 @@ def run_payroll_for_period(
         else:
             basis = Decimal(str(actual_days))
             
-        lop_days = min(basis, unpaid_attendance_days)
-        paid_days = basis - lop_days
+        # ── Non-employee staff are on a FIXED salary ────────────────────────
+        # Housekeeping, security, drivers and the like work variable hours with
+        # no fixed daily target, so the LOP machinery above — which measures
+        # every day against expected_working_hours and rounds the shortfall to
+        # half/full days — does not describe their arrangement. Their pay is a
+        # flat monthly figure; attendance is still recorded (for presence and
+        # reporting) but never reduces it. Salary advances are the only thing
+        # deducted, and that happens further down, untouched by this branch.
+        #
+        # Without this they were heading for a real mis-pay: Seema's
+        # expected_working_hours is the 9.0 default, so a 2-hour day would have
+        # been scored as a full day of LOP, and the half-day shortfalls would
+        # additionally have been charged against Short/Paid Leave buffers she
+        # has ZERO allocation for.
+        if _is_fixed_salary_staff(emp):
+            lop_days = Decimal("0")
+            paid_days = basis
+            # Keep the per-day explanation honest: nothing was unpaid.
+            day_unpaid_frac = {d: Decimal("0") for d in day_unpaid_frac}
+        else:
+            lop_days = min(basis, unpaid_attendance_days)
+            paid_days = basis - lop_days
 
         # Final check: Ensure we never count a Paid Leave day as LOP
         for d, is_appr in leave_is_approved_by_date.items():
@@ -380,7 +422,7 @@ def run_payroll_for_period(
             _worked = float(_r.total_work_hours) if (_r and _r.total_work_hours is not None) else None
             _missed = punch_missed_hours.get(_cur)
             _is_off = _is_weekly_off(_cur, weekly_off_days)
-            _is_hol = _is_holiday(db, _cur)
+            _is_hol = _cur in holiday_dates
             if _is_off:
                 _note = "Week off"
             elif _is_hol:

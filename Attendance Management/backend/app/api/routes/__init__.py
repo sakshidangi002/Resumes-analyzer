@@ -11,6 +11,7 @@ from app.api.routes import (
     users,
     company,
     activity,
+    audit,
     onboarding,
     dsr,
     dsr_reminder,
@@ -35,6 +36,7 @@ api_router.include_router(letters.router, prefix="/letters", tags=["letters"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(activity.router, prefix="/activity", tags=["activity"])
+api_router.include_router(audit.router, prefix="/audit", tags=["audit"])
 api_router.include_router(onboarding.router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(dsr.router, prefix="/dsr", tags=["dsr"])
 api_router.include_router(

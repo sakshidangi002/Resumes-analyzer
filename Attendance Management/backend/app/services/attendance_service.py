@@ -31,6 +31,22 @@ def _is_holiday(db: Session, emp_date: date) -> bool:
     return db.query(Holiday).filter(Holiday.date == emp_date).first() is not None
 
 
+def _holiday_dates_between(db: Session, start: date, end: date) -> set[date]:
+    """All holiday dates in a range, in ONE query.
+
+    Use this instead of calling `_is_holiday` from a per-day loop: that issues a
+    SELECT for every single day, and the database is remote (~29 ms per round
+    trip -- see db/session.py), so a month-long loop costs about a second of
+    pure latency before any real work happens.
+    """
+    return {
+        row[0]
+        for row in db.query(Holiday.date)
+        .filter(Holiday.date >= start, Holiday.date <= end)
+        .all()
+    }
+
+
 def apply_weekly_off_and_holiday(db: Session, record: AttendanceRecord) -> None:
     config = get_company_config(db)
     record.is_weekly_off = _is_weekly_off(record.date, config.weekly_off_days if config else None)
@@ -203,6 +219,11 @@ def monthly_attendance_summary(db: Session, employee_id: int, month: int, year: 
         ).all()
     }
 
+    # One query for the month's holidays, matching how `records` above is
+    # already batched. The per-day `_is_holiday()` call this replaces ran a
+    # SELECT for each of the ~31 days on every call to this summary.
+    holiday_dates = _holiday_dates_between(db, month_start, month_end)
+
     present = half_day = leave = absent = holiday = weekly_off = 0
 
     d = month_start
@@ -210,7 +231,7 @@ def monthly_attendance_summary(db: Session, employee_id: int, month: int, year: 
         rec = records.get(d)
         status = rec.status if rec else None
 
-        if _is_holiday(db, d):
+        if d in holiday_dates:
             holiday += 1
         elif _is_weekly_off(d, weekly_off_days):
             weekly_off += 1

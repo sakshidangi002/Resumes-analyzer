@@ -120,7 +120,7 @@ def auto_mark_attendance(
                 return rec
             return rec
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail="Unable to record attendance event.") from exc
 
     rec = get_or_create_attendance(db, data.employee_id, data.date)
 
@@ -191,7 +191,7 @@ def create_attendance_event(
             )
         return event
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Unable to record attendance event.") from exc
 
 
 @router.get("/events", response_model=list[AttendanceEventResponse])

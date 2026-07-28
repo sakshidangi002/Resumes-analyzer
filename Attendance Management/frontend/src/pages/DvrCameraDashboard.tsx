@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { dvr } from "../api/client";
+import { useMediaToken } from "../hooks/useMediaToken";
 
 type LiveCamera = {
   channel_id: number;
@@ -53,6 +54,8 @@ export default function DvrCameraDashboard() {
   // frame, which on this 4-core box is what makes the picture drift behind.
   const [liveChannel, setLiveChannel] = useState<number | null>(null);
   const liveImgRef = useRef<HTMLImageElement | null>(null);
+  // Short-lived token for the <img>-rendered DVR feed (see useMediaToken).
+  const { mediaToken } = useMediaToken();
 
   // Removing the <img> from the DOM usually aborts its request, but not
   // reliably for a stream that never completes. Clearing src first guarantees
@@ -361,7 +364,7 @@ export default function DvrCameraDashboard() {
                         One camera streams at a time to keep the feed real-time
                       </span>
                     </button>
-                  ) : camera.worker_status?.is_alive ? (
+                  ) : camera.worker_status?.is_alive && mediaToken ? (
                     <>
                     <img
                       // Keyed by channel so switching cameras unmounts the old
@@ -370,7 +373,7 @@ export default function DvrCameraDashboard() {
                       ref={(el) => {
                         if (el) liveImgRef.current = el;
                       }}
-                      src={dvr.streamUrl(camera.channel_id)}
+                      src={dvr.streamUrl(camera.channel_id, mediaToken)}
                       alt={camera.name}
                       style={{
                         // Fit the whole frame inside the box (like a video

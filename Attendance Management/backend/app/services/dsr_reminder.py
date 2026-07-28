@@ -32,13 +32,13 @@ _IST_OFFSET = timedelta(hours=5, minutes=30)
 
 def _today_ist() -> date:
     """Return the current date in IST (UTC + 5:30)."""
-    return (datetime.utcnow() + _IST_OFFSET).date()
+    return (__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() + _IST_OFFSET).date()
 
 
 def _ist_day_utc_window(today: date) -> tuple[datetime, datetime]:
     """Map an IST date to its naive-UTC [start, end) window.
 
-    ``AppNotification.created_at`` is stored as naive UTC (``datetime.utcnow``),
+    ``AppNotification.created_at`` is stored as naive UTC (``__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now``),
     so we can do plain ``>=`` / ``<`` comparisons inside this window.
     """
     ist_midnight_naive = datetime.combine(today, datetime.min.time())

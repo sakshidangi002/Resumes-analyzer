@@ -12,11 +12,12 @@ embedded and stored. This deliberately keeps the gallery in the same viewpoint
 as the camera that will later have to match it (a standing check-in view and a
 ceiling-mounted seated view look nothing alike to a ReID model).
 """
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, LargeBinary, Index
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
 from app.core.datetime_utils import get_ist_now
+from app.core.encrypted_types import EncryptedBinary
 
 
 class BodyEmbedding(Base):
@@ -26,7 +27,7 @@ class BodyEmbedding(Base):
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
     camera_id = Column(String(50), nullable=False, index=True)
     day = Column(Date, nullable=False, index=True)
-    embedding = Column(LargeBinary, nullable=False)   # float32[512], L2-normalised
+    embedding = Column(EncryptedBinary, nullable=False)   # encrypted float32[512]
     score = Column(Integer, nullable=True)            # face-match score ×100 (quality of the enrolment)
     created_at = Column(DateTime, default=get_ist_now)
 

@@ -7,6 +7,7 @@ import { SectionLoader } from "../components/LoadingState";
 import { formatDate } from "../utils/dateFormatter";
 import CustomSelect from "../components/CustomSelect";
 import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import DOMPurify from "dompurify";
 
 interface LetterTemplate {
   id: number;
@@ -639,7 +640,11 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                         boxShadow: "inset 0 4px 20px rgba(0,0,0,0.3)"
                       }}
                       dangerouslySetInnerHTML={{
-                        __html: simpleTextToHtml(simpleBody),
+                        __html: DOMPurify.sanitize(simpleTextToHtml(simpleBody), {
+                          USE_PROFILES: { html: true },
+                          FORBID_TAGS: ["style", "svg", "math", "iframe", "object", "embed", "form"],
+                          FORBID_ATTR: ["srcdoc"],
+                        }),
                       }}
                     />
                   </div>

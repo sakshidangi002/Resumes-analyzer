@@ -16,7 +16,6 @@ from app.schemas.letter import (
 )
 from app.api.deps import get_current_user, require_roles
 from app.services.letter_service import render_letter, create_letter_instance
-from app.services.letter_templates_defaults import ensure_default_letter_templates
 from app.services.email_service import send_notification
 from app.services.letter_pdf import html_to_pdf_bytes, safe_pdf_filename
 from app.services.notification_service import notify_user_for_employee
@@ -93,11 +92,17 @@ def _ensure_user_employee_link(db: Session, current_user: User) -> None:
 
 @router.get("/templates", response_model=list[LetterTemplateResponse])
 def list_templates(
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
-    ensure_default_letter_templates(db)
-    return db.query(LetterTemplate).order_by(LetterTemplate.code).all()
+    """Letter templates. Pagination is opt-in -- the UI renders these as a
+    picker and needs all of them, so `page` has no default."""
+    q = db.query(LetterTemplate).order_by(LetterTemplate.code)
+    if page is not None:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    return q.all()
 
 
 @router.post("/templates", response_model=LetterTemplateResponse)
@@ -249,12 +254,21 @@ def generate_letters_bulk(
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
     results = []
+    # The template and the employee rows do not change across iterations, so
+    # fetch them ONCE instead of re-querying inside the loop. Previously a bulk
+    # run over N employees issued N identical template lookups plus N single-row
+    # employee lookups.
+    t = db.query(LetterTemplate).filter(LetterTemplate.code == template_code).first()
+    tname = t.name if t else template_code
+    employees_by_id = {
+        e.id: e
+        for e in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
+    } if employee_ids else {}
+
     for eid in employee_ids:
         try:
             subject, body = render_letter(db, template_code, eid)
-            t = db.query(LetterTemplate).filter(LetterTemplate.code == template_code).first()
             inst = create_letter_instance(db, eid, t.id, current_user.id, subject, body, sent_via_email=False)
-            tname = t.name if t else template_code
             notify_user_for_employee(
                 db,
                 eid,
@@ -266,7 +280,7 @@ def generate_letters_bulk(
                 push_tag=f"letter-{inst.id}",
             )
             if send_email:
-                emp = db.query(Employee).filter(Employee.id == eid).first()
+                emp = employees_by_id.get(eid)
                 if emp:
                     # Bulk send: best-effort target collection (don't 400 on missing email,
                     # just skip so the rest of the batch continues).
@@ -305,6 +319,8 @@ def generate_letters_bulk(
 @router.get("/instances", response_model=list[LetterInstanceResponse])
 def list_instances(
     employee_id: int | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -313,7 +329,6 @@ def list_instances(
         .join(Employee, Employee.id == LetterInstance.employee_id)
     )
     role_names = [r.name for r in current_user.roles]
-    _ensure_user_employee_link(db, current_user)
     if "Employee" in role_names and "Manager" not in role_names and "HR" not in role_names and "Admin" not in role_names:
         if current_user.employee_id:
             q = q.filter(LetterInstance.employee_id == current_user.employee_id)
@@ -321,7 +336,12 @@ def list_instances(
             return []
     elif employee_id is not None:
         q = q.filter(LetterInstance.employee_id == employee_id)
-    rows = q.order_by(LetterInstance.generated_at.asc()).all()
+    rows = (
+        q.order_by(LetterInstance.generated_at.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     result: list[LetterInstanceResponse] = []
     for inst, emp in rows:
         result.append(
@@ -350,7 +370,6 @@ def get_letter_body(
     inst = db.query(LetterInstance).filter(LetterInstance.id == instance_id).first()
     if not inst:
         raise HTTPException(status_code=404, detail="Not found")
-    _ensure_user_employee_link(db, current_user)
     role_names = [r.name for r in current_user.roles]
     is_mgmt = "Admin" in role_names or "HR" in role_names
     if not is_mgmt and current_user.employee_id != inst.employee_id:
@@ -361,13 +380,14 @@ def get_letter_body(
 @router.get("/instances/{instance_id}/replies", response_model=list[LetterReplyResponse])
 def list_replies(
     instance_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
     inst = db.query(LetterInstance).filter(LetterInstance.id == instance_id).first()
     if not inst:
         raise HTTPException(status_code=404, detail="Letter not found")
-    _ensure_user_employee_link(db, current_user)
     role_names = [r.name for r in current_user.roles]
     is_mgmt = "Admin" in role_names or "HR" in role_names
     if not is_mgmt and current_user.employee_id != inst.employee_id:
@@ -376,6 +396,8 @@ def list_replies(
         db.query(LetterReply)
         .filter(LetterReply.letter_instance_id == instance_id)
         .order_by(LetterReply.created_at.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
     return [LetterReplyResponse.model_validate(r) for r in replies]

@@ -129,6 +129,30 @@ function compareMonthDayIso(aIso: string, bIso: string): number {
   return a.monthDaySort - b.monthDaySort;
 }
 
+/**
+ * Weekday that a recurring annual date falls on THIS year ("Mon", "Tue", …).
+ *
+ * The "Day" column used to print the day-of-month number, which just repeated
+ * the date already shown in the next column. What people actually plan around
+ * is the weekday — and it has to be computed for the CURRENT year, not the
+ * stored one: the stored year is the person's birth year or their joining
+ * year, whose weekday is irrelevant. The lists themselves are loaded for the
+ * current year (see loadData).
+ */
+function weekdayForThisYear(iso: string): string {
+  const parsed = localDayMonthFromIso(iso);
+  if (!parsed) return "—";
+  const monthIndex = Math.floor(parsed.monthDaySort / 100) - 1;
+  const year = new Date().getFullYear();
+  // Clamp to the month's real length so 29 Feb in a non-leap year shows the
+  // 28 Feb weekday instead of silently rolling into March and showing that one.
+  const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const day = Math.min(parsed.day, lastDayOfMonth);
+  // Midday avoids any DST/timezone edge shifting the date across midnight.
+  return new Date(year, monthIndex, day, 12, 0, 0)
+    .toLocaleDateString("en-IN", { weekday: "short" });
+}
+
 export default function Calendar() {
   const { hasRole } = useAuth();
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -413,7 +437,7 @@ export default function Calendar() {
                         .sort((a, b) => sortByMonthDay(a.date_of_joining, b.date_of_joining))
                         .map((a) => (
                           <tr key={a.employee_id}>
-                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{new Date(a.date_of_joining + "T12:00:00").getDate()}</td>
+                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{weekdayForThisYear(a.date_of_joining)}</td>
                             <td style={{ fontWeight: 500, textAlign: 'center' }}>{a.name}</td>
                             <td style={{ textAlign: 'center' }}>{formatNiceDate(a.date_of_joining)}</td>
                           </tr>
@@ -450,7 +474,7 @@ export default function Calendar() {
                         .sort((a, b) => sortByMonthDay(a.date, b.date))
                         .map((b) => (
                           <tr key={b.employee_id}>
-                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{new Date(b.date + "T12:00:00").getDate()}</td>
+                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{weekdayForThisYear(b.date)}</td>
                             <td style={{ fontWeight: 500, textAlign: 'center' }}>{b.name}</td>
                             <td style={{ textAlign: 'center' }}>{formatBirthdayDate(b.date)}</td>
                           </tr>
@@ -486,10 +510,9 @@ export default function Calendar() {
                       {[...marriageAnniversaries]
                         .sort((a, b) => sortByMonthDay(a.date_of_marriage, b.date_of_marriage))
                         .map((mRow) => {
-                          const dm = localDayMonthFromIso(mRow.date_of_marriage);
                           return (
                             <tr key={`${mRow.employee_id}-${mRow.date_of_marriage}`}>
-                              <td style={{ textAlign: "center" }}>{dm?.day ?? "—"}</td>
+                              <td style={{ fontWeight: 700, textAlign: "center" }}>{weekdayForThisYear(mRow.date_of_marriage)}</td>
                               <td style={{ fontWeight: 500, textAlign: "center" }}>{mRow.name}</td>
                               <td style={{ fontWeight: "500", textAlign: "center" }}>
                                 {formatBirthdayDateSafe(mRow.date_of_marriage)}

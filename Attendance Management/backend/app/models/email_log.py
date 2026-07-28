@@ -17,4 +17,4 @@ class EmailLog(Base):
     error_message = Column(Text, nullable=True)
     related_entity_type = Column(String(50), nullable=True)
     related_entity_id = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)

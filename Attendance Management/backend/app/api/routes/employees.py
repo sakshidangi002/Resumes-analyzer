@@ -42,6 +42,8 @@ from app.schemas.employee import (
     CareerCurrentSnapshot,
 )
 from app.api.deps import get_current_user, require_roles
+from app.core.pii import is_masked, mask_secret
+from app.services.audit_service import log_audit
 from app.services.payroll_service import get_salary_structure_for_date
 from app.services.embedding_cache import embedding_to_blob, invalidate_embedding_cache
 from app.services.employee_face_service import (
@@ -51,6 +53,68 @@ from app.services.employee_face_service import (
 )
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Sensitive-field masking
+# ---------------------------------------------------------------------------
+# Government IDs and bank account numbers are masked on every normal read. Full
+# values are available only from the /sensitive and /bank/reveal endpoints,
+# which are Admin/HR-only and write an audit row for each disclosure.
+#
+# Everyone who can already see the record still sees the masked tail, so the
+# routine "is this the right person?" check keeps working without handing out
+# the identifier itself.
+
+_MASKED_EMPLOYEE_FIELDS = (
+    "pan_number",
+    "aadhar_number",
+    "passport_number",
+    "driving_license_number",
+)
+
+
+def _owns_record(current_user: User, employee_id: int) -> bool:
+    """Employees always see their OWN identifiers unmasked -- they supplied
+    them, so masking there protects nobody and just breaks the profile page."""
+    return current_user.employee_id == employee_id
+
+
+def _employee_response(emp: Employee, current_user: User) -> EmployeeResponse:
+    """Serialise an Employee, masking identifiers unless it's the owner.
+
+    Builds a Pydantic model first and masks THAT. Never mutate the ORM instance:
+    SQLAlchemy would see the masked strings as pending changes and flush them
+    into the database on the next commit.
+    """
+    resp = EmployeeResponse.model_validate(emp)
+    if _owns_record(current_user, emp.id):
+        return resp
+    return resp.model_copy(
+        update={f: mask_secret(getattr(resp, f)) for f in _MASKED_EMPLOYEE_FIELDS}
+    )
+
+
+def _bank_response(
+    bank: EmployeeBankDetail, current_user: User
+) -> EmployeeBankDetailResponse:
+    resp = EmployeeBankDetailResponse.model_validate(bank)
+    if _owns_record(current_user, bank.employee_id):
+        return resp
+    return resp.model_copy(update={"account_number": mask_secret(resp.account_number)})
+
+
+def _drop_masked_writes(data: dict) -> dict:
+    """Remove sensitive fields whose incoming value is one of our own masks.
+
+    The edit form is seeded from a masked GET, so an unmodified save round-trips
+    "•••• 1234" back to us. Writing that would destroy the real value.
+    """
+    return {
+        key: value
+        for key, value in data.items()
+        if not (key in _MASKED_EMPLOYEE_FIELDS + ("account_number",) and is_masked(value))
+    }
 
 def _ensure_default_departments(db: Session) -> None:
     """Create default departments if missing (idempotent)."""
@@ -213,9 +277,23 @@ def list_employees(
     db: Session = Depends(get_db),
     department_id: int | None = Query(None),
     status: str | None = Query(None),
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
-    q = db.query(Employee)
+    """List employees. Pagination is OPT-IN: pass `page` to get one page.
+
+    `page` deliberately has NO default. Every caller of this endpoint is a
+    selector that needs the complete set -- attendance, payroll, payslips, leave
+    allocation, calendar, user management. A default page size silently dropped
+    every employee past the 50th from those lists, so payroll and attendance
+    quietly skipped staff with nothing on screen to say so. Truncating data a
+    caller did not ask to truncate is worse than the slow query it avoids.
+    """
+    # EmployeeResponse serialises `reporting_manager`, so without this the
+    # response builder lazily loaded that relationship once per employee — an
+    # N+1 on the endpoint that renders the whole directory.
+    q = db.query(Employee).options(joinedload(Employee.reporting_manager))
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     if status:
@@ -227,7 +305,10 @@ def list_employees(
         else:
             return []
     # Stable ordering to prevent row shifting after edits
-    return q.order_by(Employee.id).all()
+    q = q.order_by(Employee.id)
+    if page is not None:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    return [_employee_response(e, current_user) for e in q.all()]
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse)
@@ -248,7 +329,7 @@ def get_employee(
     if "Employee" in role_names and "Manager" not in role_names and "HR" not in role_names and "Admin" not in role_names:
         if current_user.employee_id != employee_id:
             raise HTTPException(status_code=403, detail="Access denied")
-    return emp
+    return _employee_response(emp, current_user)
 
 
 @router.post("", response_model=EmployeeResponse)
@@ -299,7 +380,7 @@ def create_employee(
     db.commit()
     db.refresh(emp)
     invalidate_embedding_cache()
-    return emp
+    return _employee_response(emp, current_user)
 
 
 def _next_staff_code(db: Session) -> str:
@@ -345,7 +426,7 @@ def create_staff(
     db.commit()
     db.refresh(emp)
     invalidate_embedding_cache()
-    return emp
+    return _employee_response(emp, current_user)
 
 
 @router.post("/register")
@@ -448,7 +529,10 @@ def update_employee(
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
-    patch = data.model_dump(exclude_unset=True)
+    # Discard any identifier that came back to us still masked -- that means the
+    # editor never touched the field, and writing the mask would destroy the
+    # stored value.
+    patch = _drop_masked_writes(data.model_dump(exclude_unset=True))
     # Validate employee_code uniqueness when changing
     if "employee_code" in patch and patch["employee_code"] and patch["employee_code"] != emp.employee_code:
         if db.query(Employee).filter(Employee.employee_code == patch["employee_code"]).first():
@@ -474,7 +558,7 @@ def update_employee(
     db.commit()
     db.refresh(emp)
     invalidate_embedding_cache()
-    return emp
+    return _employee_response(emp, current_user)
 
 
 # ---------- Position & Salary increment history (Feature 1) ----------
@@ -700,6 +784,48 @@ def delete_career_history(
     return {"message": "Deleted"}
 
 
+# ---------- Sensitive-value disclosure (Admin/HR, audited) ----------
+@router.post("/{employee_id}/sensitive")
+def reveal_employee_identifiers(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Return the UNMASKED government identifiers for one employee.
+
+    Separate from GET /{id} on purpose: normal reads stay masked, and every
+    disclosure lands in the audit log with who asked and for whom.
+    """
+    emp = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    log_audit(
+        db, current_user.id, "PII_REVEALED", "Employee", str(employee_id),
+        f"Viewed government identifiers for {emp.employee_code}",
+    )
+    return {f: getattr(emp, f) for f in _MASKED_EMPLOYEE_FIELDS}
+
+
+@router.post("/{employee_id}/bank/reveal")
+def reveal_employee_bank_account(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Return the UNMASKED bank account number. Audited, as above."""
+    b = db.query(EmployeeBankDetail).filter(
+        EmployeeBankDetail.employee_id == employee_id,
+        EmployeeBankDetail.is_active == True,
+    ).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Bank details not found")
+    log_audit(
+        db, current_user.id, "PII_REVEALED", "Employee", str(employee_id),
+        "Viewed bank account number",
+    )
+    return {"account_number": b.account_number}
+
+
 # ---------- Bank details (restricted) ----------
 @router.get("/{employee_id}/bank", response_model=EmployeeBankDetailResponse)
 def get_employee_bank(
@@ -721,7 +847,7 @@ def get_employee_bank(
     ).first()
     if not b:
         raise HTTPException(status_code=404, detail="Bank details not found")
-    return b
+    return _bank_response(b, current_user)
 
 
 @router.delete("/{employee_id}")
@@ -782,16 +908,26 @@ def update_employee_bank(
     if not b:
         b = EmployeeBankDetail(employee_id=employee_id)
         db.add(b)
+    # The form is seeded from a masked GET. If the account number comes back
+    # still masked the editor did not change it, so keep what is stored -- and
+    # reject a masked value outright when there is nothing to keep.
+    account_number_unchanged = is_masked(data.account_number)
+    if account_number_unchanged and not b.account_number:
+        raise HTTPException(
+            status_code=400,
+            detail="Account number is required. Reveal the stored value or enter it in full.",
+        )
     # IMPORTANT: set required non-null fields before any flush/commit.
     b.bank_name = data.bank_name.strip()
     b.branch_name = data.branch_name.strip() if data.branch_name else None
     b.account_holder_name = data.account_holder_name.strip()
-    b.account_number = data.account_number.strip()
+    if not account_number_unchanged:
+        b.account_number = data.account_number.strip()
     b.ifsc_code = data.ifsc_code.strip()
     b.account_type = data.account_type
     db.commit()
     db.refresh(b)
-    return b
+    return _bank_response(b, current_user)
 
 
 

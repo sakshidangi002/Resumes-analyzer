@@ -4,8 +4,7 @@
  * Behaviour:
  *   - One open socket per browser tab (multi-tab is fine — backend tracks
  *     one set of sockets per user_id).
- *   - JWT is appended as ?token=… on the handshake URL because browsers
- *     can't send custom headers on the WebSocket upgrade.
+ *   - Authentication uses the same-origin HttpOnly cookie during the upgrade.
  *   - Exponential backoff reconnect: 1 s → 2 s → 4 s → … capped at 30 s,
  *     jittered, until the auth token disappears or the page unloads.
  *   - Incoming frames are re-broadcast on the global window as DOM
@@ -42,7 +41,7 @@ export type NotifRow = {
 
 type WsState = "connecting" | "open" | "closed" | "auth-failed";
 
-function wsUrl(token: string): string {
+function wsUrl(): string {
   // VITE_WS_BASE_URL is optional — most deployments serve the WS on the
   // same origin as the SPA, so we derive ws://host or wss://host from the
   // current window location.
@@ -54,8 +53,7 @@ function wsUrl(token: string): string {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     base = `${protocol}//${window.location.host}`;
   }
-  const qsToken = encodeURIComponent(token);
-  return `${base}/ws/notifications?token=${qsToken}`;
+  return `${base}/ws/notifications`;
 }
 
 function emit(name: string, detail?: unknown): void {
@@ -96,8 +94,7 @@ function scheduleReconnect(): void {
 }
 
 function connect(): void {
-  const token = localStorage.getItem("token");
-  if (!token) {
+  if (typeof window === "undefined") {
     // Not logged in yet — nothing to do; the next login call to `start()`
     // will retry.
     return;
@@ -107,7 +104,7 @@ function connect(): void {
   }
   emitState("connecting");
   try {
-    socket = new WebSocket(wsUrl(token));
+    socket = new WebSocket(wsUrl());
   } catch {
     emitState("closed");
     scheduleReconnect();

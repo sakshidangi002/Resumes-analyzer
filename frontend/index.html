@@ -5,41 +5,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Resume Analyzer & AI Recruiter</title>
-    <!-- Google Fonts -->
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;800&display=swap"
-        rel="stylesheet">
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                        outfit: ['Outfit', 'sans-serif'],
-                    },
-                    colors: {
-                        brand: {
-                            50: '#eff6ff',
-                            100: '#dbeafe',
-                            200: '#bfdbfe',
-                            300: '#93c5fd',
-                            400: '#60a5fa',
-                            500: '#3b82f6', // Blue accent
-                            600: '#2563eb',
-                            700: '#1d4ed8',
-                            800: '#1e40af',
-                            900: '#1e3a8a', // Deep blue (active nav)
-                            950: '#0b0f19', // Deep dark space background
-                        }
-                    }
-                }
-            }
-        }
-    </script>
+    <!-- Fonts: system stack only.
+         The Google Fonts <link> that used to sit here was already dead: the
+         app's Content-Security-Policy allows style-src/font-src 'self' only, so
+         the browser blocked the request and fell back to these anyway. Keeping
+         it just cost a failed request and a console error on every page load.
+         To use Inter/Outfit again, self-host the .woff2 files under assets/ and
+         @font-face them — do NOT re-add a third-party origin, that is the CDN
+         dependency (S-20) this page was cleaned up to remove. -->
+    <!-- Tailwind CSS — SELF-HOSTED, built from this file.
+         This page uses ~475 Tailwind utility classes, and 64 elements rely on
+         Tailwind's .hidden to stay hidden. It used to get them from
+         cdn.tailwindcss.com, which was removed as a third-party-script
+         dependency (S-20) on a page that displays candidate PII. Removing the
+         CDN without replacing the stylesheet left `tailwind` undefined (the
+         inline tailwind.config threw a ReferenceError) and nothing styled —
+         every hidden panel rendered at once, so the page looked broken.
+
+         Rebuild after changing any class in this file:
+           npx tailwindcss@3 -c tailwind.resume.config.js \
+             -o frontend/assets/tailwind.css --minify
+         The brand palette and font stack that used to live in the inline
+         tailwind.config now live in tailwind.resume.config.js.
+
+         Served from /resume/assets/, which the auth guard leaves public on
+         purpose so styling loads before the session is checked. -->
+    <link rel="stylesheet" href="assets/tailwind.css">
     <style>
         body {
             background-color: #eef2f7;
@@ -1647,6 +1638,32 @@
         }
         .no-scrollbar::-webkit-scrollbar { height: 0; width: 0; display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Role/technology tab strip.
+           This row overflows as soon as there are more than a handful of roles,
+           and it used to carry .no-scrollbar — so the tabs past the right edge
+           were reachable but completely invisible: no bar, no hint, nothing to
+           drag. The scrollbar is intentionally shown here, styled thin so it
+           reads as part of the card rather than an OS artefact. */
+        #cand-tabs {
+            scrollbar-width: thin;                      /* Firefox */
+            scrollbar-color: #cbd5e1 transparent;
+            scroll-behavior: smooth;
+            /* Keeps the bar clear of the pills instead of overlapping them. */
+            padding-bottom: 0.4rem;
+            /* Lets a trackpad/wheel scroll this strip sideways without shift. */
+            overscroll-behavior-x: contain;
+        }
+        #cand-tabs::-webkit-scrollbar { height: 7px; }
+        #cand-tabs::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        #cand-tabs::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 9999px;
+        }
+        #cand-tabs::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
         .cand-tab {
             flex-shrink: 0;
             display: inline-flex;
@@ -2634,7 +2651,10 @@
 
                 <!-- Technology / role tabs -->
                 <div class="rounded-2xl bg-white border border-slate-200 shadow-sm px-3 py-2.5">
-                    <div id="cand-tabs" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+                    <!-- `no-scrollbar` deliberately NOT applied here: the row already
+                         scrolled, but with the bar hidden there was nothing to show that
+                         roles past the right edge existed. Styled in the <style> block. -->
+                    <div id="cand-tabs" class="flex items-center gap-2 overflow-x-auto py-0.5">
                         <span class="text-xs text-slate-400 px-1">Loading roles…</span>
                     </div>
                 </div>
@@ -3669,12 +3689,10 @@
         const resumeApiUrl = (new URLSearchParams(window.location.search).get("api"))
             || `${window.location.origin}/resume-api`;
 
-        // Extract JWT token from URL, localStorage, or sessionStorage
+        // Authentication is provided by the unified server's HttpOnly cookie.
+        // Keep only a short-lived in-memory token for standalone login state.
         const urlParams = new URLSearchParams(window.location.search);
-        let jwtToken = urlParams.get("token") || localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-        if (jwtToken) {
-            localStorage.setItem("token", jwtToken);
-        }
+        let jwtToken = "";
 
         // Are we mounted inside the HRMS app (served at /resume/) or running
         // standalone? Under HRMS there must be exactly ONE login — the HRMS
@@ -3711,6 +3729,7 @@
         }
 
         window.fetch = async function (url, options = {}) {
+            options.credentials = options.credentials || "same-origin";
             if (needsAuthHeader(url)) {
                 if (!options.headers) {
                     options.headers = {};
@@ -3895,7 +3914,7 @@
 
         // The global fetch interceptor only auto-injects the token for /resume-api
         // URLs; these endpoints live on the HRMS API (/api), so attach the bearer
-        // token explicitly (the user is already authenticated via ?token=).
+        // token explicitly (the user is already authenticated via the session cookie).
         function iqFetch(path, opts = {}) {
             const headers = new Headers(opts.headers || {});
             if (jwtToken && !headers.has("Authorization")) headers.set("Authorization", "Bearer " + jwtToken);
@@ -4786,13 +4805,18 @@
             if (avElem) avElem.innerText = _dashInitials(displayName);
 
             // Enrich with the real user record from /api/auth/me when reachable.
-            if (!jwtToken) return;
+            // Under HRMS jwtToken is always "" (HttpOnly cookie), so gating on it
+            // meant the topbar never showed the real name — it sat on the
+            // "User #3 / HR" placeholder derived from the JWT. Same-origin fetch
+            // sends the session cookie automatically; standalone still needs the
+            // Bearer header, so send it only when we actually hold a token.
+            if (!UNDER_HRMS && !jwtToken) return;
             try {
                 // The Resume Analyzer is mounted under the HRMS app, so /api/auth/me
                 // is available on the same origin. When running fully standalone
                 // this just fails silently and we keep the JWT fallback above.
                 const resp = await fetch("/api/auth/me", {
-                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                    headers: jwtToken ? { "Authorization": `Bearer ${jwtToken}` } : {}
                 });
                 if (!resp.ok) return;
                 const me = await resp.json();
@@ -4914,7 +4938,7 @@
                     <td class="p-3.5 text-center text-slate-400 font-medium text-[11px]">${dateAdded}</td>
                     <td class="p-4 pr-6 text-right" onclick="event.stopPropagation()">
                         <div class="inline-flex gap-1">
-                            <a href="${resumeApiUrl}/files/${r.source_file}?token=${jwtToken}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
+                            <a href="${resumeApiUrl}/files/${r.source_file}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                             </a>
                             <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
@@ -5191,6 +5215,15 @@
                 `<button type="button" class="cand-tab ${candState.role === r.role ? 'is-active' : ''}" onclick="candSetRole('${r.role.replace(/'/g, "\\'")}')">${_detailsEscape(r.role)} <span class="cand-tab-count">${r.count}</span></button>`
             ).join('');
             el.innerHTML = all + items;
+
+            // Re-rendering via innerHTML resets scrollLeft to 0. Without this,
+            // picking a role that sits off to the right snapped the strip back
+            // to the start and the tab you just selected was scrolled out of
+            // sight — it looked like the click had done nothing.
+            const active = el.querySelector('.cand-tab.is-active');
+            if (active && active.scrollIntoView) {
+                active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
         }
 
         function candSetRole(role) {
@@ -5308,7 +5341,7 @@
             const star = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${r.is_shortlisted ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
             const trash = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
             const view = r.source_file
-                ? btn('View resume', 'hover:text-blue-600', eye, `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}?token=${encodeURIComponent(jwtToken)}','_blank','noopener')`)
+                ? btn('View resume', 'hover:text-blue-600', eye, `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}','_blank','noopener')`)
                 : btn('No resume file', 'opacity-30 cursor-not-allowed', eye, 'void(0)');
             const download = r.source_file
                 ? btn('Download resume', 'hover:text-emerald-600', dl, `candDownloadResume('${encodeURIComponent(r.source_file)}', '${_detailsEscape(r.name).replace(/'/g, "\\'")}')`)
@@ -5321,7 +5354,7 @@
 
         function candDownloadResume(sourceFile, name) {
             const a = document.createElement('a');
-            a.href = `${resumeApiUrl}/files/${sourceFile}?token=${encodeURIComponent(jwtToken)}`;
+            a.href = `${resumeApiUrl}/files/${sourceFile}`;
             a.download = (name || 'resume');
             document.body.appendChild(a); a.click(); a.remove();
         }
@@ -6728,7 +6761,7 @@
             }
 
             // Viewing resume file PDF
-            document.getElementById("dw-download-link").href = `${resumeApiUrl}/files/${resume.source_file}?token=${jwtToken}`;
+            document.getElementById("dw-download-link").href = `${resumeApiUrl}/files/${resume.source_file}`;
             document.getElementById("dw-chat-btn").onclick = (e) => {
                 e.stopPropagation();
                 triggerSpecificResumeQna(resume.id);
@@ -7410,7 +7443,6 @@
                 const data = await response.json();
 
                 jwtToken = data.access_token;
-                localStorage.setItem("token", jwtToken);
 
                 document.getElementById("standalone-login-modal").classList.add("hidden");
 
@@ -7574,7 +7606,21 @@
 
         checkServerHealth();
         initTopbarUser();
-        if (!jwtToken) {
+        // "Do I hold a token string?" is NOT a test of being signed in when
+        // mounted under HRMS. There the session is an HttpOnly cookie, which
+        // JavaScript cannot read by design, so jwtToken is always "" — this
+        // check used to fire on every load and redirect straight back to the
+        // HRMS dashboard, making the Resume Analyzer flash up and vanish.
+        //
+        // Under HRMS the server has ALREADY authenticated us: resume_access_guard
+        // 302s an unauthorised /resume/ request away, so if this script is
+        // running at all, the user is a signed-in Admin/HR. Just load. Should a
+        // later API call genuinely come back 401/403, the fetch interceptor
+        // above still calls requireLogin().
+        //
+        // Standalone (no HRMS, no cookie) keeps the old behaviour: no token
+        // means show the login modal.
+        if (!UNDER_HRMS && !jwtToken) {
             requireLogin();
         } else {
             fetchResumes();

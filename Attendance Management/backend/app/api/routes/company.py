@@ -1,5 +1,5 @@
 """Company config and financial years (for leave/attendance config)."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, CompanyConfig, FinancialYear, Holiday
@@ -46,8 +46,17 @@ def get_config(db: Session = Depends(get_db)):
 
 
 @router.get("/financial-years", response_model=list[FinancialYearResponse])
-def list_financial_years(db: Session = Depends(get_db)):
-    return db.query(FinancialYear).order_by(FinancialYear.start_date.desc()).all()
+def list_financial_years(
+    db: Session = Depends(get_db),
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Financial years. Pagination is opt-in -- callers render a dropdown and
+    need every year, so `page` has no default."""
+    q = db.query(FinancialYear).order_by(FinancialYear.start_date.desc())
+    if page is not None:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    return q.all()
 
 
 class HolidayResponse(BaseModel):

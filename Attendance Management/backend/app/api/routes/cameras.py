@@ -19,7 +19,10 @@ GET    /api/cameras/stats            – overall system stats
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
+from urllib.parse import urlparse
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Query, Request
@@ -27,12 +30,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import (
+    get_current_user,
+    require_media_access,
+    require_media_or_bearer,
+    require_roles,
+)
+from app.core.net import is_allowed_camera_host_ip
+from app.core.security import MEDIA_TOKEN_TTL_SECONDS, create_media_token
 from app.db.session import get_db
 from app.models.camera import CameraConfig
 from app.services.camera_service import camera_manager
 from app.services.hikvision_discovery import discover_cameras
 from app.services.dvr_manager import get_dvr_manager
+from app.services.audit_service import log_audit
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -135,6 +146,33 @@ def _serialize_camera(cam: CameraConfig, live: Optional[dict] = None) -> dict:
     return base
 
 
+def _validate_camera_source(source_url: str, source_type: str) -> str:
+    """Reject camera URLs that could make the server fetch public/metadata hosts."""
+    value = source_url.strip()
+    if source_type == "usb" or value.isdigit():
+        return value
+    if source_type == "hcnetsdk":
+        parsed = urlparse(value)
+        if parsed.scheme != "hcnetsdk" or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Invalid HCNetSDK camera source.")
+        host = parsed.hostname
+    else:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"rtsp", "rtsps", "http", "https"} or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Camera source must use a supported URL scheme.")
+        host = parsed.hostname
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
+        for address in addresses:
+            # Rule lives in app/core/net.py so it is unit-testable without
+            # importing the vision stack. See it for why link-local matters.
+            if not is_allowed_camera_host_ip(address):
+                raise HTTPException(status_code=422, detail="Camera sources must resolve to a private network.")
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=422, detail="Camera source hostname could not be resolved.") from exc
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -181,7 +219,8 @@ def test_camera_connection(
             cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
             cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"VideoCapture exception: {exc}") from exc
+        logger.exception("VideoCapture failed")
+        raise HTTPException(status_code=503, detail="Unable to connect to the camera stream.") from exc
 
     if not cap.isOpened():
         cap.release()
@@ -238,6 +277,7 @@ def list_cameras(
 @router.post("/cameras", tags=["cameras"])
 def create_camera(
     payload: CameraCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -255,10 +295,11 @@ def create_camera(
         if payload.camera_purpose not in ["IN", "OUT", "MONITOR"]:
             raise ValueError(f"Invalid camera_purpose: {payload.camera_purpose}")
         
+        source_url = _validate_camera_source(payload.source_url, payload.source_type)
         cam = CameraConfig(
             name=payload.name,
             location=payload.location,
-            source_url=payload.source_url,  # Database uses source_url
+            source_url=source_url,
             source_type=payload.source_type,
             camera_purpose=payload.camera_purpose,
             threshold=payload.threshold,
@@ -268,6 +309,7 @@ def create_camera(
         db.add(cam)
         db.commit()
         db.refresh(cam)
+        log_audit(db, current_user.id, "CAMERA_CREATED", "Camera", str(cam.id), f"Created camera {cam.name}", request.client.host if request.client else None)
         logger.info("Camera created: id=%d name=%s purpose=%s", cam.id, cam.name, cam.camera_purpose)
 
         if cam.enabled:
@@ -276,10 +318,10 @@ def create_camera(
         return _serialize_camera(cam, camera_manager.get_status(cam.id))
     except ValueError as exc:
         logger.error(f"Validation error: {exc}")
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid camera configuration.") from exc
     except Exception as exc:
         logger.exception(f"Failed to create camera: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to create camera: {str(exc)}") from exc
+        raise HTTPException(status_code=500, detail="Unable to create the camera.") from exc
 
 
 @router.get("/cameras/{camera_id}", tags=["cameras"])
@@ -299,6 +341,7 @@ def get_camera(
 def update_camera(
     camera_id: int,
     payload: CameraUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -307,11 +350,14 @@ def update_camera(
         raise HTTPException(status_code=404, detail="Camera not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    if "source_url" in update_data:
+        update_data["source_url"] = _validate_camera_source(update_data["source_url"], update_data.get("source_type", cam.source_type))
     was_enabled = cam.enabled
     for field, value in update_data.items():
         setattr(cam, field, value)
     db.commit()
     db.refresh(cam)
+    log_audit(db, current_user.id, "CAMERA_UPDATED", "Camera", str(camera_id), "Updated camera configuration", request.client.host if request.client else None)
     logger.info("Camera updated: id=%d", camera_id)
 
     # Restart worker to apply config changes
@@ -326,6 +372,7 @@ def update_camera(
 @router.delete("/cameras/{camera_id}", tags=["cameras"])
 def delete_camera(
     camera_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -336,6 +383,7 @@ def delete_camera(
     camera_manager.remove_camera(camera_id)
     db.delete(cam)
     db.commit()
+    log_audit(db, current_user.id, "CAMERA_DELETED", "Camera", str(camera_id), "Deleted camera configuration", request.client.host if request.client else None)
     logger.info("Camera deleted: id=%d", camera_id)
     return {"message": f"Camera {camera_id} deleted"}
 
@@ -402,11 +450,26 @@ def get_camera_status(
     return live
 
 
+@router.post("/cameras/media-token", tags=["cameras"])
+def issue_camera_media_token(current_user=Depends(require_roles(["Admin", "HR"]))):
+    """Mint a short-lived token for <img>-rendered camera media.
+
+    Browsers cannot attach an Authorization header to an <img src>, so the live
+    MJPEG feeds and JPEG previews take `?t=<token>` instead. This endpoint is
+    the authenticated chokepoint: only an Admin/HR session can obtain one, and
+    what it grants expires in ~2 minutes and covers camera media only.
+    """
+    return {
+        "token": create_media_token(current_user.id, [r.name for r in current_user.roles]),
+        "expires_in": MEDIA_TOKEN_TTL_SECONDS,
+    }
+
+
 @router.get("/cameras/{camera_id}/preview", tags=["cameras"])
 def get_camera_preview(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    _auth=Depends(require_media_or_bearer),
 ):
     """Return the latest annotated JPEG frame as binary image/jpeg."""
     cam = db.query(CameraConfig).filter(CameraConfig.id == camera_id).first()
@@ -423,12 +486,17 @@ def get_camera_preview(
 
 
 @router.get("/cameras/{camera_id}/stream.mjpg", tags=["cameras"])
-async def stream_camera_mjpeg(camera_id: int, request: Request):
+async def stream_camera_mjpeg(
+    camera_id: int,
+    request: Request,
+    _auth=Depends(require_media_access),
+):
     """Continuous MJPEG stream of the annotated live feed.
 
     Rendered directly by an <img> tag in the browser, so the video plays at the
-    backend display FPS with no client-side polling. (No auth dependency, same
-    as the DVR stream endpoint, because <img> cannot send a Bearer header.)
+    backend display FPS with no client-side polling. <img> cannot send a Bearer
+    header, so this is gated by a short-lived `?t=` media token from
+    POST /api/cameras/media-token rather than being left open.
     """
     async def generate_frames():
         # ~30 FPS ceiling; the display thread produces frames at CCTV_DISPLAY_FPS.
@@ -667,7 +735,11 @@ def dvr_stop_all(current_user=Depends(get_current_user)):
 
 
 @router.get("/dvr/cameras/{channel_id}/preview")
-def dvr_camera_preview(channel_id: int):
+def dvr_camera_preview(
+    channel_id: int,
+    request: Request,
+    _auth=Depends(require_media_or_bearer),
+):
     """Get latest JPEG frame from DVR camera."""
     dvr_manager = get_dvr_manager()
     
@@ -701,8 +773,15 @@ def dvr_camera_preview(channel_id: int):
 
 
 @router.get("/dvr/cameras/{channel_id}/stream")
-async def dvr_camera_stream(channel_id: int, request: Request):
-    """MJPEG streaming endpoint for live video feed."""
+async def dvr_camera_stream(
+    channel_id: int,
+    request: Request,
+    _auth=Depends(require_media_access),
+):
+    """MJPEG streaming endpoint for live video feed.
+
+    Gated by a short-lived `?t=` media token -- see stream_camera_mjpeg.
+    """
     dvr_manager = get_dvr_manager()
 
     if not dvr_manager._connection or not dvr_manager._connection.connected:

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timedelta
 import os
 
@@ -8,6 +9,19 @@ import pdfplumber
 from docx import Document as DocxDocument
 
 logger = logging.getLogger(__name__)
+
+# Guards the lazy model singletons below.
+#
+# `if _model is None: _model = load()` is NOT atomic. Extraction, chat and
+# embedding all run inside the API's 4-worker ThreadPoolExecutor, so a burst of
+# requests arriving before a model is warm puts several threads inside that
+# branch at once and each one loads its own copy of a multi-GB transformer.
+# That is the "AI models initialized repeatedly" symptom: memory spikes to N
+# copies and every one of those requests waits out a full load.
+#
+# One lock for all three is fine -- loads happen once at startup-ish time, and
+# serialising them avoids several models being pulled into RAM simultaneously.
+_model_load_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Extraction model (NuExtract-1.5-smol) ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ lazy singleton
@@ -19,21 +33,27 @@ _extract_model = None
 
 def _get_extract_tokenizer():
     global _extract_tokenizer
-    if _extract_tokenizer is None:
-        from transformers import AutoTokenizer
-        logger.info("Loading NuExtract tokenizerÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
-        _extract_tokenizer = AutoTokenizer.from_pretrained(EXTRACT_MODEL, use_fast=False)
-        logger.info("NuExtract tokenizer ready.")
+    if _extract_tokenizer is not None:      # fast path: no lock once warm
+        return _extract_tokenizer
+    with _model_load_lock:
+        if _extract_tokenizer is None:      # re-check: another thread may have won the race
+            from transformers import AutoTokenizer
+            logger.info("Loading NuExtract tokenizer...")
+            _extract_tokenizer = AutoTokenizer.from_pretrained(EXTRACT_MODEL, use_fast=False)
+            logger.info("NuExtract tokenizer ready.")
     return _extract_tokenizer
 
 
 def _get_extract_model():
     global _extract_model
-    if _extract_model is None:
-        from transformers import AutoModelForCausalLM
-        logger.info("Loading NuExtract modelÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
-        _extract_model = AutoModelForCausalLM.from_pretrained(EXTRACT_MODEL)
-        logger.info("NuExtract model ready.")
+    if _extract_model is not None:
+        return _extract_model
+    with _model_load_lock:
+        if _extract_model is None:
+            from transformers import AutoModelForCausalLM
+            logger.info("Loading NuExtract model...")
+            _extract_model = AutoModelForCausalLM.from_pretrained(EXTRACT_MODEL)
+            logger.info("NuExtract model ready.")
     return _extract_model
 
 
@@ -124,15 +144,18 @@ _chat_pipe = None
 
 def _get_chat_pipe():
     global _chat_pipe
-    if _chat_pipe is None:
-        from transformers import pipeline
-        logger.info("Loading chat pipeline: %s ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦", CHAT_MODEL)
-        _chat_pipe = pipeline(
-            "text-generation",
-            model=CHAT_MODEL,
-            do_sample=False,
-        )
-        logger.info("Chat pipeline ready: %s", CHAT_MODEL)
+    if _chat_pipe is not None:
+        return _chat_pipe
+    with _model_load_lock:
+        if _chat_pipe is None:
+            from transformers import pipeline
+            logger.info("Loading chat pipeline: %s ...", CHAT_MODEL)
+            _chat_pipe = pipeline(
+                "text-generation",
+                model=CHAT_MODEL,
+                do_sample=False,
+            )
+            logger.info("Chat pipeline ready: %s", CHAT_MODEL)
     return _chat_pipe
 
 
@@ -4520,13 +4543,16 @@ _embedding_model = None
 
 def get_embedding_model():
     global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info("Loading embedding modelÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
-        _embedding_model = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2", device="cpu"
-        )
-        logger.info("Embedding model ready.")
+    if _embedding_model is not None:
+        return _embedding_model
+    with _model_load_lock:
+        if _embedding_model is None:
+            from sentence_transformers import SentenceTransformer
+            logger.info("Loading embedding model...")
+            _embedding_model = SentenceTransformer(
+                "sentence-transformers/all-MiniLM-L6-v2", device="cpu"
+            )
+            logger.info("Embedding model ready.")
     return _embedding_model
 
 

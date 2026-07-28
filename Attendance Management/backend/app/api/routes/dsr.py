@@ -227,7 +227,7 @@ def my_dsr_today_status(
     Returns the IST date the server considered "today" so the client never has
     to reason about the user's laptop clock.
     """
-    ist_today = (datetime.utcnow() + timedelta(hours=5, minutes=30)).date()
+    ist_today = (__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() + timedelta(hours=5, minutes=30)).date()
     if not current_user.employee_id:
         return {
             "today_ist": ist_today.isoformat(),
@@ -343,7 +343,7 @@ def create_my_dsr(
         work_done=data.work_done,
         plan_for_tomorrow=data.plan_for_tomorrow,
         status=data.status,
-        submitted_at=datetime.utcnow() if data.status == "SUBMITTED" else None,
+        submitted_at=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() if data.status == "SUBMITTED" else None,
     )
     db.add(row)
     db.commit()
@@ -402,9 +402,9 @@ def update_dsr(
         if data.status == "SUBMITTED" and row.status != "SUBMITTED":
             just_submitted = True
         row.status = data.status
-        row.submitted_at = datetime.utcnow() if data.status == "SUBMITTED" else None
+        row.submitted_at = __import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() if data.status == "SUBMITTED" else None
 
-    row.updated_at = datetime.utcnow()
+    row.updated_at = __import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now()
     db.commit()
     db.refresh(row)
     if just_submitted:

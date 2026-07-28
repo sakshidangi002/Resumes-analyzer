@@ -40,8 +40,8 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      await login(username, password);
-      navigate("/", { replace: true });
+      const mustChangePassword = await login(username, password);
+      navigate(mustChangePassword ? "/change-password" : "/", { replace: true });
     } catch (err: any) {
       if (err.code === "ECONNABORTED" || err.message?.toLowerCase().includes("timeout")) {
         setError("Server is taking too long to respond. Please check your connection and try again.");

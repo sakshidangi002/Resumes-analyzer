@@ -67,6 +67,17 @@ def _emails_for_roles(db: Session, role_names: list[str]) -> list[str]:
         .filter(Role.name.in_(role_names))
         .all()
     )
+    # Resolve every linked employee in ONE query. This used to be a per-user
+    # lookup inside the loop below, so notifying HR cost one round trip per HR
+    # user on every leave application/approval.
+    employee_ids = [u.employee_id for u in users if u.employee_id]
+    emails_by_employee_id = {
+        row[0]: row[1]
+        for row in db.query(Employee.id, Employee.official_email)
+        .filter(Employee.id.in_(employee_ids))
+        .all()
+    } if employee_ids else {}
+
     seen: set[str] = set()
     out: list[str] = []
     for u in users:
@@ -76,9 +87,9 @@ def _emails_for_roles(db: Session, role_names: list[str]) -> list[str]:
         if u.username and "@" in u.username:
             candidates.append(u.username.strip())
         if u.employee_id:
-            emp = db.query(Employee).filter(Employee.id == u.employee_id).first()
-            if emp and emp.official_email:
-                candidates.append(emp.official_email.strip())
+            emp_email = emails_by_employee_id.get(u.employee_id)
+            if emp_email:
+                candidates.append(emp_email.strip())
         for c in candidates:
             if c and c.lower() not in seen:
                 seen.add(c.lower())
@@ -243,9 +254,17 @@ def _ensure_default_leave_types(db: Session) -> None:
 
 
 @router.get("/types", response_model=list[LeaveTypeResponse])
-def list_leave_types(db: Session = Depends(get_db)):
-    _ensure_default_leave_types(db)
-    return db.query(LeaveType).all()
+def list_leave_types(
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Leave types. Pagination is opt-in -- every caller populates a dropdown
+    and needs the complete list, so `page` has no default."""
+    q = db.query(LeaveType).order_by(LeaveType.id)
+    if page is not None:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    return q.all()
 
 
 @router.get("/allocations", response_model=list[LeaveAllocationResponse])
@@ -254,6 +273,8 @@ def list_leave_allocations(
     financial_year_id: int | None = Query(None),
     month: int | None = Query(None, description="For Short Leave monthly balance; default current month"),
     year: int | None = Query(None, description="For Short Leave monthly balance; default current year"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -266,8 +287,6 @@ def list_leave_allocations(
     role_names = [r.name for r in current_user.roles]
     is_admin_or_hr = "Admin" in role_names or "HR" in role_names
     target_employee_id: int | None = None
-
-    _ensure_user_employee_link(db, current_user)
 
     if employee_id is not None:
         if not is_admin_or_hr and current_user.employee_id != employee_id:
@@ -304,7 +323,12 @@ def list_leave_allocations(
     if target_employee_id is not None and fy:
         ensure_default_allocations_for_employee(db, target_employee_id, fy.id)
 
-    allocs = q.order_by(LeaveAllocation.id).all()
+    allocs = (
+        q.order_by(LeaveAllocation.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     # Short Leave (SL): monthly 2 (or per allocation), not carried forward to next month.
     sl_type = db.query(LeaveType).filter(LeaveType.code == "SL").first()
     pl_type = db.query(LeaveType).filter(LeaveType.code == "PL").first()
@@ -483,6 +507,8 @@ def create_leave_request(
 def list_leave_requests(
     employee_id: int | None = Query(None),
     status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -493,8 +519,6 @@ def list_leave_requests(
     q = db.query(LeaveRequest)
     role_names = [r.name for r in current_user.roles]
     is_admin_or_hr = "Admin" in role_names or "HR" in role_names
-
-    _ensure_user_employee_link(db, current_user)
 
     if employee_id is not None:
         if not is_admin_or_hr and current_user.employee_id != employee_id:
@@ -508,12 +532,19 @@ def list_leave_requests(
 
     if status:
         q = q.filter(LeaveRequest.status == status)
-    return q.order_by(LeaveRequest.applied_at.desc()).all()
+    return (
+        q.order_by(LeaveRequest.applied_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
 
 @router.get("/approvals", response_model=list[LeaveApprovalRow])
 def list_leave_approvals(
     status: str = Query("PENDING"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
@@ -546,7 +577,12 @@ def list_leave_approvals(
     )
     if status:
         q = q.filter(LeaveRequest.status == status)
-    rows = q.order_by(LeaveRequest.applied_at.desc()).all()
+    rows = (
+        q.order_by(LeaveRequest.applied_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
     fy = get_current_financial_year(db)
     result: list[LeaveApprovalRow] = []
@@ -708,18 +744,19 @@ def delete_leave_request(
                 alloc.used_days = max(Decimal("0"), alloc.used_days - revert_days)
                 
         # 2. Revert Attendance
-        d = req.start_date
-        while d <= req.end_date:
-            rec = db.query(AttendanceRecord).filter(
-                AttendanceRecord.employee_id == req.employee_id,
-                AttendanceRecord.date == d
-            ).first()
-            if rec and rec.status in ("ON_LEAVE", "PAID_LEAVE", "SHORT", "HALF_DAY"):
+        # One range query instead of one query PER DAY -- a month-long leave
+        # previously cost ~30 sequential round trips here.
+        affected = db.query(AttendanceRecord).filter(
+            AttendanceRecord.employee_id == req.employee_id,
+            AttendanceRecord.date >= req.start_date,
+            AttendanceRecord.date <= req.end_date,
+        ).all()
+        for rec in affected:
+            if rec.status in ("ON_LEAVE", "PAID_LEAVE", "SHORT", "HALF_DAY"):
                 if rec.sign_in_time is None and rec.sign_out_time is None:
                     db.delete(rec)
                 else:
                     rec.status = "ABSENT"  # Can be recalculated later if punches exist
-            d = d + timedelta(days=1)
 
     # 3. Cleanup Notifications
     try:
@@ -765,7 +802,6 @@ def paid_leave_summary_endpoint(
 
     Employees may only view their own; Admin/HR may pass any employee_id.
     """
-    _ensure_user_employee_link(db, current_user)
     fy = get_current_financial_year(db)
     if not fy:
         raise HTTPException(status_code=400, detail="No financial year configured")

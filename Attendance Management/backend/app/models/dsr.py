@@ -44,7 +44,7 @@ class DailyStatusReport(Base):
     status = Column(String(20), nullable=False, default="DRAFT", index=True)
     submitted_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
+    updated_at = Column(DateTime, nullable=False, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, onupdate=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
 
     employee = relationship("Employee", backref="daily_status_reports")

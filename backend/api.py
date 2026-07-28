@@ -7,6 +7,7 @@ import shutil
 import uuid
 import zipfile
 from datetime import datetime as _dt
+from datetime import timezone
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, time
@@ -16,11 +17,13 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, Boolean, create_engine, text, or_, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse, JSONResponse, Response
 
 from .main import (
@@ -41,6 +44,15 @@ from .main import (
     preload_extract_model,
     rank_candidates,
 )
+from .config import get_settings
+from .services.resume_utils import (
+    dump_text_list,
+    normalize_email,
+    normalize_name,
+    normalize_phone,
+    parse_text_list,
+    sanitize_embedding_text,
+)
 
 import pandas as pd
 from chromadb import PersistentClient
@@ -57,102 +69,54 @@ def _log_json(event: str, payload: dict) -> None:
         logger.info("%s %s", event, str(payload))
 
 
+_settings = get_settings()
+
+
 def _norm_email(email: Optional[str]) -> str:
-    return (email or "").strip().lower()
+    return normalize_email(email)
 
 
 def _norm_phone(phone: Optional[str]) -> str:
-    # digits only
-    p = re.sub(r"\D+", "", (phone or ""))
-    # drop common leading country codes for comparison (best-effort)
-    if len(p) > 10 and p.startswith("1"):
-        p = p[1:]
-    if len(p) > 10 and p.startswith("91"):
-        p = p[2:]
-    return p
+    return normalize_phone(phone)
 
 
 def _norm_name(name: Optional[str]) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip().lower())
+    return normalize_name(name)
 
 
 def _sanitize_embedding_text(text: str) -> str:
-    # collapse whitespace and drop extreme symbol junk
-    t = (text or "").replace("\r", "\n")
-    lines = []
-    for ln in t.splitlines():
-        s = ln.strip()
-        if not s:
-            continue
-        # drop footnote-only lines / symbol-heavy noise
-        sym = sum(1 for ch in s if not (ch.isalnum() or ch.isspace()))
-        if len(s) > 12 and (sym / max(1, len(s))) > 0.45:
-            continue
-        lines.append(s)
-    return re.sub(r"\s+", " ", "\n".join(lines)).strip()
+    return sanitize_embedding_text(text)
 
 
 def _parse_text_list(value) -> list[str]:
     """Parse a DB text field that may be JSON list or comma-separated text."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(x).strip() for x in value if str(x).strip()]
-    if isinstance(value, tuple):
-        return [str(x).strip() for x in value if str(x).strip()]
-    s = str(value).strip()
-    if not s:
-        return []
-    if s.startswith("["):
-        try:
-            parsed = json.loads(s)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        except Exception:
-            pass
-    return [part.strip() for part in re.split(r"[\n,]", s) if part.strip()]
+    return parse_text_list(value)
 
 
 def _dump_text_list(values) -> str | None:
     """Store a text field as JSON array so skills remain structured."""
-    if values is None:
-        return None
-    if isinstance(values, str):
-        items = _parse_text_list(values)
-    else:
-        items = [str(x).strip() for x in values if str(x).strip()]
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        key = item.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return json.dumps(deduped, ensure_ascii=False) if deduped else None
+    return dump_text_list(values)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:root@localhost:5432/Resume_analyzer",
-)
+DATABASE_URL = _settings.database_url
 # Used for building resume download links; override in .env if behind a proxy
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
+BASE_URL = _settings.base_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+UPLOAD_DIR = str(_settings.upload_dir)
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 LEGACY_UPLOAD_DIR = os.path.join(PROJECT_ROOT, "uploads")
 EXCEL_DIR = os.path.join(BASE_DIR, "data")
-EXCEL_FILE = os.path.join(EXCEL_DIR, "resumes_data.xlsx")
+EXCEL_FILE = str(_settings.excel_file)
 # Always under backend/ - not process cwd (unified server runs from hrms/backend).
-CHROMA_DIR = os.path.join(BASE_DIR, "chromadb")
+CHROMA_DIR = str(_settings.chroma_dir)
 
 # Excel column order for append
 EXCEL_COLUMNS = ["name", "email", "phone", "skills", "experience", "resume_link", "created_at"]
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_RESUME_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 
 # ---------------------------------------------------------------------------
 # Database
@@ -164,7 +128,7 @@ engine = create_engine(
     pool_timeout=30,
     pool_recycle=1800,
     pool_pre_ping=True,  # reconnect on stale connections
-    connect_args={"connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "5"))},
+    connect_args={"connect_timeout": _settings.db_connect_timeout},
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
@@ -194,7 +158,7 @@ class ResumeDB(Base):
     resume_link = Column(Text)
     source_file = Column(String)
     vector_id = Column(String, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     companies_worked_at = Column(Text, nullable=True)
     role = Column(String, nullable=True)
     important_keywords = Column(Text, nullable=True)
@@ -243,7 +207,7 @@ class CandidateNoteDB(Base):
     )
     note = Column(Text, nullable=False)
     status = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     created_by = Column(String(100), nullable=True)
 
 
@@ -547,6 +511,33 @@ def _run_migrations():
         "ALTER TABLE resumes ADD COLUMN IF NOT EXISTS experience_notes TEXT",
         # candidate_notes table
         "ALTER TABLE candidate_notes ADD COLUMN IF NOT EXISTS created_by VARCHAR(100)",
+
+        # ---- Search indexes -------------------------------------------------
+        # Candidate search filters on deleted_at + experience_years and orders
+        # by created_at; without these every search is a full table scan.
+        "CREATE INDEX IF NOT EXISTS ix_resumes_deleted_at ON resumes (deleted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_created_at ON resumes (created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_experience_years ON resumes (experience_years)",
+
+        # Trigram indexes make the skill ILIKE '%term%' filters indexable. A
+        # leading wildcard cannot use a normal B-tree, so without pg_trgm those
+        # predicates scan every row.
+        #
+        # Both the extension and the indexes are best-effort: CREATE EXTENSION
+        # needs elevated privileges that a managed database may withhold. The
+        # runner executes each statement in its own transaction and logs-and-
+        # skips failures, so on a database without pg_trgm these are simply
+        # absent and search still returns correct results, just unindexed.
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_skills_trgm ON resumes USING gin (skills gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_primary_skills_trgm ON resumes USING gin (primary_skills gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_key_skills_trgm ON resumes USING gin (key_skills gin_trgm_ops)",
+        # Duplicate detection on every upload runs phone ILIKE '%last7%'.
+        "CREATE INDEX IF NOT EXISTS ix_resumes_phone_trgm ON resumes USING gin (phone gin_trgm_ops)",
+        # Duplicate detection also does lower(email) = ? and lower(name) = ?,
+        # which need functional indexes to avoid a scan per uploaded file.
+        "CREATE INDEX IF NOT EXISTS ix_resumes_email_lower ON resumes (lower(email))",
+        "CREATE INDEX IF NOT EXISTS ix_resumes_name_lower ON resumes (lower(name))",
     ]
     try:
         # IMPORTANT: In PostgreSQL, any failed statement can abort the whole transaction.
@@ -676,15 +667,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    # MUST stay False while allow_origins is "*". The pair
-    # allow_origins=["*"] + allow_credentials=True lets any website a logged-in
-    # HR user visits make credentialed cross-origin calls to this API. Auth here
-    # is a Bearer header (no cookies), so disabling credentials costs nothing --
-    # this matches the HRMS app's CORS config.
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()] or ["http://127.0.0.1:5001", "http://localhost:5001"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 
 Base.metadata.create_all(bind=engine)
@@ -812,13 +798,29 @@ except Exception as e:
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    import traceback
-    tb = traceback.format_exc()
-    logger.error("Unhandled exception: %s\n%s", exc, tb)
+    logger.exception("Unhandled exception at %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "error_type": type(exc).__name__},
+        content={"detail": "Internal server error. Please try again later."},
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Request validation failed: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=422, content={"detail": "Invalid request data."})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        logger.error("HTTP %s at %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": "Internal server error. Please try again later."},
+            headers=exc.headers,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +833,21 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+async def _read_resume_upload(file: UploadFile) -> bytes:
+    """Read a bounded, type-checked PDF/DOCX upload."""
+    data = await file.read(MAX_UPLOAD_SIZE + 1)
+    if len(data) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="Resume file exceeds the upload size limit.")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext == ".pdf" and not data.startswith(b"%PDF-"):
+        raise HTTPException(status_code=415, detail="The uploaded file is not a valid PDF.")
+    if ext == ".docx" and not data.startswith(b"PK"):
+        raise HTTPException(status_code=415, detail="The uploaded file is not a valid DOCX.")
+    if ext not in {".pdf", ".docx"}:
+        raise HTTPException(status_code=415, detail="Only PDF and DOCX files are supported.")
+    return data
 
 
 def sanitize_db_string(val):
@@ -1369,6 +1386,74 @@ def _derive_clean_skills_from_text(resume_text: str) -> tuple[list[str], list[st
     return primary_clean, other_clean
 
 
+def _find_existing_duplicate(db: Session, cleaned):
+    """Locate an already-stored resume for the same person.
+
+    Matching order: exact email, then phone (DB narrows on the last 7 digits and
+    Python confirms the normalised form), then name — but a name alone is never
+    enough, so it must be corroborated by the same location or a shared skill.
+
+    Kept SYNCHRONOUS and separate from the upload handler so the caller can run
+    the whole thing in one worker thread. It issues up to three round trips to a
+    remote database per uploaded file; executed inline inside `async def
+    upload_resume` that would stall the event loop for every other request in
+    the process, once per file in a bulk upload.
+
+    Returns (existing_or_None, email_norm, phone_norm, name_norm) — the
+    normalised values are returned too because the caller logs which of them
+    triggered the match.
+    """
+    existing = None
+    email_n = _norm_email(cleaned.email)
+    phone_n = _norm_phone(cleaned.phone)
+    name_n = _norm_name(cleaned.name)
+
+    if email_n:
+        existing = (
+            db.query(ResumeDB)
+            .filter(ResumeDB.email != None)
+            .filter(func.lower(ResumeDB.email) == email_n)
+            .first()
+        )
+    if not existing and phone_n:
+        # Best-effort DB narrowing using last digits, then normalize in Python.
+        last7 = phone_n[-7:] if len(phone_n) >= 7 else phone_n
+        cand = (
+            db.query(ResumeDB)
+            .filter(ResumeDB.phone != None)
+            .filter(ResumeDB.phone.ilike(f"%{last7}%"))
+            .limit(200)
+            .all()
+        )
+        for r0 in cand:
+            if _norm_phone(r0.phone) == phone_n:
+                existing = r0
+                break
+    if not existing and name_n:
+        # Name alone is not enough; require corroborator (same location or overlapping skill token)
+        cand = (
+            db.query(ResumeDB)
+            .filter(ResumeDB.name != None)
+            .filter(func.lower(ResumeDB.name) == name_n)
+            .order_by(ResumeDB.created_at.desc())
+            .limit(200)
+            .all()
+        )
+        for r0 in cand:
+            loc0 = (getattr(r0, "location", "") or "").strip().lower()
+            loc1 = (cleaned.location or "").strip().lower()
+            if loc0 and loc1 and loc0 == loc1:
+                existing = r0
+                break
+            blob0 = " ".join([(r0.skills or ""), (getattr(r0, "primary_skills", "") or ""), (getattr(r0, "key_skills", "") or "")]).lower()
+            blob1 = " ".join([( ", ".join(cleaned.skills or []) ), (", ".join(cleaned.primary_skills or []) ), (", ".join(cleaned.key_skills or []) )]).lower()
+            if any(t and (t in blob0 and t in blob1) for t in [".net", "python", "react", "java", "sql", "aws", "azure", "docker", "kubernetes"]):
+                existing = r0
+                break
+
+    return existing, email_n, phone_n, name_n
+
+
 @app.post("/upload", tags=["Resumes"])
 async def upload_resume(
     request: Request,
@@ -1385,11 +1470,8 @@ async def upload_resume(
     for i, file in enumerate(files):
         try:
             logger.info("Upload started: %s", file.filename)
-            file_bytes = await file.read()
+            file_bytes = await _read_resume_upload(file)
             ext = os.path.splitext(file.filename or "")[-1].lower()
-            if ext not in (".pdf", ".docx"):
-                results[i] = {"status": "error", "file": file.filename, "message": "Only PDF and DOCX are supported."}
-                continue
             if executor:
                 resume_text = await loop.run_in_executor(
                     executor, _extract_text_from_bytes, file_bytes, ext, BASE_DIR
@@ -1427,7 +1509,7 @@ async def upload_resume(
         except Exception as exc:
             import traceback
             logger.error("Upload failed for %s: %s\n%s", file.filename, exc, traceback.format_exc())
-            results[i] = {"status": "error", "file": file.filename, "message": str(exc)}
+            results[i] = {"status": "error", "file": file.filename, "message": "Could not process this file."}
 
     if not valid_items:
         return [r for r in results if r is not None]
@@ -1507,53 +1589,12 @@ async def upload_resume(
                             cleaned.experience_summary = f"{approx} years experience (from date ranges)"
 
             # Duplicate detection (normalized): email > phone > (name + corroborator)
-            existing = None
-            email_n = _norm_email(cleaned.email)
-            phone_n = _norm_phone(cleaned.phone)
-            name_n = _norm_name(cleaned.name)
-
-            if email_n:
-                existing = (
-                    db.query(ResumeDB)
-                    .filter(ResumeDB.email != None)
-                    .filter(func.lower(ResumeDB.email) == email_n)
-                    .first()
-                )
-            if not existing and phone_n:
-                # Best-effort DB narrowing using last digits, then normalize in Python.
-                last7 = phone_n[-7:] if len(phone_n) >= 7 else phone_n
-                cand = (
-                    db.query(ResumeDB)
-                    .filter(ResumeDB.phone != None)
-                    .filter(ResumeDB.phone.ilike(f"%{last7}%"))
-                    .limit(200)
-                    .all()
-                )
-                for r0 in cand:
-                    if _norm_phone(r0.phone) == phone_n:
-                        existing = r0
-                        break
-            if not existing and name_n:
-                # Name alone is not enough; require corroborator (same location or overlapping skill token)
-                cand = (
-                    db.query(ResumeDB)
-                    .filter(ResumeDB.name != None)
-                    .filter(func.lower(ResumeDB.name) == name_n)
-                    .order_by(ResumeDB.created_at.desc())
-                    .limit(200)
-                    .all()
-                )
-                for r0 in cand:
-                    loc0 = (getattr(r0, "location", "") or "").strip().lower()
-                    loc1 = (cleaned.location or "").strip().lower()
-                    if loc0 and loc1 and loc0 == loc1:
-                        existing = r0
-                        break
-                    blob0 = " ".join([(r0.skills or ""), (getattr(r0, "primary_skills", "") or ""), (getattr(r0, "key_skills", "") or "")]).lower()
-                    blob1 = " ".join([( ", ".join(cleaned.skills or []) ), (", ".join(cleaned.primary_skills or []) ), (", ".join(cleaned.key_skills or []) )]).lower()
-                    if any(t and (t in blob0 and t in blob1) for t in [".net", "python", "react", "java", "sql", "aws", "azure", "docker", "kubernetes"]):
-                        existing = r0
-                        break
+            # Up to three remote queries per uploaded file. Run them in a worker
+            # thread — inline they would block the event loop for the whole
+            # round trip, once per file, on every bulk upload.
+            existing, email_n, phone_n, name_n = await run_in_threadpool(
+                _find_existing_duplicate, db, cleaned
+            )
 
             if existing:
                 _log_json("duplicate_detected", {"file": filename, "reason": "email" if email_n and _norm_email(existing.email)==email_n else ("phone" if phone_n and _norm_phone(existing.phone)==phone_n else "name+corroborator"), "existing_id": str(existing.id)})
@@ -1757,7 +1798,7 @@ async def upload_resume(
             import traceback
             logger.error("Upload failed for %s: %s\n%s", filename, exc, traceback.format_exc())
             db.rollback()
-            results[idx] = {"status": "error", "file": filename, "message": str(exc)}
+            results[idx] = {"status": "error", "file": filename, "message": "Could not process this file."}
 
     return [r for r in results if r is not None]
 
@@ -1799,7 +1840,7 @@ async def extract_skills_only(
     - Keeps existing analyzer/extraction logic untouched by using the existing helpers.
     """
     try:
-        file_bytes = await file.read()
+        file_bytes = await _read_resume_upload(file)
         ext = os.path.splitext(file.filename or "")[-1].lower()
         if ext not in (".pdf", ".docx"):
             raise HTTPException(status_code=400, detail="Only PDF and DOCX are supported.")
@@ -1826,7 +1867,7 @@ async def extract_skills_only(
         raise
     except Exception as exc:
         logger.exception("Skills-only extraction failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Internal server error. Please try again later.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -2549,7 +2590,7 @@ def backfill_extractions(
                     "resume_id": str(resume.id),
                     "updated": False,
                     "reason": "error",
-                    "message": str(exc),
+                    "message": "Could not update this resume.",
                 }
             )
 
@@ -2710,7 +2751,13 @@ def get_resume_json(resume_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/resume/{resume_id}", tags=["Resumes"])
-async def get_resume(resume_id: str, db: Session = Depends(get_db)):
+def get_resume(resume_id: str, db: Session = Depends(get_db)):
+    # Deliberately `def`, not `async def`. The body is a synchronous SQLAlchemy
+    # query plus filesystem stats; inside an `async def` both run ON the event
+    # loop, so every concurrent request in the whole process stalls for the
+    # round trip (the database is remote, ~29 ms). Declared sync, FastAPI runs
+    # it in a worker thread and the loop stays free. There is nothing to await
+    # here, so this costs nothing.
     resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
     if resume and resume.source_file:
         file_path = _resolve_resume_file_path(resume.source_file, trusted=True)
@@ -3018,7 +3065,19 @@ def _db_search_candidates(
     max_experience: float | None = None,
     limit: int = 50,
 ) -> list:
-    """Return resume ORM objects matching any of the skill terms and optional experience range."""
+    """Return resume ORM objects matching any of the skill terms and optional experience range.
+
+    The skill match is pushed INTO SQL. It used to be done entirely in Python
+    over `limit * 2` rows taken in `created_at DESC` order, which was both slow
+    and wrong: a search for "Python developers" only ever examined the 100
+    newest resumes, so an older Python CV could never be returned no matter how
+    well it matched. Filtering in the database removes that recency blind spot
+    and stops shipping rows across the wire only to discard them.
+
+    ILIKE '%term%' is substring, not word, matching -- '%java%' also hits
+    "javascript" -- so the word-boundary regex below still runs as a precision
+    pass. SQL narrows, Python refines.
+    """
     if not skill_terms and min_experience <= 0 and max_experience is None:
         return []
     q = db.query(ResumeDB).filter(ResumeDB.deleted_at == None)
@@ -3026,7 +3085,23 @@ def _db_search_candidates(
         q = q.filter(ResumeDB.experience_years >= min_experience)
     if max_experience is not None:
         q = q.filter(ResumeDB.experience_years <= max_experience)
-    rows = q.order_by(ResumeDB.created_at.desc()).limit(limit * 2).all()  # fetch extra then filter
+
+    if skill_terms:
+        # Match any term against any of the three explicit skill columns.
+        # Narrative fields (projects / summary) are deliberately excluded: a
+        # technology mentioned in prose does not make someone a skill match.
+        skill_columns = (ResumeDB.skills, ResumeDB.primary_skills, ResumeDB.key_skills)
+        q = q.filter(
+            or_(*[
+                column.ilike(f"%{term}%")
+                for term in skill_terms
+                for column in skill_columns
+            ])
+        )
+
+    # Over-fetch so the word-boundary pass below still has material to work with
+    # after it drops substring false positives ('java' matching "javascript").
+    rows = q.order_by(ResumeDB.created_at.desc()).limit(limit * 4).all()
     if not skill_terms:
         return rows[:limit]
     combined = []
@@ -3144,19 +3219,36 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
 
     # Keep chat independent from Chroma/embedding persistence. Search-like
     # questions are answered from stored resume rows only.
+    # These are synchronous SQLAlchemy calls inside an `async def`, so running
+    # them inline would block the event loop -- and the loop is shared with
+    # every other request AND (in the unified deployment) with HRMS. The
+    # database is remote at ~29 ms per round trip, so a single chat request
+    # could stall the whole process for a noticeable fraction of a second.
+    # Hand each one to a worker thread instead. They stay awaited in sequence,
+    # so only one thread ever touches this Session at a time.
     seen_ids = set()
     merged: list = []
     if is_search_like and (skill_terms or min_exp > 0 or max_exp is not None):
-        db_resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
+        db_resumes = await run_in_threadpool(
+            _db_search_candidates, db, skill_terms, min_exp, max_exp, limit=50
+        )
         for r in db_resumes:
             if r.id not in seen_ids:
                 seen_ids.add(r.id)
                 merged.append(r)
     resumes = _apply_skill_filter(question, merged) if merged else merged
     if not resumes and is_search_like and skill_terms:
-        resumes = _db_search_candidates(db, skill_terms, min_exp, max_exp, limit=50)
+        resumes = await run_in_threadpool(
+            _db_search_candidates, db, skill_terms, min_exp, max_exp, limit=50
+        )
     if not resumes and is_search_like:
-        resumes = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).limit(50).all()
+        resumes = await run_in_threadpool(
+            lambda: db.query(ResumeDB)
+            .filter(ResumeDB.deleted_at == None)
+            .order_by(ResumeDB.created_at.desc())
+            .limit(50)
+            .all()
+        )
 
     if not resumes:
         return {"answer": "No matching candidates found.", "best_matches": []}
@@ -3244,7 +3336,11 @@ async def chat(request: Request, payload: dict, db: Session = Depends(get_db)):
 @app.post("/resume/{resume_id}/chat", tags=["Chat"])
 async def chat_resume(request: Request, resume_id: str, payload: dict, db: Session = Depends(get_db)):
     """Ask a question scoped to a single resume."""
-    resume = db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
+    # Threadpool, not inline: a synchronous query in an `async def` blocks the
+    # shared event loop for the full remote-DB round trip.
+    resume = await run_in_threadpool(
+        lambda: db.query(ResumeDB).filter(ResumeDB.id == resume_id).first()
+    )
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     question = (payload.get("question") or "").strip()
@@ -3358,7 +3454,12 @@ async def upload_bulk_zip(
     if not (file.filename or "").lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files accepted")
 
-    buf = BytesIO(await file.read())
+    zip_bytes = await file.read(MAX_UPLOAD_SIZE + 1)
+    if len(zip_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="ZIP upload exceeds the size limit.")
+    if not zip_bytes.startswith(b"PK"):
+        raise HTTPException(status_code=415, detail="The uploaded file is not a valid ZIP archive.")
+    buf = BytesIO(zip_bytes)
     results = []
     try:
         with zipfile.ZipFile(buf, "r") as zf:
@@ -3371,6 +3472,8 @@ async def upload_bulk_zip(
                     continue
                 try:
                     data = zf.read(name)
+                    if len(data) > MAX_UPLOAD_SIZE:
+                        continue
                     uf = UploadFile(filename=os.path.basename(name), file=BytesIO(data))
                     # Reuse single-file upload logic, passing through the same Request + DB session
                     upload_result = await upload_resume(request=request, files=[uf], db=db)
@@ -3381,7 +3484,7 @@ async def upload_bulk_zip(
                         "message": first.get("message", ""),
                     })
                 except Exception as exc:
-                    results.append({"file": name, "status": "error", "message": str(exc)})
+                    results.append({"file": name, "status": "error", "message": "Could not process this file."})
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
     return results
@@ -3392,7 +3495,19 @@ class ExportSheetsRequest(BaseModel):
     creds_json: str
 
 @app.post("/resumes/export-sheets", tags=["Resumes"])
-def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
+def export_sheets(req: ExportSheetsRequest, request: Request, db: Session = Depends(get_db)):
+    # The unified host owns the audit database; record exports there when this
+    # app is mounted, while keeping standalone resume deployments functional.
+    try:
+        token = request.cookies.get("access_token", "")
+        from app.core.security import decode_access_token
+        payload = decode_access_token(token) if token else None
+        if payload and payload.get("sub"):
+            from app.services.audit_service import log_audit
+            with SessionLocal() as audit_db:
+                log_audit(audit_db, int(payload["sub"]), "RESUME_EXPORT", "Resume", None, "Candidate export requested", request.client.host if request.client else None)
+    except Exception:
+        logger.exception("Could not write resume export audit event")
     try:
         import gspread
         from oauth2client.service_account import ServiceAccountCredentials
@@ -3403,7 +3518,12 @@ def export_sheets(req: ExportSheetsRequest, db: Session = Depends(get_db)):
         )
 
     # 1. Fetch resumes
-    candidates = db.query(ResumeDB).filter(ResumeDB.deleted_at == None).order_by(ResumeDB.created_at.desc()).all()
+    export_limit = int(os.getenv("EXPORT_MAX_ROWS", "10000"))
+    candidates = (db.query(ResumeDB)
+                  .filter(ResumeDB.deleted_at.is_(None))
+                  .order_by(ResumeDB.created_at.desc())
+                  .limit(export_limit)
+                  .all())
     if not candidates:
         raise HTTPException(status_code=400, detail="No resumes found in the database.")
 
@@ -3683,39 +3803,49 @@ def get_skills_by_employee(
 async def secure_endpoints_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    # When mounted inside the HRMS app (the unified single-port deployment),
+    # HRMS's `resume_access_guard` has ALREADY authenticated this request as
+    # Admin/HR using the same JWT secret. Running this second check here just
+    # duplicates it -- and it opens a DB session and runs two synchronous
+    # queries on the event loop for every resume request, which serializes the
+    # whole API under load. Trust the single upstream gate and skip it.
+    #
+    # Standalone mode (running backend/api.py on its own) does NOT set this
+    # flag, so the check below still fully protects the API there.
+    if os.getenv("RESUME_API_MOUNTED") == "1":
+        return await call_next(request)
+
     path = request.url.path
-    if (
-        path.startswith("/resumes") or
-        path.startswith("/resume") or
-        path.startswith("/upload") or
-        path.startswith("/extract") or
-        path.startswith("/files")
-    ):
-        if path in ("/health", "/api-version"):
-            return await call_next(request)
-            
-        token = None
-        auth_hdr = request.headers.get("Authorization")
-        if auth_hdr and auth_hdr.startswith("Bearer "):
-            token = auth_hdr.split(" ")[1]
-        if not token:
-            token = request.query_params.get("token")
-        if not token:
-            token = request.cookies.get("token")
-            
-        if not token:
-            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-            
-        db = SessionLocal()
-        try:
-            user = get_current_user_from_token(token, db)
-            if not user:
-                return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
-            if not any(role in user["roles"] for role in ["Admin", "HR"]):
-                return JSONResponse(status_code=403, content={"detail": "Insufficient permissions: Admin or HR access required"})
-        finally:
-            db.close()
-            
+    # Health/version are intentionally public for load balancers and monitoring.
+    # Every other Resume API endpoint is sensitive (candidate data, uploads,
+    # AI chat, exports, files, and employee skills) and must require an
+    # authenticated Admin or HR user in standalone mode too.
+    if path in ("/health", "/api-version"):
+        return await call_next(request)
+
+    token = None
+    auth_hdr = request.headers.get("Authorization")
+    if auth_hdr and auth_hdr.startswith("Bearer "):
+        token = auth_hdr.split(" ", 1)[1].strip()
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        token = request.cookies.get("token")
+
+    if not token:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    db = SessionLocal()
+    try:
+        user = get_current_user_from_token(token, db)
+        if not user:
+            return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+        if not any(role in user["roles"] for role in ["Admin", "HR"]):
+            return JSONResponse(status_code=403, content={"detail": "Insufficient permissions: Admin or HR access required"})
+    finally:
+        db.close()
+
     return await call_next(request)
 
 

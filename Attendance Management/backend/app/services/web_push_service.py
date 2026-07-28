@@ -98,7 +98,7 @@ def send_push_to_user(
         ok, status = _push_one(s, payload)
         if ok:
             any_success = True
-            s.last_used_at = datetime.utcnow()
+            s.last_used_at = __import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now()
         elif status in _DEAD_STATUSES:
             dead.append(s)
         else:

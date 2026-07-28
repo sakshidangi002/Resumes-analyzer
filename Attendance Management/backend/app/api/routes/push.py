@@ -68,7 +68,7 @@ def subscribe(
         existing.p256dh = payload.keys.p256dh
         existing.auth = payload.keys.auth
         existing.user_agent = ua or existing.user_agent
-        existing.last_used_at = datetime.utcnow()
+        existing.last_used_at = __import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now()
         db.commit()
         return {"ok": True, "subscription_id": existing.id, "updated": True}
 

@@ -31,8 +31,9 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     official_email = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    must_change_password = Column(Boolean, default=False, nullable=False, server_default="false")
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
+    updated_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, onupdate=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
 
     roles = relationship("Role", secondary=user_roles, back_populates="users")

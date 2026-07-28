@@ -53,14 +53,11 @@ const Icons = {
 const resumeApiUrl = `${window.location.origin}/resume-api`;
 const resClient = axios.create({
   baseURL: resumeApiUrl,
-  headers: { "Content-Type": "application/json" }
+  headers: { "Content-Type": "application/json" },
+  withCredentials: true,
 });
 
 resClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
   return config;
 });
 

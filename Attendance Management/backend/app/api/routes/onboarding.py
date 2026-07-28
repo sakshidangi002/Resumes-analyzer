@@ -1,6 +1,6 @@
 """HR-managed onboarding checklist per employee."""
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, OnboardingTask, AppNotification
@@ -22,6 +22,8 @@ def _is_admin_or_hr(user: User) -> bool:
 
 @router.get("/me", response_model=list[OnboardingTaskResponse])
 def my_onboarding_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -31,6 +33,8 @@ def my_onboarding_tasks(
         db.query(OnboardingTask)
         .filter(OnboardingTask.employee_id == current_user.employee_id)
         .order_by(OnboardingTask.sort_order, OnboardingTask.created_at)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
 
@@ -38,6 +42,8 @@ def my_onboarding_tasks(
 @router.get("/employee/{employee_id}", response_model=list[OnboardingTaskResponse])
 def list_employee_tasks(
     employee_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
@@ -45,18 +51,24 @@ def list_employee_tasks(
         db.query(OnboardingTask)
         .filter(OnboardingTask.employee_id == employee_id)
         .order_by(OnboardingTask.sort_order, OnboardingTask.created_at)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
 
 
 @router.get("/all", response_model=list[OnboardingTaskResponse])
 def list_all_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
     return (
         db.query(OnboardingTask)
         .order_by(OnboardingTask.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
 
