@@ -42,6 +42,7 @@ def _mark_attendance(
     now_dt=None,
     camera_id: str | None = None,
     camera_purpose: str | None = None,   # "IN" | "OUT" | None
+    evidence: dict | None = None,
 ) -> tuple[dict | None, str]:
     """
     Step 7: Attendance service called.
@@ -105,6 +106,7 @@ def _mark_attendance(
                 db, employee_id, now_dt=now_dt,
                 camera_id=camera_id,
                 camera_purpose=camera_purpose,
+                evidence=evidence,
             )
         except ValueError as exc:
             logger.warning(
@@ -162,19 +164,70 @@ def mark_cctv_attendance(
     employee_id: int,
     camera_id: str | None = None,
     camera_purpose: str | None = None,
+    evidence: dict | None = None,
+    event_time=None,
 ) -> tuple[dict | None, str]:
     """Public helper to record attendance for an already-CONFIRMED employee.
 
     The CCTV pipeline identifies a face over several frames and only calls this
     once the same employee has been confirmed on a track, so a single spurious
     frame can never create a false attendance record.
+
+    ``event_time`` should be the CAPTURE time of the frame that produced the
+    match, not the time this function runs. The write is queued on a background
+    executor behind a pipeline that already lags by several hundred ms, so
+    stamping it at write time drifts the record away from what the snapshot
+    shows.
+
+    ``evidence`` carries score / margin / track id / snapshot path onto the row.
     """
     return _mark_attendance(
         employee_id,
-        get_ist_now(),
+        event_time or get_ist_now(),
         camera_id=camera_id,
         camera_purpose=camera_purpose,
+        evidence=evidence,
     )
+
+
+def _narrow_candidates(
+    candidates: list[dict], camera_purpose: str | None, source: str
+) -> list[dict]:
+    """Drop candidates who cannot plausibly be at this camera right now.
+
+        IN      -> anyone already inside is not walking in again
+        OUT     -> only someone inside can walk out
+        MONITOR -> only someone inside can be in a room
+
+    This is a PRIOR, not a filter: the caller re-runs the match against the full
+    pool if the narrowed one produces nothing (see _build_face_result). That
+    matters because the OUT camera legitimately sees people whose check-in was
+    missed — they are not in the present set, and hard-filtering them would make
+    `attendance_checkin_on_missing_in` unreachable.
+
+    Never applied to webcam/upload sources: self-service check-in must work for
+    anyone regardless of their recorded state.
+    """
+    purpose = (camera_purpose or "").strip().upper()
+    if source not in {"cctv"} or purpose not in {"IN", "OUT", "MONITOR"}:
+        return candidates
+
+    from app.services.presence_cache import get_present_employee_ids
+
+    present = get_present_employee_ids()
+    if not present:
+        # Empty means "nobody inside" OR "lookup failed" — indistinguishable, so
+        # treat it as no information rather than as a filter.
+        return candidates
+
+    if purpose == "IN":
+        narrowed = [c for c in candidates if int(c["employee_id"]) not in present]
+    else:
+        narrowed = [c for c in candidates if int(c["employee_id"]) in present]
+
+    if not narrowed:
+        return candidates
+    return narrowed
 
 
 def _build_face_result(
@@ -186,12 +239,35 @@ def _build_face_result(
     camera_purpose: str | None = None,
     mark_attendance: bool = True,
 ) -> dict:
+    # Pass 1 — the narrowed pool. Fewer candidates means the runner-up is a
+    # genuine alternative rather than an employee who is demonstrably elsewhere,
+    # so the margin gate becomes meaningfully stricter at no accuracy cost.
+    narrowed = _narrow_candidates(candidates, camera_purpose, source)
     best = find_best_match(
         face["embedding"],
-        candidates,
+        narrowed,
         threshold=threshold,
         min_margin=MIN_MATCH_MARGIN,
     )
+
+    # Pass 2 — fall back to the full pool when the prior produced nothing. This
+    # is what keeps a missed check-in recoverable at the OUT camera.
+    if not best["status"] and len(narrowed) != len(candidates):
+        full = find_best_match(
+            face["embedding"],
+            candidates,
+            threshold=threshold,
+            min_margin=MIN_MATCH_MARGIN,
+        )
+        if full["status"]:
+            logger.info(
+                "STEP-3 matched_on_full_pool employee=%s score=%.4f "
+                "(not in the expected presence set for a %s camera — "
+                "their previous event was probably missed)",
+                full.get("employee_name"), float(full.get("score", -1.0)),
+                camera_purpose,
+            )
+        best = full
 
     face_state = "unknown"
     attendance_info = None

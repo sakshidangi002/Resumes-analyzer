@@ -115,12 +115,45 @@ class Settings(BaseSettings):
     # dropping them entirely. Prevents "recognised but marked Absent".
     attendance_checkin_on_missing_in: bool = True
 
+    # ---- Attendance business day -------------------------------------------
+    # Attendance days start at this hour (IST). An event BEFORE it belongs to
+    # the PREVIOUS day, so a shift running past midnight stays on one record.
+    #
+    # Why this exists: events used to be keyed on the plain calendar date, so
+    # someone leaving at 00:30 was evaluated against a brand-new day where they
+    # had no check-in. resolve_camera_event() sees state=ABSENT and — with
+    # attendance_checkin_on_missing_in above — turns their EXIT into a CHECK_IN
+    # for the new day, while the real day was left open forever.
+    #
+    # Set to 0 to restore the old pure-calendar-date behaviour. Deploy with 0,
+    # confirm no report shifts, then raise it. It must be LOWER than the
+    # earliest shift start in the company, or an early starter's check-in lands
+    # on the previous day.
+    attendance_day_start_hour: int = 5
+
+    # Hour (IST) by which an unclosed attendance day is force-closed by the
+    # nightly closeout job. See services/attendance_closeout.py.
+    attendance_closeout_hour: int = 23
+
     # ---- Face detector backend -------------------------------------------
     # "insightface" -> SCRFD detector from buffalo_l (default, no extra deps)
     # "yolo"        -> YOLOv8-face for DETECTION; ArcFace (buffalo_l) still
     #                  produces the recognition embedding.
     # Enabling "yolo" requires `pip install ultralytics` and a face weights
     # file (with 5 landmarks) at FACE_YOLO_MODEL_PATH, e.g. yolov8n-face.pt.
+    # Concurrent FACE inference slots (detection + embedding). 0 = auto.
+    #
+    # Was effectively 1, via a single exclusive lock that also served the queue
+    # first-come-first-served — so entrance cameras waited behind monitor
+    # cameras. See services/inference_gate.py: the gate now admits attendance
+    # cameras first, which matters far more than the slot count.
+    #
+    # Keep this LOW. bytetrack_engine records a measurement from this same
+    # 4-physical-core box: two concurrent inferences were ~10% WORSE than one,
+    # because a single inference already saturates the cores. Raise only with
+    # spare physical cores or a GPU.
+    face_max_concurrent_inference: int = 0
+
     face_detector: str = "insightface"
     yolo_face_model_path: str = "models/yolov8n-face.pt"
     yolo_conf: float = 0.35
@@ -308,7 +341,20 @@ class Settings(BaseSettings):
     # (or someone moves seats), they silently inherit the other person's identity.
     # A wrong name is worse than "Person #N", so identity must come only from a
     # real face match or a high-confidence body Re-ID.
-    seat_anchor_enabled: bool = False
+    # Seat anchoring: once a face confirms who someone is, remember WHERE they
+    # were, and reuse that position to name them later when no face is visible.
+    #
+    # On by default now. It was off because it lived inside the body Re-ID path,
+    # so disabling the unreliable appearance matching (OSNet could not separate
+    # these people) also disabled this, which is a completely different and much
+    # stronger signal in a fixed-desk room. The two are now independent.
+    #
+    # MONITOR cameras only, and it can never mark attendance. A seat-derived
+    # name is drawn in amber and labelled "by seat" so it is never mistaken for
+    # a face identification.
+    seat_anchor_enabled: bool = True
+    # How close a track must be to a remembered seat, in pixels. Too large and
+    # neighbouring desks bleed into each other.
     seat_anchor_radius_px: int = 120
 
     # ---- DVR auto-start on application boot -------------------------------
@@ -336,6 +382,21 @@ class Settings(BaseSettings):
     dvr_line_orientation: str = "horizontal"
     dvr_line_position: float = 0.5
     dvr_entry_direction: str = "down"
+
+    # Which Hikvision stream to pull for DVR dashboard previews.
+    #   "main" -> .../Streaming/Channels/{ch}01   full resolution  (default)
+    #   "sub"  -> .../Streaming/Channels/{ch}02   low resolution
+    #
+    # Defaults to "main" because these streams exist to be LOOKED AT. Sub-stream
+    # decodes 4-9x fewer pixels, which is a real CPU saving, but a Hikvision
+    # sub-stream is often left at CIF (352x288) — upscaled into a dashboard tile
+    # that is unusably soft, and far too low for a face to be recognisable.
+    #
+    # Set to "sub" ONLY after checking what your DVR actually serves on channel
+    # {ch}02. If it is configured at D1/720p or better, sub is the cheaper
+    # choice and costs nothing visible; at CIF it is a false economy.
+    # (Camera > Video > Sub-Stream in the DVR's own settings.)
+    dvr_stream_profile: str = "main"
     # Crossing direction for OUT cameras (people leaving usually move the
     # opposite way in-frame). Leave blank to reuse dvr_entry_direction.
     dvr_out_entry_direction: str = ""

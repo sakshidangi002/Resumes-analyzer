@@ -72,6 +72,34 @@ def _auto_concurrency() -> int:
 _MAX_CONCURRENT = _auto_concurrency()
 _slots = threading.BoundedSemaphore(_MAX_CONCURRENT)
 
+# How close to the frame border counts as "at the edge" (fraction of width or
+# height). A person leaves a room through an edge; a person hidden by a chair
+# does not move. See the expiry logic in ByteTrackEngine.update.
+_EDGE_FRACTION = float(os.getenv("CCTV_TRACK_EDGE_FRACTION", "0.12"))
+
+# How long a no-longer-detected track is kept, expressed in ANALYSIS CYCLES
+# rather than seconds.
+#
+# An earlier version used absolute seconds (1s at the edge) — which was shorter
+# than a monitor camera's analysis interval, so a track missed even ONCE near an
+# edge was deleted instantly. Detection on this view is intermittent by nature:
+# a seated person flickers in and out between cycles, and people at the edges of
+# the frame are exactly the ones most often missed. The result was worse recall,
+# not better.
+#
+# Cycles are converted to seconds using the engine's OWN measured update
+# interval, so this self-calibrates whatever the analysis rate or inference
+# queue contention happens to be.
+_EDGE_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_EDGE_HOLD_CYCLES", "2"))
+_INTERIOR_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_CYCLES", "6"))
+# Floors, so a fast camera still holds a track for a usable length of time.
+_EDGE_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_EDGE_HOLD_MIN_SEC", "2.0"))
+_INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
+
+# Two published boxes overlapping by at least this fraction of the SMALLER box
+# are treated as the same person and merged. See _dedupe_overlapping.
+_DEDUPE_OVERLAP = float(os.getenv("CCTV_TRACK_DEDUPE_OVERLAP", "0.55"))
+
 # Cap the threads each inference session may use. Without this ONNX Runtime /
 # torch take every core for EVERY concurrent session (2 x 8 threads on 8 cores),
 # which thrashes and makes the parallel version SLOWER than the serial one.
@@ -198,6 +226,25 @@ class ByteTrackEngine:
         self.tracks: dict[int, PersonTrack] = {}
         self._model = None            # own model  ⇒ own predictor ⇒ own ByteTrack state
         self._last_sig: tuple | None = None   # for change-based logging (no spam)
+        self._last_update_ts: float = 0.0
+        self._cycle_sec: float = 0.0          # smoothed interval between update() calls
+
+    def _measured_cycle_sec(self) -> float:
+        """Smoothed seconds between update() calls.
+
+        Track hold windows are expressed in cycles and converted with this, so
+        they stay correct whether this camera is analysing every 0.12s or every
+        4s under inference-queue contention.
+        """
+        now = time.time()
+        if self._last_update_ts:
+            delta = now - self._last_update_ts
+            if 0.0 < delta < 60.0:
+                self._cycle_sec = (
+                    delta if self._cycle_sec <= 0 else 0.7 * self._cycle_sec + 0.3 * delta
+                )
+        self._last_update_ts = now
+        return self._cycle_sec if self._cycle_sec > 0 else 1.0
 
     def _get_model(self):
         """Lazily build this camera's OWN YOLO instance (isolated tracker state)."""
@@ -265,12 +312,23 @@ class ByteTrackEngine:
             )
 
         detections = 0
+        det_scores: list[float] = []
         seen: set[int] = set()
         if results:
             r = results[0]
             boxes = getattr(r, "boxes", None)
             if boxes is not None:
                 detections = int(len(boxes))          # after conf + class + NMS
+                # Raw per-detection confidences. THE diagnostic for "the room
+                # has 4 people but shows 1": if the scores are there but low,
+                # it is the tracker's new_track_thresh discarding them; if the
+                # detections themselves are missing, no threshold will help and
+                # the model or input resolution is the problem.
+                try:
+                    if getattr(boxes, "conf", None) is not None:
+                        det_scores = [round(float(c), 3) for c in boxes.conf.cpu().tolist()]
+                except Exception:
+                    det_scores = []
                 if getattr(boxes, "id", None) is not None:
                     ids = boxes.id.int().cpu().tolist()
                     xyxy = boxes.xyxy.cpu().numpy()
@@ -295,11 +353,56 @@ class ByteTrackEngine:
             self.tracks.pop(tid, None)
 
         # Age / expire tracks ByteTrack no longer reports.
+        #
+        # A track that stops being detected means one of two very different
+        # things, and the old frame-count expiry conflated them:
+        #
+        #   * OCCLUDED  — a seated person hidden by a high-backed chair. They
+        #     have not moved, so holding their box is correct.
+        #   * DEPARTED  — they walked out. Holding their box leaves a ghost
+        #     hovering over an empty room.
+        #
+        # Position separates the cases: you leave a room through an EDGE of the
+        # frame. A track last seen against an edge is treated as departed and
+        # dropped quickly; one in the interior is held.
+        #
+        # The hold is also capped in WALL-CLOCK seconds rather than analysis
+        # frames. Frame counting was unreliable because the analysis interval
+        # varies with inference-queue contention — the same 3-frame hold could
+        # mean 4 seconds or 15.
+        frame_h, frame_w = frame_bgr.shape[:2]
+        edge_x = frame_w * _EDGE_FRACTION
+        edge_y = frame_h * _EDGE_FRACTION
+        now = time.time()
+
+        # Hold windows scale with how fast this engine is actually being called,
+        # so an intermittent detection is never dropped after a single miss.
+        cycle = self._measured_cycle_sec()
+        edge_limit = max(_EDGE_HOLD_MIN_SEC, _EDGE_HOLD_CYCLES * cycle)
+        interior_limit = max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+
         for tid in list(self.tracks.keys()):
-            if tid not in seen:
-                self.tracks[tid].mark_missed()
-                if self.tracks[tid].is_expired():
-                    del self.tracks[tid]
+            if tid in seen:
+                continue
+            track = self.tracks[tid]
+            track.mark_missed()
+
+            cx, cy = track.centroid()
+            at_edge = (
+                cx <= edge_x or cx >= frame_w - edge_x
+                or cy <= edge_y or cy >= frame_h - edge_y
+            )
+            held_for = now - track.last_seen
+            limit = edge_limit if at_edge else interior_limit
+
+            if held_for > limit:
+                logger.debug(
+                    "Camera %s: dropping track %d after %.1fs (%s, limit %.1fs)",
+                    self.camera_id, tid, held_for,
+                    "left via frame edge" if at_edge else "occluded too long",
+                    limit,
+                )
+                del self.tracks[tid]
 
         # Which tracks get DRAWN.
         #
@@ -321,17 +424,100 @@ class ByteTrackEngine:
         else:
             live = [self.tracks[tid] for tid in seen if tid in self.tracks]
 
+        # ONE PERSON, ONE BOX.
+        #
+        # A permissive new_track_thresh (needed so seated people are detected at
+        # all) makes ByteTrack spawn a fresh id rather than re-associating when a
+        # detection is weak. Combined with publishing held tracks, one person
+        # ends up wearing several overlapping boxes with different ids — observed
+        # live as "#36" stacked with "2" and "3", and a People count of 6 in a
+        # room of 4.
+        #
+        # It is not merely cosmetic: each duplicate track accumulates its OWN
+        # embedding fusion, so the observations that should combine into one
+        # confident identity are split across fragments that each stay too weak
+        # to match. Deduplicating is a prerequisite for recognition working at
+        # all here.
+        live = self._dedupe_overlapping(live, seen)
+
         # Log only when the picture CHANGES (detections / tracks / ids) so a
         # steady scene doesn't spam the log every analysis tick.
         sig = (detections, len(live), tuple(sorted(seen)))
         if sig != self._last_sig:
             self._last_sig = sig
             logger.info(
-                "YOLO camera=%s detections=%d tracks=%d ids=%s",
-                self.camera_id, detections, len(live), sorted(seen),
+                "YOLO camera=%s detections=%d scores=%s tracks=%d ids=%s "
+                "new_track_thresh=%s",
+                self.camera_id, detections, det_scores, len(live), sorted(seen),
+                os.path.basename(self.tracker_cfg),
             )
+            # Detections that will never become tracks. If this fires
+            # repeatedly the tracker config is discarding real people.
+            if det_scores and len(live) < detections:
+                logger.info(
+                    "YOLO camera=%s %d detection(s) did NOT become tracks "
+                    "(lowest kept vs dropped: %s) — if these are real people, "
+                    "this camera needs the permissive tracker "
+                    "(add its id to CCTV_STEEP_CAMERAS)",
+                    self.camera_id, detections - len(live), sorted(det_scores),
+                )
 
         return live
+
+    def _dedupe_overlapping(self, live: list, seen: set) -> list:
+        """Collapse overlapping tracks so each person is published once.
+
+        Overlap is measured as intersection / smaller-area rather than IoU: a
+        tight box on a torso sitting inside a bloated full-body box has low IoU
+        but is obviously the same person.
+
+        When two tracks collide the survivor is chosen by evidence — detected
+        this frame beats merely held, then longer-lived, then lower id (older).
+        The loser's IDENTITY AND FUSED EMBEDDINGS ARE MERGED INTO THE SURVIVOR,
+        which is the valuable part: ByteTrack changes a person's id constantly on
+        this view, and without the merge every id change threw away both their
+        name and every face observation collected so far.
+        """
+        if len(live) < 2:
+            return live
+
+        # Best evidence first, so earlier entries win collisions.
+        ordered = sorted(
+            live,
+            key=lambda t: (t.track_id in seen, t.age, -t.track_id),
+            reverse=True,
+        )
+
+        kept: list = []
+        for track in ordered:
+            duplicate_of = None
+            for survivor in kept:
+                if _overlap_ratio(track.box, survivor.box) >= _DEDUPE_OVERLAP:
+                    duplicate_of = survivor
+                    break
+
+            if duplicate_of is None:
+                kept.append(track)
+                continue
+
+            # Merge upward, then drop.
+            if duplicate_of.employee_id is None and track.employee_id is not None:
+                duplicate_of.employee_id = track.employee_id
+                duplicate_of.employee_name = track.employee_name
+                duplicate_of.employee_code = track.employee_code
+                duplicate_of.matched = track.matched
+                duplicate_of.confidence = track.confidence
+                duplicate_of.identity_source = track.identity_source
+            if track.fuser.observations > duplicate_of.fuser.observations:
+                duplicate_of.fuser = track.fuser
+            self.tracks.pop(track.track_id, None)
+
+        if len(kept) != len(live):
+            logger.debug(
+                "Camera %s: merged %d duplicate box(es) -> %d people",
+                self.camera_id, len(live) - len(kept), len(kept),
+            )
+        return kept
 
     def _nested_ids(self, seen: set) -> list:
         """Ids of bloated boxes that swallow another box (same person, twice).
@@ -367,6 +553,18 @@ class ByteTrackEngine:
     def reset(self) -> None:
         self.tracks.clear()
         self._last_sig = None
+
+
+def _overlap_ratio(a, b) -> float:
+    """Intersection over the SMALLER box's area.
+
+    Deliberately not IoU: on this view a tight torso box often sits fully inside
+    a bloated full-body box of the same person, which scores low IoU but 1.0
+    here — which is the answer we want.
+    """
+    inter = _intersection(a, b)
+    smaller = min(_area(a), _area(b))
+    return (inter / smaller) if smaller > 0 else 0.0
 
 
 def _area(box) -> float:

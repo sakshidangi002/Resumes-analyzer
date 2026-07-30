@@ -12,11 +12,13 @@ under the same origin, so the whole product is reachable on a single URL:
 """
 import logging
 import os
+import re
 import sys
 import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -32,16 +34,81 @@ from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models import User
 
-# Timestamped logs (HH:MM:SS.mmm) so recognition-pipeline stages (STEP-1 frame
-# received … STEP-11 complete, detect/match ms) can be measured to the
-# millisecond. force=True replaces uvicorn's default handler so app loggers get
-# the timestamp prefix.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s - %(message)s",
-    datefmt="%H:%M:%S",
-    force=True,
-)
+# ---------------------------------------------------------------------------
+# Logging  (C4 + rotation)
+# ---------------------------------------------------------------------------
+_CRED_RE = re.compile(r"(?P<scheme>\w+://)(?P<user>[^:/@\s]+):(?P<pw>[^@/\s]+)@")
+
+
+class RedactCredentialsFilter(logging.Filter):
+    """Scrub `scheme://user:password@host` from every log record.
+
+    Defence in depth. Call sites redact explicitly (camera_service._redact_url),
+    but a single missed f-string used to be enough to write the DVR password to
+    disk on every reconnect — and with the reconnect loop running, that meant
+    thousands of times into a 26 MB file.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if "://" in message and "@" in message:
+            record.msg = _CRED_RE.sub(r"\g<scheme>\g<user>:***@", message)
+            record.args = ()
+        return True
+
+
+def _configure_logging() -> None:
+    """Rotating file + console logging.
+
+    Previously logging.basicConfig with no handler configuration: no rotation,
+    no size cap, no retention. Combined with the recognition pipeline's
+    per-frame INFO trace (STEP-1..STEP-11, ~100 lines/second across the
+    cameras) that produced an unbounded log file.
+
+    The STEP trace is a debugging tool, not an operational log, so it is
+    silenced by default and re-enabled with RECOGNITION_LOG_LEVEL=DEBUG.
+    """
+    log_dir = Path(os.getenv("HRMS_LOG_DIR", Path(__file__).resolve().parents[2] / "logs"))
+    formatter = logging.Formatter(
+        # Date included: the old "%H:%M:%S" format made a multi-day log
+        # impossible to correlate — every day looked like the same 24 hours.
+        fmt="%(asctime)s.%(msecs)03d %(levelname)s %(name)s [%(threadName)s] - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    redact = RedactCredentialsFilter()
+
+    handlers: list[logging.Handler] = []
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_dir / "hrms.log",
+            maxBytes=int(os.getenv("HRMS_LOG_MAX_BYTES", str(50 * 1024 * 1024))),
+            backupCount=int(os.getenv("HRMS_LOG_BACKUPS", "5")),
+            encoding="utf-8",
+        )
+        handlers.append(file_handler)
+    except Exception:  # pragma: no cover - read-only FS, permissions, etc.
+        # Never let logging setup stop the app from booting; console still works.
+        pass
+
+    handlers.append(logging.StreamHandler())
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        handler.addFilter(redact)
+
+    root = logging.getLogger()
+    root.handlers[:] = handlers          # replaces uvicorn's default handler
+    root.setLevel(logging.INFO)
+
+    logging.getLogger("app.services.recognition").setLevel(
+        os.getenv("RECOGNITION_LOG_LEVEL", "WARNING").upper()
+    )
+
+
+_configure_logging()
 
 logger = logging.getLogger(__name__)
 _SENSITIVE_RATE_STATE: dict[tuple[str, str], list[float]] = {}
@@ -202,6 +269,36 @@ def _dsr_reminder_tick():
             pass
 
 
+async def _attendance_closeout_tick() -> None:
+    """Close attendance days the OUT camera never closed.
+
+    Runs at 02:30 IST — after the business-day boundary has passed for the day
+    being closed, so a genuine night shift is never truncated mid-shift.
+
+    Set ATTENDANCE_CLOSEOUT_DRY_RUN=1 to log what WOULD be closed without
+    writing anything. Recommended for the first week in production.
+    """
+    import asyncio
+
+    dry_run = os.getenv("ATTENDANCE_CLOSEOUT_DRY_RUN", "").lower() in {"1", "true", "yes"}
+    try:
+        from app.services.attendance_closeout import run_closeout
+
+        # Blocking DB work — keep it off the event loop.
+        await asyncio.to_thread(run_closeout, None, not dry_run)
+    except Exception:
+        logger.exception("Attendance closeout tick failed")
+
+    try:
+        from app.services.attendance_snapshot import prune_snapshots
+
+        # Face snapshots are biometric data on a retention clock; without this
+        # the directory grows without bound.
+        await asyncio.to_thread(prune_snapshots)
+    except Exception:
+        logger.exception("Attendance snapshot pruning failed")
+
+
 def _start_background_scheduler():
     """Start APScheduler. We tick every minute and decide inside the tick
     whether to fire the reminder — that way HR can change the time via
@@ -213,11 +310,12 @@ def _start_background_scheduler():
     """
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
     except Exception:
         logger.exception(
-            "APScheduler not available — DSR reminder will NOT run. "
-            "Install with: pip install apscheduler tzdata"
+            "APScheduler not available — DSR reminder and attendance closeout "
+            "will NOT run. Install with: pip install apscheduler tzdata"
         )
         return None
 
@@ -232,14 +330,26 @@ def _start_background_scheduler():
             max_instances=1,
             misfire_grace_time=120,
         )
+        sched.add_job(
+            _attendance_closeout_tick,
+            trigger=CronTrigger(hour=2, minute=30, timezone="Asia/Kolkata"),
+            id="attendance_closeout",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            # An hour of grace so a restart around 02:30 does not skip the
+            # night's run entirely — an unclosed day is never picked up again.
+            misfire_grace_time=3600,
+        )
         sched.start()
         logger.info(
-            "Background scheduler started: DSR reminder tick is active "
-            "(time configurable via /api/dsr/reminder-settings, IST)."
+            "Background scheduler started: DSR reminder tick (time configurable "
+            "via /api/dsr/reminder-settings, IST) and attendance closeout "
+            "(02:30 IST)."
         )
         return sched
     except Exception:
-        logger.exception("Failed to start background scheduler for DSR reminder")
+        logger.exception("Failed to start background scheduler")
         return None
 
 

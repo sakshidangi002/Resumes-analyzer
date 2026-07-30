@@ -39,6 +39,30 @@ _WORK_START_EVENTS = {"IN", "BREAK_IN"}
 _WORK_END_EVENTS = {"OUT", "BREAK_OUT"}
 
 
+def business_date(dt: datetime, day_start_hour: int | None = None) -> date:
+    """The attendance day an event belongs to.
+
+    A plain calendar date is the wrong key for anything that runs past
+    midnight. An exit at 00:30 landed on a fresh day where the employee had no
+    check-in, so resolve_camera_event() saw state=ABSENT and (with
+    attendance_checkin_on_missing_in) turned that EXIT into a CHECK_IN for the
+    new day — while the real day was never closed.
+
+    Anchoring to a day-start hour keeps the whole shift on the day it began.
+
+    day_start_hour=0 reproduces the old behaviour exactly, which is the safe
+    value to deploy with before switching it on (see config).
+    """
+    if day_start_hour is None:
+        from app.core.config import get_settings
+
+        day_start_hour = int(getattr(get_settings(), "attendance_day_start_hour", 0) or 0)
+    naive = to_naive_ist(dt)
+    if day_start_hour and naive.hour < day_start_hour:
+        return (naive - timedelta(days=1)).date()
+    return naive.date()
+
+
 def _normalize_event_type(value: str | None) -> str | None:
     if value is None:
         return None
@@ -119,7 +143,10 @@ def is_within_event_cooldown(
     employee on the wrong side (shown outside while actually back inside).
     """
     now_naive = to_naive_ist(now_dt)
-    today = now_naive.date()
+    # Business day, not calendar day: at 00:10 the employee's previous events
+    # are still filed under yesterday, and scoping the cooldown to the calendar
+    # date would make every post-midnight event look like the first of a new day.
+    today = business_date(now_naive)
     latest = (
         db.query(AttendanceEvent)
         .filter(
@@ -280,7 +307,10 @@ def calculate_intervals_from_events(
     if _normalize_event_type(last_ev.event_type) in _WORK_START_EVENTS:
         last_t = to_naive_ist(last_ev.event_time)
         now = get_ist_now()
-        if last_t.date() == now.date():
+        # Business day on both sides: a night shift that began yesterday evening
+        # is still "today's" open interval at 00:30, and a calendar comparison
+        # would stop counting it at midnight.
+        if business_date(last_t) == business_date(now):
             open_secs = int((now - last_t).total_seconds())
             if open_secs > 0:
                 total_work_seconds += open_secs
@@ -432,7 +462,10 @@ def validate_event_time(event_time: datetime) -> None:
     now = get_ist_now()  # naive IST
     event_time_naive = to_naive_ist(event_time)
 
-    if event_time_naive.date() > date.today():
+    # Compare IST against IST. This used to compare an IST-derived date against
+    # date.today() (the SERVER's local date), so on a UTC-hosted server every
+    # event between 00:00 and 05:30 IST was rejected as a "future date".
+    if business_date(event_time_naive) > business_date(now):
         raise ValueError("Cannot record attendance for future dates")
     if event_time_naive > now + timedelta(seconds=5):
         raise ValueError(
@@ -451,6 +484,7 @@ def add_attendance_event(
     camera_purpose: str | None = None,  # "IN" | "OUT" – forces event_type when set
     skip_cooldown: bool = False,
     cooldown_seconds: int = EVENT_COOLDOWN_SECONDS,
+    evidence: dict | None = None,
 ) -> tuple[AttendanceEvent | None, AttendanceRecord, str]:
     """
     Create an attendance event and refresh the daily summary.
@@ -472,15 +506,18 @@ def add_attendance_event(
     if not skip_cooldown and is_within_event_cooldown(
         db, employee_id, now_dt, cooldown_seconds, direction=incoming_direction
     ):
-        rec = get_or_create_attendance(db, employee_id, now_dt.date())
+        rec = get_or_create_attendance(db, employee_id, business_date(now_dt))
         db.refresh(rec)
         logger.info(
             "attendance_event COOLDOWN employee_id=%s within_%ds_window attendance_date=%s",
-            employee_id, cooldown_seconds, now_dt.date(),
+            employee_id, cooldown_seconds, business_date(now_dt),
         )
         return None, rec, "cooldown"
 
-    d = now_dt.date()
+    # The day this event is filed under. NOT now_dt.date(): a shift running past
+    # midnight must stay on the day it started, or the exit becomes the next
+    # day's check-in. See business_date().
+    d = business_date(now_dt)
 
     # Resolve event_type priority:
     #   1. Explicit caller override  (event_type param)
@@ -539,6 +576,13 @@ def add_attendance_event(
         source=source,
         camera_id=camera_id,
     )
+    # Why the camera believed this was that person. Absent for manual and
+    # auto-close events, which is exactly what NULL should mean here.
+    if evidence:
+        event.match_score = evidence.get("match_score")
+        event.match_margin = evidence.get("match_margin")
+        event.track_id = evidence.get("track_id")
+        event.snapshot_path = evidence.get("snapshot_path")
     db.add(event)
     db.flush()
     logger.info(
@@ -548,6 +592,16 @@ def add_attendance_event(
 
     updated = recalculate_attendance_summary(db, employee_id, d)
     db.commit()
+
+    # The presence set just changed; drop its cache so the next recognition
+    # narrows against current state instead of waiting out the TTL.
+    try:
+        from app.services.presence_cache import invalidate as _invalidate_presence
+
+        _invalidate_presence()
+    except Exception:  # pragma: no cover - cache is an optimisation only
+        logger.debug("presence cache invalidation failed", exc_info=True)
+
     db.refresh(event)
     db.refresh(updated)
     logger.info(
@@ -567,11 +621,15 @@ def record_face_attendance(
     camera_id: str | None = None,
     camera_purpose: str | None = None,
     event_type: str | None = None,
+    evidence: dict | None = None,
 ) -> tuple[AttendanceEvent | None, AttendanceRecord, str]:
     """Face recognition entry point with 60s duplicate protection.
 
     camera_purpose ("IN"|"OUT") forces the event direction when provided,
     overriding the normal auto-toggle behaviour.
+
+    ``evidence`` carries the recognition provenance (score, margin, track id,
+    face snapshot) onto the stored event so a disputed record can be reviewed.
     """
     now_dt = (now_dt or get_ist_now()).replace(microsecond=0)
     try:
@@ -583,6 +641,7 @@ def record_face_attendance(
             source="AUTO",
             camera_id=camera_id,
             camera_purpose=camera_purpose,
+            evidence=evidence,
         )
         event, rec, action = result
         if action == "cooldown":

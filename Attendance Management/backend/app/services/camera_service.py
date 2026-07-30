@@ -41,7 +41,7 @@ import re
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -73,6 +73,138 @@ _OPEN_TIMEOUT_MS      = int(os.getenv("CCTV_OPEN_TIMEOUT_MS",  "10000")) # 10 s
 _READ_TIMEOUT_MS      = int(os.getenv("CCTV_READ_TIMEOUT_MS",  "5000"))  # 5 s
 _JPEG_QUALITY         = int(os.getenv("CCTV_JPEG_QUALITY",     "80"))
 _FPS_WINDOW           = 30  # frames used to compute rolling FPS
+# Warn once when the displayed picture falls this far behind the live scene.
+# 1.5s is well past normal (DVR encode + decode + encode is ~200-400ms) but
+# below the point where an operator would call the feed broken.
+_FRAME_AGE_WARN_MS    = float(os.getenv("CCTV_FRAME_AGE_WARN_MS", "1500"))
+# After this many CONSECUTIVE failed opens, stop retrying every 30s and drop to
+# a long interval.
+#
+# A camera that has failed 15 times in a row is misconfigured, unplugged, or the
+# credentials are refused — none of which fixes itself in the next 30 seconds.
+# Worse, retrying that fast is actively harmful: a Hikvision DVR locks out a
+# source IP after ~5 failed logins, so a fast retry loop with rejected
+# credentials REFRESHES that lockout forever and the camera can never recover
+# on its own, even once the underlying problem is fixed.
+_PERSISTENT_FAILURES  = int(os.getenv("CCTV_PERSISTENT_FAILURES", "15"))
+_PERSISTENT_RETRY_SEC = float(os.getenv("CCTV_PERSISTENT_RETRY_SEC", "300"))  # 5 min
+# Consecutive decode failures (grab() succeeded, retrieve() did not) before the
+# connection is torn down. Guards the case where packets keep arriving but no
+# picture can be decoded — an unsupported codec, typically H.265.
+_MAX_RETRIEVE_FAILURES = int(os.getenv("CCTV_MAX_DECODE_FAILURES", "30"))
+# Match on a quality-weighted average of a track's embeddings instead of on the
+# single latest frame. See FaceTrack.add_observation for the reasoning. Set
+# CCTV_EMBEDDING_FUSION=false to go back to single-frame matching.
+_EMBEDDING_FUSION = os.getenv("CCTV_EMBEDDING_FUSION", "true").lower() in {"1", "true", "yes"}
+# Seat anchoring: remember WHERE a person was when their face was confirmed, and
+# reuse that to name them later when no face is visible. Independent of the
+# body Re-ID flag above — appearance matching was unreliable here, position is
+# not. MONITOR cameras only; can never mark attendance.
+_SEAT_ANCHOR = os.getenv("CCTV_SEAT_ANCHOR", "true").lower() in {"1", "true", "yes"}
+
+
+# ---------------------------------------------------------------------------
+# FFmpeg capture options  (C2)
+# ---------------------------------------------------------------------------
+def _ffmpeg_capture_options() -> str:
+    """FFmpeg options for cv2.CAP_FFMPEG, in the format OpenCV actually reads.
+
+    OpenCV takes these from the OPENCV_FFMPEG_CAPTURE_OPTIONS env var as
+    `key;value` pairs joined by `|`. They CANNOT be passed as a URL query
+    string — this module used to append `?rtsp_transport=tcp&...` to the RTSP
+    URL, which merely sent that text to the DVR as part of the request URI. So
+    TCP transport, `nobuffer` and `low_delay` were never actually enabled and
+    every stream ran on the DVR's default (usually UDP), where packet loss
+    produced the stalls that then wedged the reconnect loop (see C1).
+
+    NOTE on the connect timeout key: FFmpeg renamed `stimeout` -> `timeout` for
+    the RTSP demuxer in 5.0. Both are emitted; the demuxer ignores the one it
+    does not recognise. Verify against your build with `ffmpeg -h demuxer=rtsp`.
+    """
+    micros = _OPEN_TIMEOUT_MS * 1000
+    default = "|".join([
+        "rtsp_transport;tcp",      # TCP — no packet loss. The whole point.
+        "rtsp_flags;prefer_tcp",
+        "fflags;nobuffer",         # do not accumulate a decode buffer
+        "flags;low_delay",
+        "reorder_queue_size;0",    # do not wait to reorder late RTP packets
+        f"stimeout;{micros}",      # FFmpeg < 5 connect/read timeout (microseconds)
+        f"timeout;{micros}",       # FFmpeg >= 5 equivalent
+        "analyzeduration;2000000",
+        "probesize;2000000",
+    ])
+    return os.getenv("CCTV_FFMPEG_OPTS", default)
+
+
+# Must be set BEFORE the first VideoCapture is created — the FFmpeg backend
+# reads it at capture-construction time. (CCTV_FFMPEG_OPTS was documented in
+# this module's docstring but read nowhere; it now works as advertised.)
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options()
+logger.info("FFmpeg capture options: %s", os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"])
+
+
+# ---------------------------------------------------------------------------
+# Credential redaction  (C4)
+# ---------------------------------------------------------------------------
+_URL_SCHEME_RE = re.compile(r"^(?P<scheme>[a-zA-Z][\w+.\-]*://)(?P<rest>.*)$", re.DOTALL)
+
+
+def _redact_url(url: str) -> str:
+    """Strip the password from a stream URL so it never reaches a log or an API
+    response.
+
+    Keeps the username — useful for diagnosis and not itself a secret. This
+    module used to log the full source URL at INFO on every connect attempt,
+    so a reconnect loop wrote the DVR password to disk thousands of times.
+
+    Deliberately does NOT use urlparse for the split. Two of the three URL
+    shapes here break it:
+
+      rtsp://user:pass@host:554/path      standard  (creds LEFT of '@')
+      hcnetsdk://ip:port@user:pass?ch=1   inverted  (creds RIGHT of '@')
+
+    On the hcnetsdk form urlparse treats `user:pass` as host:port, so reading
+    `.port` raises ValueError trying to int() the password. That would make
+    this helper throw from inside the error handlers that call it, masking the
+    original failure — so the parsing is done by hand and every path is
+    total.
+    """
+    if not url:
+        return ""
+
+    match = _URL_SCHEME_RE.match(url)
+    if not match:
+        # No scheme (USB index, bare path). Nothing credential-shaped unless
+        # there is an '@', in which case be conservative.
+        return url if "@" not in url else "<redacted>"
+
+    scheme, rest = match.group("scheme"), match.group("rest")
+    if "@" not in rest:
+        return url                       # no credentials present
+
+    try:
+        if scheme.lower().startswith("hcnetsdk"):
+            # hcnetsdk://ip:port@username:password?channel=N
+            location, _, credentials = rest.partition("@")
+            user, sep, password = credentials.partition(":")
+            if not sep:
+                return url               # no password component
+            # The `?channel=N` suffix sits on the END of the password, not the
+            # username. Keep it — which channel failed is exactly what the
+            # error logs calling this need to report.
+            tail_at = password.find("?")
+            query = password[tail_at:] if tail_at >= 0 else ""
+            return f"{scheme}{location}@{user}:***{query}"
+
+        # Standard: scheme://user:pass@host[:port]/path
+        credentials, _, location = rest.partition("@")
+        user, sep, _password = credentials.partition(":")
+        if not sep:
+            return url                   # userinfo with no password
+        return f"{scheme}{user}:***@{location}"
+    except Exception:
+        # Never let redaction raise — a log call must not become an exception.
+        return "<redacted>"
 # Number of consecutive detected+matched frames before attendance is recorded.
 # Default 1: exit cameras detect faces slowly and intermittently, so requiring 2
 # consecutive frames caused recognitions to never confirm (name showed but no
@@ -244,25 +376,94 @@ _attendance_executor = ThreadPoolExecutor(
 )
 
 
-def _submit_attendance(employee_id: int, camera_id: str, camera_purpose: str) -> None:
-    """Queue an attendance write off the recognition thread and never raise."""
+# Outcomes meaning "no event was written, and retrying cannot help" — the state
+# machine or business rules refused it. Anything else that failed is transient
+# (a DB blip) and is worth retrying.
+_RETRYABLE_ACTIONS = {"attendance_failed", "validation_failed"}
+
+# Cap the backlog. The executor's queue is unbounded by default, so a database
+# stall would grow it until the process ran out of memory.
+_ATTENDANCE_QUEUE_MAX = int(os.getenv("CCTV_ATTENDANCE_QUEUE_MAX", "500"))
+
+
+def _submit_attendance(
+    employee_id: int,
+    camera_id: str,
+    camera_purpose: str,
+    evidence: dict | None = None,
+    event_time=None,
+    attempt: int = 1,
+    max_attempts: int = 3,
+) -> None:
+    """Queue an attendance write off the recognition thread and never raise.
+
+    The result used to be DISCARDED. Because the caller has already set
+    `attendance_marked` on the track and recorded the cooldown before getting
+    here, a failed write meant the event was lost permanently — nothing retried
+    it and nothing surfaced it. Now transient failures are retried with backoff
+    and an exhausted one is logged at ERROR so it can be alerted on and keyed
+    in by hand.
+    """
     from app.services.recognition import mark_cctv_attendance
+
+    queued = _attendance_executor._work_queue.qsize()
+    if queued > _ATTENDANCE_QUEUE_MAX:
+        logger.error(
+            "ATTN-WRITE queue overflow (%d > %d) — dropping write for emp=%s "
+            "camera=%s. The database is not keeping up.",
+            queued, _ATTENDANCE_QUEUE_MAX, employee_id, camera_id,
+        )
+        return
 
     def _run() -> None:
         t0 = time.time()
         try:
-            mark_cctv_attendance(
-                employee_id, camera_id=camera_id, camera_purpose=camera_purpose,
-            )
-            logger.info(
-                "ATTN-WRITE done emp=%s camera=%s purpose=%s took=%.0fms",
-                employee_id, camera_id, camera_purpose, (time.time() - t0) * 1000,
+            _payload, action = mark_cctv_attendance(
+                employee_id,
+                camera_id=camera_id,
+                camera_purpose=camera_purpose,
+                evidence=evidence,
+                event_time=event_time,
             )
         except Exception:
             logger.exception(
-                "ATTN-WRITE FAILED emp=%s camera=%s purpose=%s",
+                "ATTN-WRITE crashed emp=%s camera=%s purpose=%s",
                 employee_id, camera_id, camera_purpose,
             )
+            action = "attendance_failed"
+
+        took_ms = (time.time() - t0) * 1000
+
+        if action in _RETRYABLE_ACTIONS and attempt < max_attempts:
+            delay = 2 ** attempt          # 2s, 4s
+            logger.warning(
+                "ATTN-WRITE retry %d/%d in %ds emp=%s camera=%s action=%s",
+                attempt, max_attempts, delay, employee_id, camera_id, action,
+            )
+            timer = threading.Timer(
+                delay,
+                _submit_attendance,
+                args=(employee_id, camera_id, camera_purpose, evidence, event_time,
+                      attempt + 1, max_attempts),
+            )
+            timer.daemon = True
+            timer.start()
+            return
+
+        if action in _RETRYABLE_ACTIONS:
+            # Exhausted. Loud and countable: this is a lost attendance event and
+            # somebody has to enter it by hand.
+            logger.error(
+                "ATTN-WRITE LOST emp=%s camera=%s purpose=%s action=%s after %d "
+                "attempts — attendance NOT recorded, manual entry required",
+                employee_id, camera_id, camera_purpose, action, max_attempts,
+            )
+            return
+
+        logger.info(
+            "ATTN-WRITE done emp=%s camera=%s purpose=%s action=%s took=%.0fms",
+            employee_id, camera_id, camera_purpose, action, took_ms,
+        )
 
     _attendance_executor.submit(_run)
 
@@ -292,7 +493,8 @@ def parse_hcnetsdk_config(source_url: str) -> dict:
                 "dvr_channel": int(match.group(5)),
             }
         else:
-            logger.error(f"Invalid HCNetSDK URL format: {source_url}")
+            # Redacted: an hcnetsdk:// URL carries the DVR password in-line.
+            logger.error("Invalid HCNetSDK URL format: %s", _redact_url(source_url))
             return None
     except Exception as e:
         logger.error(f"Error parsing HCNetSDK config: {e}")
@@ -319,7 +521,16 @@ class CameraRuntimeState:
     display_fps: float = 0.0  # rendered (encoded) FPS shown to the viewer
     recognition_status: str = "idle"  # idle | analyzing | recognized
     crossing_count: int = 0  # people who crossed the doorway line (this camera)
+    # Age of the frame at the moment it was encoded for display, in ms — i.e.
+    # how far behind real life the operator's picture is. THE number to watch:
+    # a flat value means the pipeline keeps up, a steadily climbing one means
+    # the reader is losing to the source and latency is accumulating without
+    # bound (which ends in a stall). Cannot be inferred from FPS, which stays
+    # healthy-looking while the backlog grows.
+    frame_age_ms: float = 0.0
+    retrieve_fps: float = 0.0  # frames actually DECODED per second (see _StreamThread)
     _disp_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
+    _retr_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
 
 
 # ---------------------------------------------------------------------------
@@ -334,19 +545,41 @@ def _draw_enhanced_overlay(
     crossing_count: int = 0,
     track_label: str = "Faces",
 ) -> np.ndarray:
-    """Enhanced overlay with green/red boxes, labels, confidence, and metadata."""
+    """Enhanced overlay with green/red boxes, labels, confidence, and metadata.
+
+    Every dimension here is derived from the FRAME SIZE. Previously the box
+    width (220 px), line height (24 px), font scale (0.5) and padding were
+    hard-coded, having been tuned against a 1080p main stream. On a smaller
+    feed — a D1/CIF sub-stream, say — those absolute sizes swallowed most of
+    the picture: the info panel alone covered a third of the frame and the
+    per-person labels ran off the right edge.
+    """
     annotated = frame.copy()
+    h, w = annotated.shape[:2]
+
+    # Scale factor against a 720p reference, clamped so a tiny feed stays
+    # legible and a 4K one does not get a comically thin hairline overlay.
+    scale = max(0.30, min(1.5, h / 720.0))
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55 * scale
+    text_thick = max(1, int(round(1.2 * scale)))
+    box_thick = max(1, int(round(2 * scale)))
+    line_h = max(9, int(round(24 * scale)))
+    pad = max(2, int(round(5 * scale)))
+
+    def _text_w(text: str) -> int:
+        return cv2.getTextSize(text, font, font_scale, text_thick)[0][0]
 
     # Doorway crossing line (cyan) if configured.
     if line:
-        h, w = annotated.shape[:2]
         if line.get("orientation") == "vertical":
             x = int(line.get("position", 0.5) * w)
-            cv2.line(annotated, (x, 0), (x, h), (255, 255, 0), 2)
+            cv2.line(annotated, (x, 0), (x, h), (255, 255, 0), box_thick)
         else:
             y = int(line.get("position", 0.5) * h)
-            cv2.line(annotated, (0, y), (w, y), (255, 255, 0), 2)
-    
+            cv2.line(annotated, (0, y), (w, y), (255, 255, 0), box_thick)
+
+
     # Draw face overlays
     for track in tracks:
         display_info = track.get_display_info()
@@ -369,15 +602,29 @@ def _draw_enhanced_overlay(
             confidence,
         )
 
-        # Color based on recognition status
-        if matched:
-            color = (34, 197, 94)  # Green for known employees
+        # Colour by HOW the identity was established. NOTE: OpenCV is BGR, not
+        # RGB — the old "red" value (239, 68, 68) is B=239 and rendered BLUE, so
+        # unknown people were boxed blue while every comment said red.
+        #
+        #   green  — a real face was matched
+        #   amber  — nobody's face was visible; this is who normally sits here
+        #   red    — unidentified
+        #
+        # The amber case must be visually distinct: presenting a positional
+        # guess as a confident name is exactly how a man once ended up labelled
+        # with a colleague's name.
+        identity_source = display_info.get("identity_source")
+        if matched and identity_source == "seat":
+            color = (0, 170, 255)     # amber  (B, G, R)
+        elif matched:
+            color = (94, 197, 34)     # green  (B, G, R)
         else:
-            color = (239, 68, 68)  # Red for unknown
+            color = (68, 68, 239)     # red    (B, G, R)
         
         # Draw bounding box
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thick)
+
+
         # Build label text — always show the Track ID (office monitoring needs it).
         # A body we cannot put a name to is labelled "Unknown", not "Person": the
         # box means "somebody is here but we do not know who", which is the honest
@@ -389,7 +636,13 @@ def _draw_enhanced_overlay(
             _display_name = "Unknown"
         label_lines = [f"{_display_name} #{track_id}"]
 
-        if matched:
+        if matched and identity_source == "seat":
+            # Say plainly that this is a positional inference, not a face
+            # identification. An operator must be able to tell the difference at
+            # a glance — the name may be wrong if somebody swapped desks.
+            label_lines = [f"{_display_name}? #{track_id}"]
+            label_lines.append("by seat - face not seen")
+        elif matched:
             # Add confidence percentage
             confidence_pct = int(confidence * 100)
             label_lines.append(f"Confidence: {confidence_pct}%")
@@ -399,113 +652,186 @@ def _draw_enhanced_overlay(
                 id_display = employee_code or str(employee_id)
                 label_lines.append(f"ID: {id_display}")
         
-        # Draw label background and text
-        label_height = 24 * len(label_lines)
-        text_bg_x2 = x1 + max(180, max(len(line) for line in label_lines) * 9)
-        
-        cv2.rectangle(
-            annotated,
-            (x1, max(0, y1 - label_height - 4)),
-            (text_bg_x2, y1 - 2),
-            color,
-            -1,
-        )
-        
-        for i, line in enumerate(label_lines):
-            y_pos = max(16, y1 - label_height + 4 + i * 24)
+        # Label background sized to the text that is ACTUALLY rendered.
+        # The old width was `max(180, longest_line * 9)` — a guess at 9 px per
+        # character plus a 180 px floor, neither of which tracked the font
+        # scale. It over-drew on short labels and ran off the right edge on
+        # long ones, which is why "Unknown #4" was clipped mid-word.
+        label_height = line_h * len(label_lines)
+        label_width = max(_text_w(t) for t in label_lines) + pad * 2
+
+        # Keep the label inside the frame: shift left if it would overflow the
+        # right edge, and drop it BELOW the box if there is no room above.
+        lx1 = max(0, min(x1, w - label_width))
+        lx2 = min(w, lx1 + label_width)
+        if y1 - label_height - pad >= 0:
+            ly1 = y1 - label_height - pad
+        else:
+            ly1 = min(h - label_height - pad, y2)      # below the box instead
+        ly1 = max(0, ly1)
+        ly2 = min(h, ly1 + label_height + pad)
+
+        cv2.rectangle(annotated, (lx1, ly1), (lx2, ly2), color, -1)
+
+        for i, text in enumerate(label_lines):
+            baseline_y = ly1 + line_h * (i + 1) - max(2, int(round(6 * scale)))
             cv2.putText(
                 annotated,
-                line,
-                (x1 + 4, y_pos),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
+                text,
+                (lx1 + pad, baseline_y),
+                font,
+                font_scale,
                 (255, 255, 255),
-                1,
+                text_thick,
                 cv2.LINE_AA,
             )
-    
-    # Draw camera info overlay (top-left)
-    overlay_lines = [
-        f"Camera: {camera_name}",
-        f"FPS: {fps:.1f}",
-        # In body-tracking mode these are PERSON tracks, not faces — the caller
-        # passes the correct label so the counter never misreports.
-        f"{track_label}: {len(tracks)}",
-    ]
-    if line:
-        overlay_lines.append(f"Crossings: {crossing_count}")
-    
-    # Add timestamp
+
+
+    # Camera info panel (top-left).
+    #
+    # On a small feed the panel is compacted: labels are dropped to their
+    # initials and the date is dropped from the timestamp. The date is the
+    # longest string on the panel by some margin, and on a CIF sub-stream
+    # spelling it out costs more of the picture than it is worth — an operator
+    # watching a live feed already knows today's date.
     from datetime import datetime
-    overlay_lines.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    
-    # Draw overlay background
-    overlay_height = 24 * len(overlay_lines) + 8
-    overlay_width = 220
-    cv2.rectangle(
-        annotated,
-        (10, 10),
-        (10 + overlay_width, 10 + overlay_height),
-        (0, 0, 0),
-        -1,
+
+    compact = scale < 0.6          # roughly: frame shorter than 432px
+    now_text = datetime.now().strftime("%H:%M:%S" if compact else "%Y-%m-%d %H:%M:%S")
+
+    if compact:
+        overlay_lines = [
+            str(camera_name),
+            f"{fps:.0f}fps  {track_label[0]}:{len(tracks)}",
+        ]
+        if line:
+            overlay_lines.append(f"X:{crossing_count}")
+    else:
+        overlay_lines = [
+            f"Camera: {camera_name}",
+            f"FPS: {fps:.1f}",
+            # In body-tracking mode these are PERSON tracks, not faces — the
+            # caller passes the correct label so the counter never misreports.
+            f"{track_label}: {len(tracks)}",
+        ]
+        if line:
+            overlay_lines.append(f"Crossings: {crossing_count}")
+    overlay_lines.append(now_text)
+
+
+    # Info panel, sized to its own content and capped at a third of the frame
+    # width. The old version was a fixed 220x(24n+8) px block regardless of
+    # resolution, which on a small sub-stream covered most of the scene.
+    margin = max(4, int(round(10 * scale)))
+    panel_h = line_h * len(overlay_lines) + pad * 2
+    panel_w = min(
+        max(_text_w(t) for t in overlay_lines) + pad * 2,
+        max(80, int(w * 0.34)),
     )
-    cv2.rectangle(
-        annotated,
-        (10, 10),
-        (10 + overlay_width, 10 + overlay_height),
-        (255, 255, 255),
-        1,
-    )
-    
-    # Draw overlay text
-    for i, line in enumerate(overlay_lines):
-        y_pos = 30 + i * 24
+    px2 = min(w - 1, margin + panel_w)
+    py2 = min(h - 1, margin + panel_h)
+
+    # Translucent backing rather than solid black, so the panel obscures as
+    # little of the scene as possible.
+    roi = annotated[margin:py2, margin:px2]
+    if roi.size:
+        annotated[margin:py2, margin:px2] = cv2.addWeighted(
+            roi, 0.35, np.zeros_like(roi), 0.65, 0,
+        )
+    cv2.rectangle(annotated, (margin, margin), (px2, py2), (255, 255, 255), 1)
+
+    for i, text in enumerate(overlay_lines):
+        baseline_y = margin + pad + line_h * (i + 1) - max(2, int(round(6 * scale)))
+        if baseline_y >= py2:
+            break                       # ran out of panel; do not spill outside
         cv2.putText(
             annotated,
-            line,
-            (20, y_pos),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            text,
+            (margin + pad, baseline_y),
+            font,
+            font_scale,
             (255, 255, 255),
-            1,
+            text_thick,
             cv2.LINE_AA,
         )
-    
+
     return annotated
 
 
 def _open_capture(stream_url: str, source_type: str, camera_id: int) -> cv2.VideoCapture:
-    """Open a VideoCapture with appropriate backend and timeouts."""
+    """Open a VideoCapture with the appropriate backend.
+
+    Transport and timeout options come from OPENCV_FFMPEG_CAPTURE_OPTIONS, set
+    once at module import (see _ffmpeg_capture_options). They must NOT be
+    appended to the URL — OpenCV does not parse a query string as FFmpeg
+    options, it just forwards the text to the DVR.
+    """
     source = stream_url.strip()
-    logger.info("Camera %s: Opening stream: %s", camera_id, source)
+    logger.info("Camera %s: Opening stream: %s", camera_id, _redact_url(source))
 
     if source_type == "usb" or source.isdigit():
         logger.info("Camera %s: USB/webcam mode, index=%s", camera_id, source)
         return cv2.VideoCapture(int(source))
 
-    # RTSP / HTTP – use FFmpeg backend with Hikvision-compatible options
-    # These options help handle non-standard H.264 encoding from older DVRs
-    # Append FFmpeg options to the URL for older OpenCV versions
-    ffmpeg_options = {
-        'rtsp_transport': 'tcp',  # Use TCP instead of UDP for reliability
-        'fflags': 'nobuffer',     # Disable buffering
-        'flags': 'low_delay',     # Low latency mode
-        'rtsp_flags': 'prefer_tcp',  # Prefer TCP for RTSP
-        'analyzeduration': '5000000',  # Analyze 5 seconds of stream for better SPS/PPS detection
-        'probesize': '5000000',   # Probe 5 MB of stream
-        'max_delay': '0',         # No delay
-    }
-    
-    # Build FFmpeg options string and append to URL
-    options_str = '&'.join([f'{k}={v}' for k, v in ffmpeg_options.items()])
-    source_with_options = f"{source}?{options_str}"
-    
-    cap = cv2.VideoCapture(source_with_options, cv2.CAP_FFMPEG)
+    # RTSP / HTTP — FFmpeg backend.
+    cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    # BUFFERSIZE is honoured by some backends and ignored by FFmpeg; harmless
+    # to request. The real anti-buffering controls are `fflags;nobuffer` and
+    # `reorder_queue_size;0` in the capture options above.
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, _OPEN_TIMEOUT_MS)
-    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, _READ_TIMEOUT_MS)
-    
-    logger.info(f"Camera {camera_id}: Using FFmpeg options: {options_str}")
+    logger.info("Camera %s: capture opened=%s", camera_id, cap.isOpened())
+    return cap
+
+
+def open_capture_with_timeout(
+    stream_url: str,
+    source_type: str,
+    camera_id: int,
+    timeout_sec: float = 12.0,
+) -> Optional[cv2.VideoCapture]:
+    """Open a capture, giving up after `timeout_sec` whatever FFmpeg does.
+
+    CAP_PROP_OPEN_TIMEOUT_MSEC cannot be used for this: it is set on the object
+    AFTER the constructor has already blocked on the connect, so it arrives too
+    late to bound the open that just happened. The FFmpeg-level `stimeout` is
+    the primary bound; this is the backstop that keeps a wedged open off a
+    FastAPI request thread.
+
+    Returns an OPEN capture, or None. The caller owns release().
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"open-{camera_id}")
+    future = pool.submit(_open_capture, stream_url, source_type, camera_id)
+    try:
+        cap = future.result(timeout=timeout_sec)
+    except FuturesTimeout:
+        logger.error(
+            "Camera %s: stream open timed out after %.0fs (%s)",
+            camera_id, timeout_sec, _redact_url(stream_url),
+        )
+        # Do NOT wait for the worker — it is stuck inside FFmpeg. Release the
+        # capture in the background if the open eventually succeeds, so a late
+        # success cannot leak an RTSP session.
+        def _release_late(fut) -> None:
+            try:
+                late = fut.result()
+                if late is not None:
+                    late.release()
+            except Exception:
+                pass
+
+        future.add_done_callback(_release_late)
+        pool.shutdown(wait=False)
+        return None
+    except Exception:
+        logger.exception("Camera %s: stream open failed", camera_id)
+        pool.shutdown(wait=False)
+        return None
+
+    pool.shutdown(wait=False)
+    if cap is None or not cap.isOpened():
+        if cap is not None:
+            cap.release()
+        return None
     return cap
 
 
@@ -585,6 +911,56 @@ def _face_in_person_crop(rgb: np.ndarray, box) -> Optional[dict]:
     return best
 
 
+def _frame_capture_time(frame_ts: float):
+    """Naive-IST datetime for a frame captured at `frame_ts` (time.time()).
+
+    Attendance is written on a background executor, behind a pipeline that
+    already lags by several hundred ms, so stamping the event at write time
+    drifts it away from what actually happened — and away from the snapshot
+    stored alongside it. Anchor the event to when the FRAME was captured.
+    """
+    from datetime import timedelta
+
+    from app.core.datetime_utils import get_ist_now
+
+    if not frame_ts:
+        return None
+    lag = max(0.0, time.time() - float(frame_ts))
+    return get_ist_now() - timedelta(seconds=lag)
+
+
+def _build_evidence(
+    frame: np.ndarray,
+    box,
+    face_data: dict,
+    track_id: Optional[int],
+    employee_id: int,
+    camera_id,
+) -> dict:
+    """Capture WHY this match was believed, at the moment it was made.
+
+    Must be built here, not at attendance-write time: the write happens later on
+    a background executor, by which point the frame is gone and the tracker has
+    moved on. Never raises — evidence is an audit aid, and losing it must not
+    cost an attendance record.
+    """
+    evidence = {
+        "match_score": float(face_data.get("score") or 0.0),
+        "match_margin": float(face_data.get("margin") or 0.0),
+        "track_id": int(track_id) if track_id is not None else None,
+        "snapshot_path": None,
+    }
+    try:
+        from app.services.attendance_snapshot import save_face_snapshot
+
+        evidence["snapshot_path"] = save_face_snapshot(
+            frame, box, employee_id=int(employee_id), camera_id=str(camera_id),
+        )
+    except Exception:
+        logger.exception("evidence snapshot failed camera=%s", camera_id)
+    return evidence
+
+
 def _face_in_box(faces: list, box) -> Optional[dict]:
     """Return the highest-confidence detected face whose centre lies inside box."""
     x1, y1, x2, y2 = box
@@ -599,6 +975,48 @@ def _face_in_box(faces: list, box) -> Optional[dict]:
             if score > best_score:
                 best, best_score = f, score
     return best
+
+
+def _assign_faces_to_tracks(faces: list, ptracks: list) -> dict:
+    """Map track_id -> face, giving each detected face to AT MOST ONE person.
+
+    Person boxes overlap constantly on a crowded top-down view — someone
+    standing behind a seated colleague produces two boxes covering the same
+    pixels. Asking each track independently "is there a face inside me?" then
+    hands the SAME face to both, so two different people are recognised as one
+    employee and both get that name. Observed live: person 1 (conf 0.77) and
+    person 3 (conf 0.18) were both handed the same 30px face and both scored
+    identically against Rakhi Channa.
+
+    Resolved greedily by containment: the track whose box holds the face most
+    tightly wins it, and that face is then unavailable to anyone else. A tight
+    box around a face is far more likely to be its actual owner than a large
+    box that merely overlaps.
+    """
+    pairs = []
+    for track in ptracks:
+        tx1, ty1, tx2, ty2 = track.box
+        t_area = max(1.0, float((tx2 - tx1) * (ty2 - ty1)))
+        for idx, face in enumerate(faces):
+            fb = face.get("box") or []
+            if len(fb) < 4:
+                continue
+            cx, cy = (fb[0] + fb[2]) / 2, (fb[1] + fb[3]) / 2
+            if not (tx1 <= cx <= tx2 and ty1 <= cy <= ty2):
+                continue
+            # Smaller enclosing box = tighter fit = more likely the real owner.
+            # Detector confidence breaks ties between equally tight boxes.
+            pairs.append((1.0 / t_area, float(face.get("confidence", 0.0)), track.track_id, idx))
+
+    pairs.sort(reverse=True)
+    assigned: dict = {}
+    used_faces: set = set()
+    for _tightness, _conf, track_id, face_idx in pairs:
+        if track_id in assigned or face_idx in used_faces:
+            continue
+        assigned[track_id] = faces[face_idx]
+        used_faces.add(face_idx)
+    return assigned
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +1036,8 @@ class _StreamThread(threading.Thread):
         cap: Optional[cv2.VideoCapture] = None
         reconnect_delay = _RECONNECT_INIT_DELAY
         consecutive_failures = 0
+        last_retrieve = 0.0   # when a frame was last DECODED (see retrieve_period)
+        consecutive_retrieve_failures = 0   # grab() ok but decode failed
 
         logger.info("Camera %s [%s]: Stream thread started", w.camera_id, w.name)
 
@@ -639,12 +1059,36 @@ class _StreamThread(threading.Thread):
                     consecutive_failures += 1
                     w.state.reconnect_count += 1
                     w.state.status = "error"
-                    w.state.last_error = (
-                        f"Cannot open stream (attempt {w.state.reconnect_count}). "
-                        "Check DVR IP, RTSP port, credentials, and H.264 codec."
-                    )
-                    logger.error("Camera %s: %s", w.camera_id, w.state.last_error)
-                    reconnect_delay = min(reconnect_delay * 1.5, _RECONNECT_MAX_DELAY)
+
+                    # Persistent failure: back right off. Retrying a refused
+                    # camera every 30s does not fix it and, against a Hikvision
+                    # DVR, keeps re-triggering the illegal-login IP lockout so
+                    # it can NEVER recover — even after the real problem is
+                    # resolved. See _PERSISTENT_FAILURES.
+                    if consecutive_failures >= _PERSISTENT_FAILURES:
+                        reconnect_delay = _PERSISTENT_RETRY_SEC
+                        w.state.last_error = (
+                            f"Cannot open stream — {consecutive_failures} consecutive "
+                            f"failures. Backing off to {_PERSISTENT_RETRY_SEC / 60:.0f} min "
+                            "between attempts. Check credentials, DVR IP/port, and "
+                            "whether the DVR has locked out this host after repeated "
+                            "failed logins."
+                        )
+                        if consecutive_failures == _PERSISTENT_FAILURES:
+                            logger.error(
+                                "Camera %s: %d consecutive failures — backing off to "
+                                "%.0fs. Fast retries against rejected credentials keep "
+                                "a Hikvision lockout alive indefinitely.",
+                                w.camera_id, consecutive_failures, _PERSISTENT_RETRY_SEC,
+                            )
+                    else:
+                        reconnect_delay = min(reconnect_delay * 1.5, _RECONNECT_MAX_DELAY)
+                        w.state.last_error = (
+                            f"Cannot open stream (attempt {w.state.reconnect_count}). "
+                            "Check DVR IP, RTSP port, credentials, and H.264 codec."
+                        )
+                        logger.error("Camera %s: %s", w.camera_id, w.state.last_error)
+
                     logger.info(
                         "Camera %s: Retrying in %.1fs", w.camera_id, reconnect_delay
                     )
@@ -655,6 +1099,19 @@ class _StreamThread(threading.Thread):
                 reconnect_delay = _RECONNECT_INIT_DELAY
                 w.state.status = "running"
                 w.state.last_error = None
+                # CRITICAL: restart the watchdog clock on every successful open.
+                #
+                # Without this the stale check below compares the brand-new
+                # connection against the PREVIOUS session's timestamp, finds it
+                # older than _STALE_TIMEOUT, and tears the connection down
+                # before cap.read() is ever reached — a permanent
+                # connect/drop loop in which the camera never streams again.
+                #
+                # It also arms the watchdog for the "connected but silent" case:
+                # previously last_frame_time stayed 0 until the first frame
+                # arrived, so a camera that opened but never delivered anything
+                # was never caught at all.
+                w.state.last_frame_time = time.time()
                 logger.info("Camera %s [%s]: Connected successfully", w.camera_id, w.name)
 
             # ── stale watchdog ─────────────────────────────────────────────
@@ -673,16 +1130,31 @@ class _StreamThread(threading.Thread):
                         pass
                 cap = None
                 w.state.status = "reconnecting"
+                w.state.reconnect_count += 1
+                # Back off before retrying. This branch used to `continue`
+                # immediately, so a camera that could not deliver frames opened
+                # a fresh RTSP session as fast as the DVR would accept one —
+                # Hikvision units cap concurrent sessions, so the loop locked
+                # out other clients as well as burning CPU.
+                reconnect_delay = min(reconnect_delay * 1.5, _RECONNECT_MAX_DELAY)
+                self._stop_evt.wait(reconnect_delay)
                 continue
 
-            # ── read frame ─────────────────────────────────────────────────
+            # ── grab a frame ───────────────────────────────────────────────
+            # grab() advances the stream; retrieve() does the colour conversion
+            # and hands back a usable array. Splitting them lets us drain the
+            # stream at full rate — which is what stops the FFmpeg queue (and
+            # therefore latency) from growing — while only paying the
+            # conversion + allocation cost for frames a consumer will actually
+            # look at. The pipeline consumes 1-8 fps; it was converting and
+            # copying ~12 fps per camera across 12 cameras.
             try:
-                ok, frame = cap.read()
+                ok = cap.grab()
             except Exception as exc:
-                logger.warning("Camera %s: Read exception: %s", w.camera_id, exc)
-                ok, frame = False, None
+                logger.warning("Camera %s: Grab exception: %s", w.camera_id, exc)
+                ok = False
 
-            if not ok or frame is None:
+            if not ok:
                 consecutive_failures += 1
                 logger.warning(
                     "Camera %s: Frame read failed (%d consecutive)",
@@ -704,18 +1176,78 @@ class _StreamThread(threading.Thread):
             consecutive_failures = 0
             now = time.time()
             w.state.total_frames += 1
+            # The watchdog cares that the STREAM is alive, so it is fed by
+            # grab(), not by retrieve() — otherwise a camera nobody is watching
+            # would look stale and be torn down.
             w.state.last_frame_time = now
             w.state.status = "running"
 
-            # Rolling FPS calculation
+            # Rolling FPS calculation (stream rate — grabs per second)
             w.state._fps_ts.append(now)
             if len(w.state._fps_ts) >= 2:
                 span = w.state._fps_ts[-1] - w.state._fps_ts[0]
                 w.state.fps = round((len(w.state._fps_ts) - 1) / span, 1) if span > 0 else 0.0
 
-            # Store latest frame for RecognitionThread
+            # ── decode only if somebody needs this frame ───────────────────
+            if now - last_retrieve < w.retrieve_period():
+                continue
+
+            try:
+                ok_dec, frame = cap.retrieve()
+            except Exception as exc:
+                logger.warning("Camera %s: Retrieve exception: %s", w.camera_id, exc)
+                ok_dec, frame = False, None
+
+            if not ok_dec or frame is None:
+                # A failed retrieve after a good grab is usually a decode hiccup
+                # (one corrupt packet), so skip the frame rather than tear down a
+                # working connection.
+                #
+                # But it must be BOUNDED. grab() keeps succeeding on a stream
+                # whose pictures cannot be decoded — wrong codec, or an H.265
+                # feed the build cannot handle — so an unbounded `continue` here
+                # spins forever with status "running", a fresh last_frame_time
+                # (so the stale watchdog never fires) and not one usable frame.
+                # The camera looks healthy and delivers nothing.
+                consecutive_retrieve_failures += 1
+                if consecutive_retrieve_failures >= _MAX_RETRIEVE_FAILURES:
+                    logger.error(
+                        "Camera %s: %d consecutive decode failures — forcing "
+                        "reconnect. The stream is arriving but cannot be decoded "
+                        "(check the codec: H.264 is supported, H.265 often is not).",
+                        w.camera_id, consecutive_retrieve_failures,
+                    )
+                    w.state.last_error = (
+                        f"Stream arrives but {consecutive_retrieve_failures} frames "
+                        "in a row could not be decoded. Check the channel's codec "
+                        "(H.264 vs H.265)."
+                    )
+                    consecutive_retrieve_failures = 0
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                    cap = None
+                    w.state.status = "reconnecting"
+                    self._stop_evt.wait(reconnect_delay)
+                continue
+
+            consecutive_retrieve_failures = 0
+            last_retrieve = now
+            w.state._retr_ts.append(now)
+            if len(w.state._retr_ts) >= 2:
+                span = w.state._retr_ts[-1] - w.state._retr_ts[0]
+                w.state.retrieve_fps = (
+                    round((len(w.state._retr_ts) - 1) / span, 1) if span > 0 else 0.0
+                )
+
+            # Store latest frame + its capture time for the recognition and
+            # display threads. retrieve() allocates a fresh array per call, so
+            # no defensive copy is needed.
             with w._frame_lock:
-                w._latest_frame = frame.copy()
+                w._latest_frame = frame
+                w._latest_frame_ts = now
 
             if w.state.total_frames % 200 == 0:
                 logger.info(
@@ -756,6 +1288,94 @@ class _RecognitionThread(threading.Thread):
 
     def stop(self) -> None:
         self._stop_evt.set()
+
+    def _anchor_identities(
+        self, w: "CameraWorker", frame: np.ndarray, ptracks: list, face_confirmed: list
+    ) -> None:
+        """Keep a name on people whose face is not currently visible.
+
+        This is the answer to "only her hair is visible": the BODY is detected
+        and tracked regardless, and identity is attached from whatever evidence
+        exists — a face when one is visible, otherwise the seat.
+
+        Two independent signals, deliberately separated:
+
+          SEAT   — where this person was standing/sitting when their face WAS
+                   confirmed. In a fixed-desk room this is strong and cheap, and
+                   it survives losing the track entirely (which appearance-based
+                   tracking does not).
+          RE-ID  — OSNet body appearance. DISABLED by default and kept behind
+                   its own flag: measured on these cameras, a true match scored
+                   0.71-0.82 and a FALSE one 0.77, so no threshold separates
+                   them. It used to be bundled with seat anchoring, which meant
+                   turning off the broken signal also turned off the good one.
+
+        Never marks attendance — callers gate on `is_monitor`, and
+        `_mark_attendance` refuses MONITOR cameras independently.
+        """
+        from app.services.identity_manager import identity_manager
+
+        # 1. LEARN. Every track whose identity was just confirmed by a real face
+        #    teaches this camera where that person is.
+        for pt, fd in face_confirmed:
+            emb = None
+            if _REID_ENABLED:
+                emb = self._body_embedding(frame, pt)
+            try:
+                identity_manager.enroll(
+                    employee_id=int(fd["employee_id"]),
+                    camera_id=str(w.camera_id),
+                    embedding=emb,
+                    centroid=pt.centroid(),
+                    score=float(fd.get("score") or 0.0),
+                    name=fd.get("employee_name"),
+                    code=fd.get("employee_code"),
+                )
+            except Exception:
+                logger.exception("identity enrol failed camera=%s", w.camera_id)
+
+        # 2. APPLY. Put a name on tracks with no face, from the seat they occupy.
+        #    An employee already bound to another live track is excluded — one
+        #    person cannot be in two places.
+        taken = {pt.employee_id for pt in ptracks if pt.employee_id is not None}
+        for pt in ptracks:
+            if pt.employee_id is not None or pt.consecutive_misses != 0:
+                continue
+            emp_id = None
+            if _SEAT_ANCHOR:
+                try:
+                    emp_id = identity_manager.seat_match(
+                        str(w.camera_id), pt.centroid(), taken
+                    )
+                except Exception:
+                    logger.exception("seat match failed camera=%s", w.camera_id)
+            if emp_id is None:
+                continue
+
+            name, code = identity_manager.label(emp_id)
+            # source="seat" so the overlay can show this as a positional
+            # inference rather than a face identification, and so a later real
+            # face match always overrides it.
+            pt.bind_identity(int(emp_id), name, code, True, 0.0, source="seat")
+            taken.add(int(emp_id))
+            logger.info(
+                "IDENTITY camera=%s track=%d employee=%s (id=%s) via=seat "
+                "(no face visible — positional inference)",
+                w.camera_id, pt.track_id, name, emp_id,
+            )
+
+    def _body_embedding(self, frame: np.ndarray, pt) -> Optional[np.ndarray]:
+        """OSNet body embedding for one track, or None. Re-ID path only."""
+        try:
+            from app.services import reid_service
+
+            if not reid_service.is_available():
+                return None
+            out = reid_service.extract_body_embeddings(frame, [pt.box])
+            return out[0] if out else None
+        except Exception:
+            logger.exception("body embedding failed")
+            return None
 
     def _apply_reid(self, w: "CameraWorker", frame: np.ndarray, ptracks: list, face_confirmed: list) -> None:
         """Keep a name on people whose face isn't visible (MONITOR cameras only).
@@ -840,7 +1460,8 @@ class _RecognitionThread(threading.Thread):
             )
 
     def _analyze_person(
-        self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray, skip_faces: bool = False
+        self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray,
+        skip_faces: bool = False, frame_ts: float = 0.0,
     ) -> None:
         """Body-tracking pipeline: detect people, bind recognised faces to their
         body track, and keep the name on them until they leave the frame.
@@ -876,20 +1497,31 @@ class _RecognitionThread(threading.Thread):
                 " (faces skipped: blurry frame)" if skip_faces else "",
             )
 
+        # Anchor any attendance event to the frame's capture time, not to
+        # whenever the background writer gets to it.
+        frame_ist_time = _frame_capture_time(frame_ts)
+
         # Precompute the doorway line position in pixels (if crossing enabled).
         line_px = None
         if w.crossing_enabled:
             h, wpx = frame.shape[:2]
             line_px = w.line_position * (wpx if w.line_orientation == "vertical" else h)
 
-        def _mark(emp_id: int) -> None:
+        def _mark(emp_id: int, track=None) -> None:
             if emp_id is not None and w.can_mark_attendance(int(emp_id)):
                 w.note_attendance_marked(int(emp_id))
                 w.state.recognition_status = "recognized"
                 # Off-thread: never block body tracking on the DB round-trip.
                 _submit_attendance(
                     int(emp_id), camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
+                    evidence=getattr(track, "last_evidence", None),
+                    event_time=frame_ist_time,
                 )
+
+        # Each detected face belongs to exactly one person. Overlapping body
+        # boxes would otherwise both claim it and be recognised as the same
+        # employee — see _assign_faces_to_tracks.
+        face_by_track = _assign_faces_to_tracks(faces, ptracks)
 
         any_match = False
         face_confirmed: list = []   # tracks whose identity came from a FACE this tick
@@ -899,7 +1531,7 @@ class _RecognitionThread(threading.Thread):
             # (a) Bind identity: recognise a face inside this body when the track
             #     is still unknown or a periodic re-verify is due.
             if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC):
-                face = _face_in_box(faces, pt.box)
+                face = face_by_track.get(pt.track_id)
                 # Too few real face pixels -> the embedding is unreliable and can
                 # match the WRONG employee. Better "Person #N" than a wrong name.
                 if face is not None and _face_px_width(face) < _MIN_FACE_PX:
@@ -910,8 +1542,28 @@ class _RecognitionThread(threading.Thread):
                 if face is None and _FACE_CROP_ENABLED and not skip_faces:
                     face = _face_in_person_crop(rgb, pt.box)
                 if face is not None:
+                    # Fuse across every face ever seen on this body track before
+                    # matching. This matters more here than at the entrance: a
+                    # seated person is in view for minutes, so there are many
+                    # observations to average, and a room camera's faces are the
+                    # smallest and noisiest in the system. Matching each glance
+                    # in isolation throws all of that evidence away.
+                    match_face = face
+                    if _EMBEDDING_FUSION:
+                        # The zoomed crop is `_FACE_CROP_SCALE`x enlarged, so
+                        # divide back out for the TRUE pixel count — otherwise an
+                        # upscaled blur would outweigh a real close-up face.
+                        px = _face_px_width(face)
+                        if px < _MIN_FACE_PX:
+                            px = _face_px_width(face, _FACE_CROP_SCALE)
+                        pt.add_observation(face.get("embedding"), quality=max(1.0, px))
+                        fused = pt.fused_embedding()
+                        if fused is not None:
+                            match_face = dict(face)
+                            match_face["embedding"] = fused
+
                     result = recognize_face(
-                        face, threshold=w.threshold, source="cctv",
+                        match_face, threshold=w.threshold, source="cctv",
                         camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
                         mark_attendance=False,
                     )
@@ -937,6 +1589,15 @@ class _RecognitionThread(threading.Thread):
                                 _emp, fd.get("employee_name") or "Person",
                                 fd.get("employee_code"), True, fd.get("score", 0.0),
                             )
+                            # Capture provenance NOW, while the frame still
+                            # exists. Snapshot the PERSON box, not the face box:
+                            # a face found via _face_in_person_crop has
+                            # coordinates in the upscaled crop, not the frame,
+                            # so it cannot be cropped out of `frame`.
+                            if not w.is_monitor:
+                                pt.last_evidence = _build_evidence(
+                                    frame, pt.box, fd, pt.track_id, _emp, w.camera_id,
+                                )
                         else:
                             logger.info(
                                 "IDENTITY camera=%s track=%d candidate=%s score=%.3f "
@@ -1001,14 +1662,14 @@ class _RecognitionThread(threading.Thread):
                             w.camera_id, w.camera_purpose, pt.track_id,
                             pt.employee_name, "cross" if pt.crossed else "confirm",
                         )
-                        _mark(pt.employee_id)
+                        _mark(pt.employee_id, pt)
 
-        # (a2) Re-ID / seat anchoring — MONITOR cameras only, and only AFTER the
+        # (a2) Identity anchoring — MONITOR cameras only, and only AFTER the
         #      attendance loop above has run. Gating on `is_monitor` guarantees a
-        #      BODY match can never reach attendance: only ArcFace on an IN/OUT
-        #      camera may mark. This purely puts a name on a box.
-        if w.is_monitor and _REID_ENABLED and ptracks:
-            self._apply_reid(w, frame, ptracks, face_confirmed)
+        #      non-face match can never reach attendance: only ArcFace on an
+        #      IN/OUT camera may mark. This purely puts a name on a box.
+        if w.is_monitor and ptracks and (_REID_ENABLED or _SEAT_ANCHOR):
+            self._anchor_identities(w, frame, ptracks, face_confirmed)
             any_match = any_match or any(pt.matched for pt in ptracks)
 
 
@@ -1022,7 +1683,18 @@ class _RecognitionThread(threading.Thread):
 
     def run(self) -> None:
         w = self._w
-        logger.info("Camera %s: Recognition thread started", w.camera_id)
+        # Attendance cameras get priority on the shared inference gate. A person
+        # walks past an entrance in ~2 seconds; a MONITOR camera watches people
+        # who sit still for minutes. Under the old first-come-first-served lock
+        # the entrance queued behind the monitor cameras' face-crop passes,
+        # which is why they were throttled to a 1.5s interval as a workaround.
+        from app.services.inference_gate import set_inference_priority
+
+        set_inference_priority(not w.is_monitor)
+        logger.info(
+            "Camera %s: Recognition thread started (inference priority=%s)",
+            w.camera_id, "high" if not w.is_monitor else "low",
+        )
 
         while not self._stop_evt.is_set():
             self._stop_evt.wait(max(0.02, w.analysis_interval))
@@ -1042,6 +1714,7 @@ class _RecognitionThread(threading.Thread):
 
             with w._frame_lock:
                 frame = w._latest_frame
+                frame_ts = w._latest_frame_ts
 
             if frame is None:
                 continue
@@ -1098,7 +1771,9 @@ class _RecognitionThread(threading.Thread):
                 # person so the name persists while they are in view.
                 if w.use_person_tracking:
                     # `blurry` only disables the FACE stage — YOLO still runs.
-                    self._analyze_person(w, frame, rgb, skip_faces=blurry)
+                    self._analyze_person(
+                        w, frame, rgb, skip_faces=blurry, frame_ts=frame_ts,
+                    )
                     continue
 
                 # Import here to avoid circular imports at module load
@@ -1168,11 +1843,32 @@ class _RecognitionThread(threading.Thread):
                             w.camera_id, track.track_id, track.box,
                         )
 
+                        # Accumulate this frame into the track's fused template,
+                        # weighted by face size, then match on the FUSION rather
+                        # than on this one frame.
+                        #
+                        # Matching a single frame of a small face is the core
+                        # accuracy problem on a fixed ceiling camera: the
+                        # embedding is mostly noise. Averaging the 15-25 frames
+                        # of an approach cuts that noise ~4x, and the size
+                        # weighting means the close-up frames — the only ones
+                        # with real facial detail — dominate.
+                        match_face = track.face
+                        if _EMBEDDING_FUSION:
+                            track.add_observation(
+                                track.face.get("embedding"),
+                                quality=_face_px_width(track.face),
+                            )
+                            fused = track.fused_embedding()
+                            if fused is not None:
+                                match_face = dict(track.face)
+                                match_face["embedding"] = fused
+
                         # Match from the already-computed embedding (no re-detect,
                         # no attendance side effect).
                         _t_match0 = time.time()
                         result = recognize_face(
-                            track.face,
+                            match_face,
                             threshold=w.threshold,
                             source="cctv",
                             camera_id=str(w.camera_id),
@@ -1192,6 +1888,15 @@ class _RecognitionThread(threading.Thread):
                             matched=matched,
                             confidence=face_data.get("score", 0.0),
                         )
+
+                        # Capture provenance NOW, while the frame and the match
+                        # result still coexist. The attendance write happens
+                        # later and off-thread, where neither is available.
+                        if matched and emp_id is not None and not w.is_monitor:
+                            track.last_evidence = _build_evidence(
+                                frame, track.box, face_data, track.track_id,
+                                emp_id, w.camera_id,
+                            )
 
                         # Stable confirmation → mark attendance exactly once.
                         # (A MONITOR camera in face-mode fallback never marks.)
@@ -1225,6 +1930,8 @@ class _RecognitionThread(threading.Thread):
                                     int(emp_id),
                                     camera_id=str(w.camera_id),
                                     camera_purpose=w.camera_purpose,
+                                    evidence=track.last_evidence,
+                                    event_time=_frame_capture_time(frame_ts),
                                 )
                         elif matched:
                             logger.debug(
@@ -1290,6 +1997,9 @@ class _DisplayThread(threading.Thread):
         self._w = worker
         self._stop_evt = threading.Event()
         self._drawn_ids: set = set()  # track ids whose box is already on screen
+        # Edge-triggered: warn ONCE when the pipeline starts lagging, and once
+        # again when it recovers — not on every encoded frame.
+        self._age_warned = False
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -1312,10 +2022,33 @@ class _DisplayThread(threading.Thread):
 
             with w._frame_lock:
                 frame = w._latest_frame
+                frame_ts = w._latest_frame_ts
                 tracks = list(w._latest_tracks)
 
             if frame is None:
                 continue
+
+            # How far behind real life this picture is. A flat value means the
+            # pipeline keeps up; a steadily CLIMBING one means the reader is
+            # losing to the source and the FFmpeg queue is growing without
+            # bound — which ends in a stall. FPS looks healthy the whole time
+            # this is happening, so it cannot be diagnosed without this number.
+            age_ms = (time.time() - frame_ts) * 1000.0 if frame_ts else 0.0
+            w.state.frame_age_ms = round(age_ms, 1)
+            if age_ms > _FRAME_AGE_WARN_MS and not self._age_warned:
+                self._age_warned = True
+                logger.warning(
+                    "Camera %s: frame age %.0fms (>%.0fms) — pipeline falling "
+                    "behind the stream. Check CPU load, or move analysis to the "
+                    "sub-stream.",
+                    w.camera_id, age_ms, _FRAME_AGE_WARN_MS,
+                )
+            elif age_ms <= _FRAME_AGE_WARN_MS and self._age_warned:
+                self._age_warned = False
+                logger.info(
+                    "Camera %s: frame age back to %.0fms — pipeline caught up",
+                    w.camera_id, age_ms,
+                )
 
             # STAGE: bounding box drawn — log the first frame each track's box is
             # actually rendered on screen (with timestamp, for latency measuring).
@@ -1400,6 +2133,9 @@ class CameraWorker:
         self.state = CameraRuntimeState()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        # time.time() when _latest_frame was decoded. Lets the display thread
+        # report how far behind real life the picture is (state.frame_age_ms).
+        self._latest_frame_ts: float = 0.0
         self._latest_tracks: list = []       # published by recog, drawn by display
         self._frame_counter = 0  # For frame skipping
         self._last_view_ts = 0.0  # last time the preview JPEG was requested
@@ -1448,10 +2184,24 @@ class CameraWorker:
         self.use_person_tracking = False
         if _PERSON_TRACKING or (self.is_monitor and _MONITOR_PERSON_TRACKING):
             if bytetrack_engine.is_available():
-                # A steep top-down camera needs a permissive tracker (its people
-                # score ~0.11); a well-aimed one keeps the strict config so empty
-                # chairs are never boxed.
-                steep = str(camera_id) in _STEEP_CAMERAS
+                # Permissive tracker for room cameras.
+                #
+                # A ceiling-mounted view of SEATED people produces detection
+                # scores well below the strict config's new_track_thresh of
+                # 0.30 — measured on this very room: 0.58 / 0.25 / 0.19 / 0.16,
+                # so only ONE of four people became a track and the overlay
+                # read "People: 1".
+                #
+                # This used to require listing camera ids in CCTV_STEEP_CAMERAS
+                # by hand, so any monitor camera the operator forgot to add
+                # silently saw a fraction of the room. MONITOR cameras now get
+                # the permissive config by DEFAULT: they can never mark
+                # attendance, so a spurious box on an empty chair is cosmetic,
+                # whereas a missed person defeats the camera's only purpose.
+                #
+                # IN/OUT cameras keep the strict config — there a false track
+                # feeds attendance, so precision matters more than recall.
+                steep = self.is_monitor or str(camera_id) in _STEEP_CAMERAS
                 # One engine (and therefore one YOLO model + one ByteTrack state)
                 # PER CAMERA — tracker state must never be shared between feeds.
                 # MONITOR cameras never mark attendance, so they may use a
@@ -1491,6 +2241,33 @@ class CameraWorker:
         self._recog_thread: Optional[_RecognitionThread] = None
         self._display_thread: Optional[_DisplayThread] = None
 
+    # ── capture pacing ──────────────────────────────────────────────────────
+    def retrieve_period(self) -> float:
+        """Minimum seconds between DECODED frames for this camera.
+
+        The stream is drained at full rate with grab() (that is what keeps the
+        FFmpeg queue — and therefore latency — from growing), but a frame is
+        only decoded when something will look at it. Two consumers:
+
+          * the display thread, at _DISPLAY_FPS, and only while someone is
+            actually watching (_DISPLAY_IDLE_SEC since the last preview request)
+          * the recognition thread, at 1 / analysis_interval
+
+        With nobody watching a MONITOR camera that is ~0.7 fps instead of the
+        full stream rate. Across twelve cameras on four cores that is the
+        difference between the decode threads getting CPU and being starved by
+        inference — which is what makes the picture fall behind.
+        """
+        watched = (time.time() - self._last_view_ts) < _DISPLAY_IDLE_SEC
+        display_fps = _DISPLAY_FPS if watched else 0.0
+        analysis_fps = 0.0 if self.analysis_paused else 1.0 / max(0.02, self.analysis_interval)
+        needed = max(display_fps, analysis_fps)
+        if needed <= 0:
+            # Nothing needs frames. Still decode occasionally so a viewer
+            # arriving gets a current picture rather than a stale one.
+            return 1.0
+        return 1.0 / needed
+
     # ── attendance cooldown ─────────────────────────────────────────────────
     def can_mark_attendance(self, employee_id: int) -> bool:
         """True if this employee is outside the per-camera cooldown window."""
@@ -1498,12 +2275,72 @@ class CameraWorker:
         return last is None or (time.time() - last) >= _ATTENDANCE_COOLDOWN
 
     def note_attendance_marked(self, employee_id: int) -> None:
-        self._last_marked[employee_id] = time.time()
+        now = time.time()
+        self._last_marked[employee_id] = now
+        # Bound the dict. It only ever grew, for the process lifetime.
+        if len(self._last_marked) > 256:
+            cutoff = now - _ATTENDANCE_COOLDOWN * 4
+            self._last_marked = {
+                emp: ts for emp, ts in self._last_marked.items() if ts > cutoff
+            }
+
+    def _warm_cooldown_from_db(self) -> None:
+        """Seed the per-camera cooldown from recent events in the database.
+
+        `_last_marked` is in-memory only, so it was cleared by a restart — and
+        also by any camera edit, since `add_camera` REPLACES the worker. Either
+        one reopened the cooldown window and let the same person be marked
+        again immediately. Reading back the recent events closes that gap.
+
+        Never raises: a camera must still start if this query fails.
+        """
+        try:
+            from datetime import timedelta
+
+            from app.core.datetime_utils import get_ist_now
+            from app.db.session import SessionLocal
+            from app.models import AttendanceEvent
+            from app.services.attendance_event_service import business_date, to_naive_ist
+
+            now_ist = get_ist_now()
+            since = now_ist - timedelta(seconds=_ATTENDANCE_COOLDOWN)
+            with SessionLocal() as db:
+                rows = (
+                    db.query(AttendanceEvent.employee_id, AttendanceEvent.event_time)
+                    .filter(
+                        AttendanceEvent.camera_id == str(self.camera_id),
+                        AttendanceEvent.attendance_date == business_date(now_ist),
+                        AttendanceEvent.event_time >= since,
+                    )
+                    .all()
+                )
+
+            now_mono = time.time()
+            for employee_id, event_time in rows:
+                age = (now_ist - to_naive_ist(event_time)).total_seconds()
+                # Back-date the monotonic stamp so the remaining cooldown is
+                # what is actually left, not a fresh full window.
+                self._last_marked[int(employee_id)] = now_mono - age
+            if rows:
+                logger.info(
+                    "Camera %s: warmed attendance cooldown for %d employee(s)",
+                    self.camera_id, len(rows),
+                )
+        except Exception:
+            logger.exception(
+                "Camera %s: cooldown warm-up failed (starting with an empty "
+                "cooldown — a duplicate mark is possible in the next %.0fs)",
+                self.camera_id, _ATTENDANCE_COOLDOWN,
+            )
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     def start(self) -> None:
         if self._stream_thread and self._stream_thread.is_alive():
             return
+        # Restore the cooldown before any frame can be analysed, so a restart
+        # cannot re-mark someone who was just marked.
+        if not self.is_monitor:
+            self._warm_cooldown_from_db()
         self._stream_thread = _StreamThread(self)
         self._recog_thread  = _RecognitionThread(self)
         self._display_thread = _DisplayThread(self)
@@ -1512,7 +2349,8 @@ class CameraWorker:
         self._display_thread.start()
         logger.info(
             "Camera %s [%s]: Worker started (purpose=%s url=%s)",
-            self.camera_id, self.name, self.camera_purpose, self.stream_url,
+            self.camera_id, self.name, self.camera_purpose,
+            _redact_url(self.stream_url),
         )
 
     def stop(self) -> None:
@@ -1567,7 +2405,10 @@ class CameraWorker:
             "camera_id": self.camera_id,
             "name": self.name,
             "location": getattr(self, "location", None),
-            "stream_url": self.stream_url,
+            # Redacted: this dict is returned by the camera status/list APIs and
+            # is logged. The un-redacted URL stays available on the DB row for
+            # the edit form (GET /cameras/{id}).
+            "stream_url": _redact_url(self.stream_url),
             "source_type": self.source_type,
             "camera_purpose": self.camera_purpose,
             "threshold": self.threshold,
@@ -1575,8 +2416,12 @@ class CameraWorker:
             "status": s.status,
             "last_error": s.last_error,
             "fps": s.fps,
-            "capture_fps": s.fps,
+            "capture_fps": s.fps,          # frames GRABBED per second (stream rate)
+            "retrieve_fps": s.retrieve_fps,  # frames actually DECODED per second
             "display_fps": s.display_fps,
+            # How stale the operator's picture is. Watch this, not FPS: a
+            # climbing frame_age_ms is the early warning for a stalling stream.
+            "frame_age_ms": s.frame_age_ms,
             "recognition_status": s.recognition_status,
             "active_tracks": s.active_tracks,
             "crossing_enabled": self.crossing_enabled,
@@ -1650,7 +2495,8 @@ class CameraManager:
                 config = parse_hcnetsdk_config(model.source_url)
                 if not config:
                     logger.error(
-                        f"Camera {model.id}: Failed to parse HCNetSDK config from {model.source_url}"
+                        "Camera %s: Failed to parse HCNetSDK config from %s",
+                        model.id, _redact_url(model.source_url),
                     )
                     return
                 
@@ -1813,14 +2659,29 @@ class CameraManager:
         error    = sum(1 for w in workers if w.state.status == "error")
         frames   = sum(w.state.total_frames for w in workers)
         reconnects = sum(w.state.reconnect_count for w in workers)
-        return {
+        # Worst frame age across cameras — the single best indicator that the
+        # pipeline is falling behind the streams (see CameraRuntimeState).
+        worst_age = max((w.state.frame_age_ms for w in workers), default=0.0)
+
+        stats = {
             "ffmpeg_ok": self._ffmpeg_ok,
             "total_cameras": total,
             "running_cameras": running,
             "error_cameras": error,
             "total_frames_processed": frames,
             "total_reconnects": reconnects,
+            "worst_frame_age_ms": round(worst_age, 1),
         }
+        try:
+            from app.services.inference_gate import get_gate
+
+            # high_avg_wait_ms is the number that matters: if attendance
+            # cameras are still queueing, the slot count or the detector cost
+            # (FACE_DETECTION_SIZE) needs attention.
+            stats["inference_gate"] = get_gate().stats()
+        except Exception:
+            logger.debug("inference gate stats unavailable", exc_info=True)
+        return stats
 
     def is_ffmpeg_ok(self) -> bool:
         if self._ffmpeg_ok is None:

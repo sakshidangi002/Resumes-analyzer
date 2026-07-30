@@ -138,7 +138,14 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     # from partial hours. An employee who has shown up is PRESENT until the day
     # is over; the real classification is applied when viewing a past day.
     from app.core.datetime_utils import get_ist_now
-    if rec.date >= get_ist_now().date():
+    # Imported lazily: attendance_event_service imports THIS module, so a
+    # module-level import here would be circular.
+    from app.services.attendance_event_service import business_date
+
+    # Business day, not calendar day. At 00:30 the in-progress day is still
+    # yesterday's record, and a calendar comparison would finalise a night
+    # shift's status to Half Day while the employee is still working.
+    if rec.date >= business_date(get_ist_now()):
         if rec.sign_in_time is not None:
             rec.status = "PRESENT"
         elif rec.is_weekly_off:

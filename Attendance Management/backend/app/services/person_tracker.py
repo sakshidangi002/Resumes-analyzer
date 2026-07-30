@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from app.services.embedding_fusion import EmbeddingFuser
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,11 +75,28 @@ class PersonTrack:
     matched: bool = False
     confidence: float = 0.0
     last_recognition_time: float = 0.0
+    # HOW this identity was established: "face" (ArcFace matched a visible
+    # face) or "seat" (nobody's face was visible; this is who normally sits
+    # here). They are very different claims and the overlay must not present
+    # them identically — a positional guess shown as a confident name is the
+    # same failure mode as the mislabelling this system already suffered.
+    identity_source: Optional[str] = None
 
     # Stable-confirmation + attendance state (mirrors FaceTrack).
     pending_employee_id: Optional[int] = None
     confirm_count: int = 0
     attendance_marked: bool = False
+    # Recognition provenance from the last successful face match on this track
+    # (score, margin, snapshot path). Captured at match time because that is the
+    # only moment the frame and the match result exist together — attendance is
+    # marked later, and asynchronously.
+    last_evidence: Optional[dict] = None
+
+    # Quality-weighted fusion of every face embedding seen on this body track.
+    # Matters MORE here than on a face track: a seated person is in view for
+    # minutes, so there are far more observations to average, and a room
+    # camera's faces are the smallest and noisiest in the system.
+    fuser: EmbeddingFuser = field(default_factory=EmbeddingFuser)
 
     age: int = 0
     consecutive_misses: int = 0
@@ -105,6 +124,18 @@ class PersonTrack:
     def is_expired(self) -> bool:
         return self.consecutive_misses >= self.max_misses
 
+    def add_observation(self, embedding, quality: float) -> None:
+        """Fold one face embedding into this body track's fused template."""
+        self.fuser.add(embedding, quality)
+
+    def fused_embedding(self):
+        """Quality-weighted mean of every face seen on this person, or None."""
+        return self.fuser.fused()
+
+    @property
+    def observations(self) -> int:
+        return self.fuser.observations
+
     def needs_recognition(self, reverify_sec: float) -> bool:
         """Recognise when not yet identified, or periodically to re-verify."""
         if not self.matched:
@@ -118,15 +149,26 @@ class PersonTrack:
         employee_code: Optional[str],
         matched: bool,
         confidence: float,
+        source: str = "face",
     ) -> None:
         # Only overwrite with a positive match; a failed read never erases a
         # name that was already established for this person.
-        if matched:
-            self.employee_id = employee_id
-            self.employee_name = employee_name
-            self.employee_code = employee_code
-            self.matched = True
-            self.confidence = confidence
+        if not matched:
+            self.last_recognition_time = time.time()
+            return
+
+        # A FACE match always wins. A seat guess must never overwrite an
+        # identity that was actually seen — otherwise someone sitting at a
+        # colleague's desk would be renamed to that colleague.
+        if source == "seat" and self.identity_source == "face":
+            return
+
+        self.employee_id = employee_id
+        self.employee_name = employee_name
+        self.employee_code = employee_code
+        self.matched = True
+        self.confidence = confidence
+        self.identity_source = source
         self.last_recognition_time = time.time()
 
     def register_identification(
@@ -156,6 +198,7 @@ class PersonTrack:
             "employee_code": self.employee_code,
             "matched": self.matched,
             "confidence": self.confidence,
+            "identity_source": self.identity_source,
         }
 
 

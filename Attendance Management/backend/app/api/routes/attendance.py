@@ -458,10 +458,15 @@ def get_today_attendance(
 ):
     """Get today's attendance for all employees (or filtered by department)."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_events_for_day, recalculate_attendance_summary
-    
-    today = get_ist_now().date()
-    
+    from app.services.attendance_event_service import (
+        business_date, get_events_for_day, recalculate_attendance_summary,
+    )
+
+    # Business day, not calendar day — must match where add_attendance_event
+    # files events, or between midnight and the day-start hour this view shows
+    # an empty day while a night shift is still inside.
+    today = business_date(get_ist_now())
+
     q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
@@ -509,10 +514,13 @@ def get_live_attendance_status(
 ):
     """Get real-time attendance status for all active employees today."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_latest_event_for_day, _normalize_event_type
+    from app.services.attendance_event_service import (
+        business_date, get_latest_event_for_day, _normalize_event_type,
+    )
 
-    today = get_ist_now().date()
-    
+    # Business day — see the note in /today.
+    today = business_date(get_ist_now())
+
     # Get all active employees
     employees = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only()).all()
     

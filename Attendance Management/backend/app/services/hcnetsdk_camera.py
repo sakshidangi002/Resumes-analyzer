@@ -206,6 +206,13 @@ class HCNetSDKCameraWorker:
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._frame_counter = 0  # For frame skipping
+        # Last time a browser requested this camera's preview. Mirrors
+        # CameraWorker so the DVR idle-reaper can cull unwatched streams.
+        self._last_view_ts = 0.0
+        # When True the AI analysis is skipped but the video keeps streaming.
+        # Mirrors CameraWorker.analysis_paused so the DVR dashboard's
+        # recognition toggle works identically on both worker types.
+        self.analysis_paused: bool = False
         
         # Face tracking for multi-face recognition
         self.face_tracker = FaceTracker(
@@ -417,8 +424,18 @@ class HCNetSDKCameraWorker:
         """Main worker loop with reconnection logic."""
         reconnect_delay = _RECONNECT_INIT_DELAY
         consecutive_failures = 0
-        
-        logger.info(f"Camera {self.camera_id}: HCNetSDK worker thread started")
+
+        # Same priority rule as CameraWorker: attendance cameras are admitted to
+        # the shared inference gate ahead of display-only MONITOR cameras.
+        from app.services.inference_gate import set_inference_priority
+
+        set_inference_priority(self.camera_purpose != "MONITOR")
+
+        logger.info(
+            "Camera %s: HCNetSDK worker thread started (inference priority=%s)",
+            self.camera_id,
+            "high" if self.camera_purpose != "MONITOR" else "low",
+        )
         
         while not self._stop_evt.is_set():
             # Login if not logged in
@@ -489,9 +506,34 @@ class HCNetSDKCameraWorker:
             f"Total frames: {self.state.total_frames}, Reconnects: {self.state.reconnect_count}"
         )
     
+    def _encode_preview(self, frame: np.ndarray) -> None:
+        """Publish a plain (un-annotated) preview JPEG.
+
+        Unlike CameraWorker, this class has no separate display thread — the
+        JPEG is produced inside _process_frame_for_recognition. So any path
+        that skips recognition must still publish a frame here, otherwise the
+        live video freezes whenever analysis is skipped.
+        """
+        try:
+            ok_enc, buf = cv2.imencode(
+                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY]
+            )
+            if ok_enc:
+                with self._frame_lock:
+                    self.state.latest_jpeg = buf.tobytes()
+                self.state.updated_at = time.time()
+        except Exception as exc:
+            logger.error("Camera %s: preview encode failed: %s", self.camera_id, exc)
+
     def _process_frame_for_recognition(self, frame: np.ndarray) -> None:
         """Process frame for face recognition with tracking (mirrors CameraWorker behavior)."""
         try:
+            # Analysis paused (DVR dashboard recognition toggle) -> keep the
+            # video flowing, skip the expensive AI.
+            if self.analysis_paused:
+                self._encode_preview(frame)
+                return
+
             # Check if frame is blurry
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < 80.0:
@@ -746,7 +788,21 @@ class HCNetSDKCameraWorker:
         """Get the latest frame (thread-safe)."""
         with self._frame_lock:
             return self._latest_frame.copy() if self._latest_frame is not None else None
-    
+
+    def get_latest_jpeg(self) -> Optional[bytes]:
+        """Latest annotated JPEG frame.
+
+        Mirrors CameraWorker.get_latest_jpeg so both worker types satisfy the
+        same interface — the DVR preview/stream routes call this without
+        knowing which class they are holding. This method was MISSING, so
+        those routes raised AttributeError (HTTP 500) for any camera
+        configured with source_type="hcnetsdk".
+        """
+        self._last_view_ts = time.time()   # keeps the DVR idle-reaper from culling us
+        with self._frame_lock:
+            return self.state.latest_jpeg
+
+
     def serialize_state(self) -> dict:
         """Serialize camera state for API responses."""
         s = self.state

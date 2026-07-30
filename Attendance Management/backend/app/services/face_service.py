@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import logging
 import os
-import threading
 from functools import lru_cache
 
 import numpy as np
@@ -24,7 +23,13 @@ DETECTION_THRESHOLD = 0.32
 # accuracy unchanged). Overridable via FACE_DETECTION_SIZE env if needed.
 DETECTION_SIZE = (int(os.getenv("FACE_DETECTION_SIZE", "1024")),) * 2
 
-_inference_lock = threading.Lock()
+# Inference admission. Was a single exclusive threading.Lock, which serialised
+# ALL detection and embedding process-wide and — worse — served the queue
+# first-come-first-served, so an entrance camera waited behind a monitor
+# camera's ~500ms face-crop pass. The gate bounds concurrency the same way but
+# admits attendance cameras first. See inference_gate.py for why concurrent
+# inference is safe for this stack.
+from app.services.inference_gate import inference_slot  # noqa: E402
 
 
 @lru_cache(maxsize=1)
@@ -94,7 +99,7 @@ def _extract_faces_insightface(rgb_image: np.ndarray) -> list[dict]:
     import cv2
 
     bgr_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
-    with _inference_lock:
+    with inference_slot():
         detected_faces = get_face_analyser().get(bgr_image)
 
     faces: list[dict] = []
@@ -133,7 +138,7 @@ def _extract_faces_yolo(rgb_image: np.ndarray) -> list[dict]:
     model = _get_yolo_model()
     recognizer = _get_recognizer()
 
-    with _inference_lock:
+    with inference_slot():
         results = model.predict(bgr_image, conf=float(settings.yolo_conf), verbose=False)
 
     faces: list[dict] = []
@@ -153,42 +158,46 @@ def _extract_faces_yolo(rgb_image: np.ndarray) -> list[dict]:
     if kpts is not None and getattr(kpts, "xy", None) is not None:
         all_kps = kpts.xy.cpu().numpy()  # (N, K, 2)
 
-    for i in range(len(xyxy)):
-        bbox = xyxy[i].astype(np.float32)
-        conf = float(confs[i])
+    # ONE admission for all of this frame's embeddings, not one per face.
+    # Previously each face acquired the global lock separately, so a frame with
+    # four faces queued four times — and every other camera interleaved between
+    # them. Holding a single slot for the batch keeps the frame's work together
+    # and cuts the queueing to a quarter.
+    with inference_slot():
+        for i in range(len(xyxy)):
+            bbox = xyxy[i].astype(np.float32)
+            conf = float(confs[i])
 
-        kps = None
-        if all_kps is not None and i < len(all_kps) and all_kps[i].shape[0] >= 5:
-            kps = all_kps[i][:5].astype(np.float32)
+            kps = None
+            if all_kps is not None and i < len(all_kps) and all_kps[i].shape[0] >= 5:
+                kps = all_kps[i][:5].astype(np.float32)
 
-        try:
-            if kps is not None:
-                # Aligned embedding via landmarks (preferred, best accuracy).
-                face = Face(bbox=bbox, kps=kps, det_score=conf)
-                with _inference_lock:
+            try:
+                if kps is not None:
+                    # Aligned embedding via landmarks (preferred, best accuracy).
+                    face = Face(bbox=bbox, kps=kps, det_score=conf)
                     recognizer.get(bgr_image, face)
-                embedding = face.normed_embedding if getattr(face, "normed_embedding", None) is not None else face.embedding
-            else:
-                # No landmarks from this model: fall back to a resized crop.
-                x1, y1, x2, y2 = (int(max(0, v)) for v in bbox[:4])
-                crop = bgr_image[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-                aligned = cv2.resize(crop, (112, 112))
-                with _inference_lock:
+                    embedding = face.normed_embedding if getattr(face, "normed_embedding", None) is not None else face.embedding
+                else:
+                    # No landmarks from this model: fall back to a resized crop.
+                    x1, y1, x2, y2 = (int(max(0, v)) for v in bbox[:4])
+                    crop = bgr_image[y1:y2, x1:x2]
+                    if crop.size == 0:
+                        continue
+                    aligned = cv2.resize(crop, (112, 112))
                     embedding = recognizer.get_feat(aligned).flatten()
-        except Exception as exc:
-            logger.warning("YOLO embedding failed for one face: %s", exc)
-            continue
+            except Exception as exc:
+                logger.warning("YOLO embedding failed for one face: %s", exc)
+                continue
 
-        faces.append(
-            {
-                "box": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
-                "confidence": conf,
-                "embedding": _normalize(embedding),
-                "pose": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0},
-            }
-        )
+            faces.append(
+                {
+                    "box": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
+                    "confidence": conf,
+                    "embedding": _normalize(embedding),
+                    "pose": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0},
+                }
+            )
 
     return faces
 

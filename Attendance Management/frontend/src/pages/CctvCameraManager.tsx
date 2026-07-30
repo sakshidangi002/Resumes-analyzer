@@ -38,6 +38,10 @@ type Camera = {
   name: string;
   location: string | null;
   stream_url: string;
+  /** Password-redacted copy of stream_url. Use this for DISPLAY — stream_url
+   *  carries the DVR password and is only for the edit form, which parses and
+   *  rebuilds it on save. */
+  stream_url_display?: string;
   source_type: string;
   camera_purpose: string;
   threshold: number;
@@ -608,9 +612,11 @@ export default function CctvCameraManager() {
                 ))}
               </div>
 
-              {/* Stream URL */}
+              {/* Stream URL — redacted. cam.stream_url contains the DVR
+                  password in cleartext and was being rendered as-is, putting
+                  the credentials on screen (and into any screenshot). */}
               <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.35)", marginBottom: "1rem", wordBreak: "break-all" }}>
-                {cam.stream_url}
+                {cam.stream_url_display ?? cam.stream_url}
               </div>
 
               {/* Actions */}

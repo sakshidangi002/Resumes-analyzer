@@ -1,8 +1,8 @@
 """Attendance records and correction requests."""
 from datetime import datetime, date, time
 from sqlalchemy import (
-    Column, Integer, Date, Time, ForeignKey, Boolean, DateTime, String, Numeric,
-    UniqueConstraint,
+    Column, Integer, Date, Time, ForeignKey, Boolean, DateTime, Float, String,
+    Numeric, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
@@ -74,8 +74,19 @@ class AttendanceEvent(Base):
     attendance_date = Column(Date, nullable=False, index=True)  # required NOT NULL column in DB
     event_time = Column(DateTime, nullable=False, index=True)
     event_type = Column(String(10), nullable=False)  # IN / OUT / BREAK_IN / BREAK_OUT
-    source = Column(String(20), nullable=False, default="AUTO")  # AUTO / MANUAL
+    source = Column(String(20), nullable=False, default="AUTO")  # AUTO / MANUAL / AUTO_CLOSE
     camera_id = Column(String(50), nullable=True)
+
+    # ── Recognition evidence (camera events only) ────────────────────────────
+    # Why a face match produced this row. Without it a disputed record cannot be
+    # adjudicated, and recognition thresholds can only be tuned by anecdote.
+    # All nullable: rows predating this, and manual/AUTO_CLOSE events, have no
+    # evidence — NULL means "not applicable", not "scored zero".
+    match_score = Column(Float, nullable=True)    # cosine similarity to the enrolled face
+    match_margin = Column(Float, nullable=True)   # gap to the runner-up candidate
+    track_id = Column(Integer, nullable=True)     # tracker id within the camera session
+    snapshot_path = Column(String(300), nullable=True)  # relative to SNAPSHOT_ROOT
+
     created_at = Column(DateTime, default=get_ist_now)
 
     employee = relationship("Employee", backref="attendance_events")

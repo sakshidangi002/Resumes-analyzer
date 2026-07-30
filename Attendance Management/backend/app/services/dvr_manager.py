@@ -26,6 +26,12 @@ class LiveCamera:
     recognition_enabled: bool = False
     last_frame_time: float = 0
     error_message: str = ""
+    # True when rtsp_worker is BORROWED from CameraManager because a configured
+    # camera already watches this channel. Such a worker must never be stopped
+    # or reaped here — it belongs to a real camera that is doing attendance or
+    # monitoring work, and killing it because a preview tab closed would take
+    # that camera down. See start_camera_stream.
+    shared_worker: bool = False
 
 
 @dataclass
@@ -48,6 +54,73 @@ import os as _os
 # DVR dashboard streams are for VIEWING only. If a stream has not been requested
 # by a browser for this long, it is auto-released to free the RTSP connection.
 _DVR_IDLE_STOP_SEC = float(_os.getenv("DVR_IDLE_STOP_SEC", "30"))
+
+
+def parse_channel_from_url(url: str) -> Optional[int]:
+    """DVR channel number encoded in a Hikvision RTSP path, or None.
+
+    Hikvision accepts several spellings of the same stream, and this codebase
+    uses two of them: configured cameras store `/Streaming/Channels/101` while
+    the DVR manager builds `/Streaming/Channels/00101`. Both mean channel 1,
+    main stream. Comparing URLs as strings therefore misses the duplicate, so
+    the channel is extracted numerically: the last two digits are the stream
+    index, everything before them is the channel.
+    """
+    if not url:
+        return None
+    tail = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    if not tail.isdigit() or len(tail) < 3:
+        return None
+    try:
+        return int(tail[:-2])            # drop the 2-digit stream index
+    except ValueError:
+        return None
+
+
+def _find_worker_for_channel(channel_id: int):
+    """A live CameraManager worker already streaming this DVR channel, or None."""
+    try:
+        from app.services.camera_service import camera_manager
+
+        with camera_manager._lock:
+            workers = list(camera_manager._workers.values())
+        for worker in workers:
+            url = getattr(worker, "source_url", None) or getattr(worker, "stream_url", "")
+            if parse_channel_from_url(url) == int(channel_id) and worker.is_alive():
+                return worker
+    except Exception:
+        logger.exception("channel-sharing lookup failed")
+    return None
+
+
+def build_channel_rtsp_url(
+    ip: str, username: str, password: str, channel_id: int, profile: str = "main"
+) -> str:
+    """Hikvision RTSP URL for one channel.
+
+    The trailing two digits select the stream:
+        01 = main stream (full resolution)
+        02 = sub stream  (whatever the DVR is configured for — often CIF)
+
+    Main is the default. Sub decodes far fewer pixels, but Hikvision sub-streams
+    are commonly left at CIF (352x288), which upscales into a dashboard tile as
+    an unusable blur — and these streams exist to be looked at. Opt into "sub"
+    only after confirming the DVR serves something usable on {ch}02.
+
+    Credentials are URL-encoded: DVR passwords routinely contain '@', '#' and
+    ':' which would otherwise break the URL's userinfo parsing. Do NOT pass an
+    already-encoded password — it will be double-encoded and the DVR will
+    reject the login.
+    """
+    from urllib.parse import quote
+
+    stream_index = "02" if str(profile).strip().lower() == "sub" else "01"
+    user = quote(username, safe="")
+    pw = quote(password, safe="")
+    return (
+        f"rtsp://{user}:{pw}@{ip}:554"
+        f"/Streaming/Channels/{channel_id:03d}{stream_index}"
+    )
 
 
 class DVRManager:
@@ -87,6 +160,11 @@ class DVRManager:
             idle: list[int] = []
             with conn.lock:
                 for cid, cam in conn.cameras.items():
+                    # A borrowed worker belongs to a configured camera; releasing
+                    # our reference is fine but it must not be judged idle on the
+                    # dashboard's behalf — that camera has its own job to do.
+                    if cam.shared_worker:
+                        continue
                     worker = cam.worker or cam.rtsp_worker
                     if worker and worker.is_alive():
                         last_view = getattr(worker, "_last_view_ts", now)
@@ -166,17 +244,10 @@ class DVRManager:
             logger.info(f"Attempting RTSP fallback connection to {ip}:{port}")
             # Create a mock device info for RTSP mode
             from app.services.hikvision_discovery import DiscoveredDevice, DiscoveredChannel
-            from urllib.parse import quote
-            
-            # URL-encode credentials to handle special characters like @, #, :, %
-            encoded_username = quote(username, safe='')
-            encoded_password = quote(password, safe='')
-            
+
             # Try standard Hikvision channel range (1-8 for typical DVRs)
             channels = []
             for channel_id in range(1, 9):
-                # Use the same RTSP URL format that works in CCTV attendance
-                rtsp_url = f"rtsp://{encoded_username}:{encoded_password}@{ip}:554/Streaming/Channels/{channel_id:03d}01"
                 channels.append(DiscoveredChannel(
                     id=channel_id,
                     name=f"Channel {channel_id}",
@@ -271,18 +342,50 @@ class DVRManager:
                     channel_id, self._active_count(),
                 )
                 return True
-            
+
+            # Is a CONFIGURED camera already watching this same DVR channel?
+            #
+            # The dashboard preview and the persistent DB camera are separate
+            # workers, so channel 1 was being pulled twice: two RTSP sessions,
+            # two YOLO models, two face pipelines, and — worst — two INDEPENDENT
+            # identity states. The face observations that should have combined
+            # into one confident match were split between them, so the preview
+            # worker stayed at "Unknown" while the DB worker had already named
+            # the same person (measured: 22 identifications on one, 2 on its
+            # duplicate).
+            #
+            # Reuse the established worker instead. Halves the CPU and the DVR
+            # session count, and consolidates the evidence.
+            shared = _find_worker_for_channel(channel_id)
+            if shared is not None:
+                camera.rtsp_worker = shared
+                # Borrowed, NOT owned. The DVR dashboard must never stop or reap
+                # a worker that CameraManager owns — doing so would take down a
+                # configured camera (and its attendance capture) the moment
+                # somebody closed a preview tab.
+                camera.shared_worker = True
+                camera.is_streaming = True
+                shared._last_view_ts = time.time()
+                logger.info(
+                    "DVR: channel=%d already served by configured camera %s — "
+                    "sharing that worker instead of starting a second one",
+                    channel_id, getattr(shared, "camera_id", "?"),
+                )
+                return True
+
+
             try:
                 # Use RTSP directly (works with operator account, no admin privileges needed)
-                # Use the same URL format as CCTV attendance (proven to work)
-                # URL-encode credentials to handle special characters like @, #, :, %
-                from urllib.parse import quote
-                encoded_username = quote(self._connection.username, safe='')
-                encoded_password = quote(self._connection.password, safe='')
-                rtsp_url = f"rtsp://{encoded_username}:{encoded_password}@{self._connection.ip}:554/Streaming/Channels/{channel_id:03d}01"
-                
                 from app.core.config import get_settings
                 _s = get_settings()
+
+                rtsp_url = build_channel_rtsp_url(
+                    self._connection.ip,
+                    self._connection.username,
+                    self._connection.password,
+                    channel_id,
+                    profile=getattr(_s, "dvr_stream_profile", "sub"),
+                )
 
                 # DVR dashboard streams are PREVIEW / live-monitoring ONLY and must
                 # NEVER create attendance. Check-In / Check-Out is owned entirely by
@@ -341,6 +444,20 @@ class DVRManager:
                 return False
             
             camera = self._connection.cameras[channel_id]
+
+            # Borrowed from CameraManager — detach the reference, never stop it.
+            # Stopping it would kill a configured camera (and its attendance
+            # capture) just because a preview tab was closed.
+            if getattr(camera, "shared_worker", False):
+                camera.rtsp_worker = None
+                camera.shared_worker = False
+                camera.status = "offline"
+                logger.info(
+                    "DVR: released shared worker for channel=%d "
+                    "(the configured camera keeps running)", channel_id,
+                )
+                return True
+
             if camera.worker:
                 camera.worker.stop()
                 camera.worker = None
@@ -381,25 +498,48 @@ class DVRManager:
         logger.info(f"Stopped {stopped} camera streams")
         return stopped
     
+    def get_worker(self, channel_id: int):
+        """The live worker for a channel, whichever type it is, or None.
+
+        Both HCNetSDKCameraWorker and CameraWorker implement the same surface
+        (start/stop/is_alive/get_latest_jpeg/serialize_state). Callers must go
+        through this instead of reaching into `.worker` / `.rtsp_worker`
+        themselves — doing that is how the preview routes ended up calling a
+        method that only one of the two classes had.
+        """
+        conn = self._connection
+        if not conn:
+            return None
+        camera = conn.cameras.get(channel_id)
+        if not camera:
+            return None
+        return camera.worker or camera.rtsp_worker
+
     def set_recognition_enabled(self, channel_id: int, enabled: bool) -> bool:
         """Enable or disable recognition for a camera."""
         if not self._connection:
             return False
-            
+
         with self._connection.lock:
             if channel_id not in self._connection.cameras:
                 return False
-            
+
             camera = self._connection.cameras[channel_id]
             camera.recognition_enabled = enabled
-            
-            # Update worker if running
-            if camera.worker:
-                camera.worker.recognition_enabled = enabled
-            if camera.rtsp_worker:
-                camera.rtsp_worker.recognition_enabled = enabled
-            
-            logger.info(f"Camera {channel_id} recognition set to {enabled}")
+
+            worker = camera.worker or camera.rtsp_worker
+            if worker is not None:
+                # `recognition_enabled` was previously set on the worker and
+                # read by NOBODY — Python just created the attribute, so this
+                # toggle did nothing. `analysis_paused` is the flag the
+                # recognition loop actually checks: it stops detection while
+                # the video keeps streaming, which is what the toggle promises.
+                worker.analysis_paused = not enabled
+
+            logger.info(
+                "Camera %s: analysis %s", channel_id,
+                "resumed" if enabled else "paused",
+            )
             return True
     
     def get_camera_status(self, channel_id: int) -> Optional[dict]:

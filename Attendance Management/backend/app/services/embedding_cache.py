@@ -37,16 +37,24 @@ def _load_from_db() -> list[dict]:
             .all()
         )
 
+    from app.services.match import enrollment_bias_penalty
+
     candidates: list[dict] = []
     for emp in rows:
         if emp.embedding is None:
             continue
+        embedding = blob_to_embedding(emp.embedding)
         candidates.append(
             {
                 "employee_id": emp.id,
                 "employee_code": emp.employee_code,
                 "employee_name": emp.full_name,
-                "embedding": blob_to_embedding(emp.embedding),
+                "embedding": embedding,
+                # Precomputed here so the matcher pays nothing per comparison.
+                # Corrects the max-over-photos bias that otherwise favours
+                # whoever was enrolled with the most (or most varied) photos —
+                # see match.enrollment_bias_penalty.
+                "bias_penalty": enrollment_bias_penalty(embedding),
             }
         )
     return candidates

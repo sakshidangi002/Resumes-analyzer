@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Tuple
 import numpy as np
 
+from app.services.embedding_fusion import EmbeddingFuser
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +45,14 @@ class FaceTrack:
     pending_employee_id: Optional[int] = None
     confirm_count: int = 0
     attendance_marked: bool = False  # attendance already recorded for this track
+    # Recognition provenance from the last successful match (score, margin,
+    # snapshot path). Captured at match time — that is the only moment the frame
+    # and the match result coexist, since attendance is written asynchronously.
+    last_evidence: Optional[dict] = None
+
+    # ── Embedding fusion ────────────────────────────────────────────────────
+    # Shared with PersonTrack — see services/embedding_fusion.py.
+    fuser: EmbeddingFuser = field(default_factory=EmbeddingFuser)
     
     # Track lifecycle
     age: int = 0  # number of frames tracked
@@ -103,6 +113,25 @@ class FaceTrack:
         """Check if recognition can be performed (respecting cooldown)."""
         return time.time() - self.last_recognition_time >= self.recognition_cooldown
     
+    def add_observation(self, embedding, quality: float) -> None:
+        """Fold one frame's embedding into this track's fused template.
+
+        `quality` should be the face width in pixels — see EmbeddingFuser.
+        """
+        self.fuser.add(embedding, quality)
+
+    def fused_embedding(self) -> Optional[np.ndarray]:
+        """Quality-weighted mean embedding for this track, or None."""
+        return self.fuser.fused()
+
+    @property
+    def observations(self) -> int:
+        return self.fuser.observations
+
+    @property
+    def best_face_px(self) -> float:
+        return self.fuser.best_quality
+
     def update_recognition(
         self,
         employee_id: Optional[int],

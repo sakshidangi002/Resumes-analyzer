@@ -15,6 +15,7 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.services.audit_service import log_audit
+from app.services.camera_service import _redact_url, open_capture_with_timeout
 from app.services.recognition import DEFAULT_THRESHOLD, recognize_faces, recognize_from_rgb
 
 router = APIRouter()
@@ -203,31 +204,36 @@ def recognize_cctv_frame(
             detail="OpenCV is required for CCTV recognition.",
         ) from exc
 
-    logger.info(f"CCTV recognition request - URL: {payload.stream_url}, Camera ID: {payload.camera_id}, Type: {payload.camera_type}")
-    
+    # Redacted: an RTSP URL carries the DVR password in its userinfo.
+    logger.info(
+        "CCTV recognition request - URL: %s, Camera ID: %s, Type: %s",
+        _redact_url(payload.stream_url), payload.camera_id, payload.camera_type,
+    )
+
     # Decode URL-encoded characters (e.g., %40 -> @) for RTSP
     stream_url = unquote(payload.stream_url)
-    logger.info(f"Decoded URL: {stream_url}")
-    
+
     capture = None
     try:
-        # Use FFmpeg backend for RTSP streams
-        if stream_url.startswith("rtsp://"):
-            logger.info("Using FFmpeg backend for RTSP stream")
-            capture = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-            # Set timeout and buffer settings
-            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10 second timeout
-            capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5 second read timeout
-        else:
-            logger.info("Using default backend for non-RTSP stream")
-            capture = cv2.VideoCapture(stream_url)
+        # Bounded open. cv2.VideoCapture() blocks synchronously on the connect,
+        # so CAP_PROP_OPEN_TIMEOUT_MSEC (set afterwards) arrived too late to
+        # bound it — an unreachable DVR held this request worker for FFmpeg's
+        # internal default. open_capture_with_timeout caps it hard.
+        source_type = "rtsp" if stream_url.startswith("rtsp://") else "http"
+        capture = open_capture_with_timeout(
+            stream_url, source_type, camera_id=0, timeout_sec=12.0,
+        )
 
-        if not capture.isOpened():
-            logger.error(f"Could not open CCTV stream: {payload.stream_url}")
+        if capture is None:
+            logger.error(
+                "Could not open CCTV stream: %s", _redact_url(payload.stream_url)
+            )
             raise HTTPException(
-                status_code=503, 
-                detail="Could not open the CCTV stream. Check URL format, network connectivity, and camera availability."
+                status_code=503,
+                detail=(
+                    "Could not open the CCTV stream within 12s. Check URL format, "
+                    "network connectivity, and camera availability."
+                ),
             )
 
         logger.info("CCTV stream opened successfully, attempting to read frame...")
