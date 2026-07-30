@@ -78,6 +78,42 @@ def _face_px(face) -> float:
     return float(box[2] - box[0])
 
 
+def _turn(face) -> tuple[float, str]:
+    """How far the head is turned, from the 5-point landmarks.
+
+    Returns (asymmetry 0..1, label). 0 = nose centred between the eyes
+    (frontal), ~1 = nose aligned with one eye (full profile).
+
+    Reported because ArcFace is POSE-SENSITIVE: a profile probe matched against
+    a frontal reference scores far below a profile matched against a profile.
+    Measured on this camera, a side-view face scored 0.20-0.62 against the
+    frontal enrolled photos, but 0.581 against a same-angle template. So the
+    gallery needs COVERAGE of the angles the camera actually sees — collect a
+    spread, not five copies of one pose.
+
+    The normal upload path REJECTS anything above 0.60 asymmetry
+    (FACE_ENROLL_MAX_FACE_ASYM), which is exactly why profiles cannot be
+    enrolled through the UI and this tool exists.
+    """
+    kps = face.get("kps")
+    if not kps or len(kps) < 3:
+        return -1.0, "unknown"
+    left_eye, right_eye, nose = kps[0], kps[1], kps[2]
+    dl = abs(nose[0] - left_eye[0])
+    dr = abs(right_eye[0] - nose[0])
+    span = dl + dr
+    if span <= 1e-3:
+        return 1.0, "profile"
+    asym = abs(dl - dr) / span
+    if asym < 0.25:
+        label = "frontal"
+    elif asym < 0.60:
+        label = "angled"          # accepted by the UI upload path
+    else:
+        label = "profile"         # REJECTED by the UI; only this tool can enrol it
+    return asym, label
+
+
 def _resolve_source(camera_id: int | None, url: str | None) -> tuple[str, str]:
     if url:
         return url, f"url:{url[:40]}"
@@ -139,22 +175,35 @@ def capture(args) -> int:
             # Who does it currently look like? NOT used to assign anything —
             # only so the operator can sanity-check before committing.
             best = find_best_match(face["embedding"], gallery, threshold=0.0, min_margin=0.0)
+            asym, pose = _turn(face)
             manifest.append({
                 "id": index, "file": f"{name}.jpg", "face_px": round(px, 1),
                 "det_score": round(det, 3),
+                "turn": round(asym, 3), "pose": pose,
                 "current_best_match": best["employee_name"],
                 "current_best_score": round(best["score"], 3),
             })
-            print(f"  [{index:2d}] {px:5.0f}px  det={det:.2f}  "
-                  f"looks most like: {best['employee_name']} ({best['score']:.3f})")
+            print(f"  [{index:2d}] {px:5.0f}px  det={det:.2f}  {pose:<8} "
+                  f"(turn {asym:.2f})  looks most like: "
+                  f"{best['employee_name']} ({best['score']:.3f})")
             break     # one face per frame — the largest
 
     cap.release()
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
+    poses = {}
+    for m in manifest:
+        poses[m["pose"]] = poses.get(m["pose"], 0) + 1
+
     print()
     print(f"wrote {len(manifest)} candidate(s) to:")
     print(f"  {out_dir}")
+    print()
+    print(f"  angle coverage: {poses or 'none'}")
+    if len(poses) < 2:
+        print("  ^ only ONE pose captured. ArcFace is pose-sensitive, so a gallery")
+        print("    of a single angle will only match that angle. Re-run while the")
+        print("    person turns/works normally to collect frontal AND profile views.")
     print()
     print("LOOK AT THE JPEGs, then commit only the ones that are the right person:")
     print(f"  python scripts/enroll_from_camera.py commit --dir \"{out_dir}\" "

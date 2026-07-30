@@ -16,3 +16,12 @@ backend/venv/
 # Node
 frontend/node_modules/
 frontend/dist/
+
+# Database backups (scripts/backup_db.py). These contain employee PII and face
+# embeddings — biometric personal data. Never commit them.
+backend/backups/
+*.json.gz
+
+# Camera-captured enrollment candidates (scripts/enroll_from_camera.py).
+# Face crops of real people — biometric personal data. Never commit.
+backend/data/enroll_review/
