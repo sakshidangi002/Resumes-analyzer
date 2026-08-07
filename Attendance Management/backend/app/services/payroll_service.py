@@ -241,6 +241,22 @@ def run_payroll_for_period(
         expected_hours = Decimal(str(emp.expected_working_hours if getattr(emp, 'expected_working_hours', None) else 9.0))
         punch_missed_hours = {}
         for r in records:
+            # HR's explicit attendance edit is authoritative for payroll. Do
+            # not derive a different status from the recorded hours after HR
+            # has marked the day Full, Short, or Half Day.
+            if r.source == "ADMIN":
+                if r.status == "PRESENT":
+                    day_unpaid_frac[r.date] = Decimal("0")
+                    continue
+                if r.status == "SHORT":
+                    punch_missed_hours[r.date] = Decimal("2.0")
+                    day_unpaid_frac[r.date] = Decimal("0")
+                    continue
+                if r.status == "HALF_DAY":
+                    punch_missed_hours[r.date] = Decimal("4.5")
+                    day_unpaid_frac[r.date] = Decimal("0.5")
+                    continue
+
             if r.status in ("PRESENT", "HALF_DAY", "SHORT"):
                 if r.total_work_hours is not None:
                     worked_hours = Decimal(str(r.total_work_hours))

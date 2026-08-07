@@ -29,166 +29,49 @@ function toPlainText(html: string): string {
   return (tpl.content.textContent || "").replace(/\s+/g, " ").trim();
 }
 
+const DocIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 3 14 8 19 8" />
+  </svg>
+);
+
+const ChevronRight = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+);
+
 function PolicyCard({ g, onOpen }: { g: PolicyGroupRow; onOpen: () => void }) {
-  const [hover, setHover] = useState(false);
   const excerpt = toPlainText(g.current.content || "");
 
   return (
-    <div
-      onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 200,
-        padding: "1.15rem",
-        borderRadius: 14,
-        background: hover
-          ? "linear-gradient(160deg, rgba(59,130,246,0.10), rgba(255,255,255,0.03))"
-          : "rgba(255,255,255,0.025)",
-        border: `1px solid ${hover ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.08)"}`,
-        boxShadow: hover ? "0 10px 28px rgba(0,0,0,0.35)" : "0 1px 2px rgba(0,0,0,0.2)",
-        transform: hover ? "translateY(-3px)" : "translateY(0)",
-        transition: "transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <div
-          style={{
-            flexShrink: 0,
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            display: "grid",
-            placeItems: "center",
-            background: "rgba(59,130,246,0.14)",
-            border: "1px solid rgba(59,130,246,0.28)",
-            color: "#60a5fa",
-          }}
-        >
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <path d="M14 2v6h6M9 13h6M9 17h4" />
-          </svg>
+    <button type="button" className="eds-doc" onClick={onOpen}>
+      <div className="eds-card-head">
+        <span className="eds-chip eds-chip--sky"><DocIcon /></span>
+        <div className="eds-card-titles">
+          <span className="eds-card-title" title={g.name}>{g.name}</span>
+          <span className="eds-card-sub">Effective {formatDate(g.current.effective_date)}</span>
         </div>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              fontSize: "1.02rem",
-              fontWeight: 700,
-              lineHeight: 1.25,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-            title={g.name}
-          >
-            {g.name}
-          </div>
-          <div style={{ fontSize: "0.74rem", color: "rgba(255,255,255,0.45)", marginTop: 3 }}>
-            Effective {formatDate(g.current.effective_date)}
-          </div>
-        </div>
-        <span
-          style={{
-            flexShrink: 0,
-            alignSelf: "flex-start",
-            fontSize: "0.68rem",
-            fontWeight: 700,
-            color: "#4ade80",
-            background: "rgba(34,197,94,0.12)",
-            border: "1px solid rgba(34,197,94,0.3)",
-            borderRadius: 999,
-            padding: "2px 8px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          v{g.current.version}
-        </span>
+        <span className="eds-ver">v{g.current.version}</span>
       </div>
 
       {g.category && (
-        <div
-          style={{
-            alignSelf: "flex-start",
-            marginTop: "0.85rem",
-            fontSize: "0.66rem",
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            color: "var(--brand-400)",
-            background: "rgba(59,130,246,0.10)",
-            borderRadius: 6,
-            padding: "3px 8px",
-          }}
-        >
-          {g.category}
+        <div style={{ padding: "14px 20px 0" }}>
+          <span className="eds-type eds-type--sky">{g.category}</span>
         </div>
       )}
 
-      {excerpt && (
-        <p
-          style={{
-            margin: "0.85rem 0 0",
-            fontSize: "0.85rem",
-            lineHeight: 1.55,
-            color: "rgba(255,255,255,0.62)",
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {excerpt}
-        </p>
-      )}
+      {excerpt && <p className="eds-doc-excerpt">{excerpt}</p>}
 
-      <div
-        style={{
-          marginTop: "auto",
-          paddingTop: "0.9rem",
-          borderTop: "1px solid rgba(255,255,255,0.07)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "0.5rem",
-        }}
-      >
-        <span style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)" }}>
+      <div className="eds-doc-foot">
+        <span>
           {g.versions_count} version{g.versions_count === 1 ? "" : "s"}
-          {g.current.attachment_name && (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 3,
-                color: "rgba(255,255,255,0.6)",
-                background: "rgba(255,255,255,0.06)",
-                borderRadius: 5,
-                padding: "1px 6px",
-              }}
-            >
-              📎 file
-            </span>
-          )}
         </span>
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: "0.77rem",
-            fontWeight: 700,
-            color: hover ? "#93c5fd" : "var(--brand-400)",
-          }}
-        >
-          View
-          <span style={{ transform: hover ? "translateX(3px)" : "none", transition: "transform .18s ease" }}>→</span>
-        </span>
+        {g.current.attachment_name && <span className="eds-file">📎 file</span>}
+        <span className="eds-link">View <ChevronRight /></span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -412,18 +295,19 @@ export default function Policies() {
   };
 
   return (
-    <div>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Company Policies</h1>
-          <div className="page-subtitle">Current policies and previous versions.</div>
+          <h1 className="eds-title">Company Policies</h1>
+          <p className="eds-subtitle">Current policies and previous versions.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       {canEdit && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-          <button type="button" className="btn btn-primary" onClick={() => { setError(""); setShowForm((s) => !s); }}>
+        <div className="eds-actionbar">
+          <button type="button" className="eds-action eds-action--info" onClick={() => { setError(""); setShowForm((s) => !s); }}>
             {showForm ? "Cancel" : "Publish Policy / New Version"}
           </button>
         </div>
@@ -482,14 +366,18 @@ export default function Policies() {
       {loading ? (
         <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
       ) : groups.length === 0 ? (
-        <div className="card" style={{ color: "rgba(255,255,255,0.92)" }}>No company policies published yet.</div>
+        <div className="eds-empty">
+          <span className="eds-chip"><DocIcon /></span>
+          <span className="eds-empty-title">No company policies published yet.</span>
+        </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1.1rem" }}>
+        <div className="eds-doc-grid">
           {groups.map((g) => (
             <PolicyCard key={g.name} g={g} onOpen={() => openPolicy(g)} />
           ))}
         </div>
       )}
+      </div>
 
       {/* Full-policy detail modal */}
       {selected && (

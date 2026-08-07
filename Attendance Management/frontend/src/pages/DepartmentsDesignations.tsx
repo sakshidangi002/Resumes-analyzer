@@ -21,22 +21,41 @@ interface Designation {
 // Premium SVG Icons for Actions
 const Icons = {
   Edit: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
+      <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path>
     </svg>
   ),
   Delete: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-      <line x1="10" y1="11" x2="10" y2="17"></line>
-      <line x1="14" y1="11" x2="14" y2="17"></line>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6"></polyline>
+      <path d="M8 6V4h8v2"></path>
+      <path d="M6 6l1 14h10l1-14"></path>
     </svg>
   ),
   ChevronDown: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m6 9 6 6 6-6" />
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  ),
+  Plus: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  ),
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5" /><line x1="21" y1="21" x2="16.7" y2="16.7" />
+    </svg>
+  ),
+  Building: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21V8l9-5 9 5v13" /><line x1="3" y1="21" x2="21" y2="21" /><rect x="9" y="13" width="6" height="8" />
+    </svg>
+  ),
+  Badge: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="18" height="14" rx="2.5" /><path d="M9 6V4h6v2" /><line x1="7" y1="12" x2="13" y2="12" />
     </svg>
   ),
 };
@@ -394,85 +413,91 @@ export default function DepartmentsDesignations() {
 
   if (!canEdit) {
     return (
-      <div className="card">
-        <p>Access denied. Admin or HR only.</p>
+      <div className="eds">
+        <div className="eds-page">
+          <section className="eds-card">
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Building /></span>
+              <span>Access denied. Admin or HR only.</span>
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
 
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Departments & Designations</h1>
-          <div className="page-subtitle">Maintain your organization structure</div>
+          <h1 className="eds-title">Departments &amp; Designations</h1>
+          <p className="eds-subtitle">Maintain your organization structure</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
+
+      <div className="eds-page">
       {success && <div className="alert alert-success">{success}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div
-        className={`card collapsible-section ${openSection === 'departments' ? 'is-expanded' : ''}`}
-        style={{ padding: 0, overflow: 'hidden', marginBottom: '1.5rem' }}
-      >
-        <div
-          className="collapsible-header"
-          onClick={() => setOpenSection(openSection === 'departments' ? null : 'departments')}
-          style={{
-            padding: '1.25rem 1.5rem',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            cursor: 'pointer',
-            background: openSection === 'departments' ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.02)',
-            transition: 'all 0.2s'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Departments</h3>
-            <span className="badge-count" style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '10px', fontSize: '0.8rem' }}>
-              {deptList.length}
-            </span>
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--violet"><Icons.Building /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Departments</h2>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span className="eds-badge-count">{deptList.length}</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
             {canEdit && openSection === 'departments' && (
-              <button type="button" className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); openDeptAdd(); }} style={{ height: '42px', minWidth: '140px' }}>
+              <button type="button" className="eds-action eds-action--go" onClick={(e) => { e.stopPropagation(); openDeptAdd(); }}>
+                <Icons.Plus />
                 Add Department
               </button>
             )}
-            <div style={{ transform: openSection === 'departments' ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>
+            <button
+              type="button"
+              className="eds-iconbtn"
+              onClick={() => setOpenSection(openSection === 'departments' ? null : 'departments')}
+              title={openSection === 'departments' ? 'Collapse Departments' : 'Expand Departments'}
+              aria-expanded={openSection === 'departments'}
+              style={{ transform: openSection === 'departments' ? 'rotate(180deg)' : 'none', transition: 'transform 300ms ease' }}
+            >
               <Icons.ChevronDown />
-            </div>
+            </button>
           </div>
         </div>
 
         {openSection === 'departments' && (
-          <div style={{ padding: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-            <div className="table-wrap table-wrap--dark">
-              <table className="table-modern table-modern--dark">
+          loading ? (
+            <div style={{ padding: '2.5rem 0' }}><SectionLoader size="md" /></div>
+          ) : deptList.length === 0 ? (
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Building /></span>
+              <span>No departments. Add one to use in Employees.</span>
+            </div>
+          ) : (
+            <div className="eds-table-wrap">
+              <table className="eds-table eds-table--auto">
                 <thead>
                   <tr>
                     <th>Name</th>
                     <th>Code</th>
-                    {canEdit && <th className="actions-center" style={{ width: "140px" }}>Actions</th>}
+                    {canEdit && <th className="is-actions">Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? (
-                    <tr><td colSpan={canEdit ? 3 : 2}><SectionLoader size="md" /></td></tr>
-                  ) : deptList.map((d) => (
+                  {deptList.map((d) => (
                     <tr key={d.id}>
-                      <td>{d.name}</td>
-                      <td>{d.code || "-"}</td>
+                      <td className="eds-cell-strong">{d.name}</td>
+                      <td className="eds-cell-mid">{d.code || "-"}</td>
                       {canEdit && (
-                        <td className="actions-center">
-                          <div className="actions-stack">
-                            <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openDeptEdit(d)} title="Edit Department">
+                        <td>
+                          <div className="eds-rowactions">
+                            <button type="button" className="eds-iconbtn eds-iconbtn--view" onClick={() => openDeptEdit(d)} title="Edit Department">
                               <Icons.Edit />
                             </button>
-                            <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => handleDeptDelete(d)} title="Delete Department">
+                            <button type="button" className="eds-iconbtn eds-iconbtn--del" onClick={() => handleDeptDelete(d)} title="Delete Department">
                               <Icons.Delete />
                             </button>
                           </div>
@@ -483,58 +508,47 @@ export default function DepartmentsDesignations() {
                 </tbody>
               </table>
             </div>
-            {deptList.length === 0 && !loading && <p className="text-muted">No departments. Add one to use in Employees.</p>}
-          </div>
+          )
         )}
-      </div>
+      </section>
 
-      <div
-        className={`card collapsible-section ${openSection === 'designations' ? 'is-expanded' : ''}`}
-        style={{ padding: 0, overflow: 'hidden' }}
-      >
-        <div
-          className="collapsible-header"
-          onClick={() => setOpenSection(openSection === 'designations' ? null : 'designations')}
-          style={{
-            padding: '1.25rem 1.5rem',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            cursor: 'pointer',
-            background: openSection === 'designations' ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.02)',
-            transition: 'all 0.2s'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Designations</h3>
-            <span className="badge-count" style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '10px', fontSize: '0.8rem' }}>
-              {desigGroups.total}
-            </span>
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--sky"><Icons.Badge /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Designations</h2>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span className="eds-badge-count">{desigGroups.total}</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
             {canEdit && openSection === 'designations' && (
-              <button type="button" className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); openDesigAdd(); }} style={{ height: "42px", minWidth: "140px" }}>
+              <button type="button" className="eds-action eds-action--go" onClick={(e) => { e.stopPropagation(); openDesigAdd(); }}>
+                <Icons.Plus />
                 Add Designation
               </button>
             )}
-            <div style={{ transform: openSection === 'designations' ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>
+            <button
+              type="button"
+              className="eds-iconbtn"
+              onClick={() => setOpenSection(openSection === 'designations' ? null : 'designations')}
+              title={openSection === 'designations' ? 'Collapse Designations' : 'Expand Designations'}
+              aria-expanded={openSection === 'designations'}
+              style={{ transform: openSection === 'designations' ? 'rotate(180deg)' : 'none', transition: 'transform 300ms ease' }}
+            >
               <Icons.ChevronDown />
-            </div>
+            </button>
           </div>
         </div>
 
         {openSection === 'designations' && (
-          <div style={{ padding: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-            <div className="desig-card-toolbar" style={{ marginBottom: '1.5rem' }}>
-              <div className="form-group desig-card-search" style={{ marginBottom: 0 }}>
-                <label>Search designation</label>
-                <input
-                  value={desigSearch}
-                  onChange={(e) => setDesigSearch(e.target.value)}
-                  placeholder="e.g. React, Python, HR…"
-                />
-              </div>
-            </div>
+          <div className="eds-card-body">
+            <label className="eds-search eds-search--grow" style={{ marginBottom: '0.5rem' }}>
+              <Icons.Search />
+              <input
+                value={desigSearch}
+                onChange={(e) => setDesigSearch(e.target.value)}
+                placeholder="Search designation — e.g. React, Python, HR…"
+              />
+            </label>
 
             {loading ? (
               <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
@@ -613,25 +627,25 @@ export default function DepartmentsDesignations() {
                             ) : rows.length === 0 ? (
                               <p className="text-muted desig-group-empty">No designations for this filter.</p>
                             ) : (
-                              <div className="table-wrap table-wrap--dark desig-group-table">
-                                <table className="table-modern table-modern--dark">
+                              <div className="eds-table-wrap desig-group-table">
+                                <table className="eds-table eds-table--auto">
                                   <thead>
                                     <tr>
                                       <th>Title</th>
-                                      {canEdit && <th className="actions-center" style={{ width: "140px" }}>Actions</th>}
+                                      {canEdit && <th className="is-actions">Actions</th>}
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {rows.map((d) => (
                                       <tr key={d.id}>
-                                        <td>{d.title}</td>
+                                        <td className="eds-cell-strong">{d.title}</td>
                                         {canEdit && (
-                                          <td className="actions-center">
-                                            <div className="actions-stack">
-                                              <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => openDesigEdit(d)} title="Edit Designation">
+                                          <td>
+                                            <div className="eds-rowactions">
+                                              <button type="button" className="eds-iconbtn eds-iconbtn--view" onClick={() => openDesigEdit(d)} title="Edit Designation">
                                                 <Icons.Edit />
                                               </button>
-                                              <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => handleDesigDelete(d)} title="Delete Designation">
+                                              <button type="button" className="eds-iconbtn eds-iconbtn--del" onClick={() => handleDesigDelete(d)} title="Delete Designation">
                                                 <Icons.Delete />
                                               </button>
                                             </div>
@@ -653,6 +667,7 @@ export default function DepartmentsDesignations() {
             )}
           </div>
         )}
+      </section>
       </div>
 
       {deptModal && (
@@ -761,6 +776,6 @@ export default function DepartmentsDesignations() {
         }
         confirmText="Yes, Delete Designation"
       />
-    </>
+    </div>
   );
 }

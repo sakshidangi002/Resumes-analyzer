@@ -1312,19 +1312,20 @@ export default function EmployeeProfile() {
   const fullName = `${emp.first_name} ${emp.last_name}`;
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">{isMyProfileRoute ? "My profile" : "Employee profile"}</h1>
-          <div className="page-subtitle">
+          <h1 className="eds-title">{isMyProfileRoute ? "My profile" : "Employee profile"}</h1>
+          <p className="eds-subtitle">
             {isMyProfileRoute
               ? "Your details, attendance, leave, salary, and payslips"
               : "Employee details, attendance, leave, salary, and payslips"}
-          </div>
+          </p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       <div className="emp-profile-hero">
         <div className="emp-profile-hero-inner">
           <div className="emp-profile-avatar" title={fullName}>
@@ -2468,6 +2469,7 @@ export default function EmployeeProfile() {
 
 
       </div>
+      </div>
 
       {formulaPayslip && (
         <div className="modal-backdrop" onClick={() => setFormulaPayslip(null)}>
@@ -2482,6 +2484,6 @@ export default function EmployeeProfile() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

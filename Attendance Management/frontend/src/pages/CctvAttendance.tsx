@@ -124,9 +124,31 @@ function statusColor(status: string): string {
 
 const panelStyle: React.CSSProperties = {
   padding: "1rem",
-  borderRadius: 18,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 14,
+  background: "var(--eds-recess)",
+  border: "1px solid var(--eds-border)",
+};
+
+/* The design replaces the source's emoji glyphs (📷 ⛶ ▶ ⏹) with inline SVG.
+   Size comes from the control that holds them (.eds-chip 16px,
+   .eds-action 13px). */
+const CctvIcons = {
+  Camera: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="6" width="14" height="12" rx="2.5" />
+      <path d="M16 10l6-3v10l-6-3z" />
+    </svg>
+  ),
+  Play: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="7 4 20 12 7 20" />
+    </svg>
+  ),
+  Stop: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  ),
 };
 
 export default function CctvAttendance() {
@@ -352,32 +374,38 @@ export default function CctvAttendance() {
   const hasAttendanceSummary = lastEmployee.name && (lastEmployee.firstIn || lastEmployee.lastOut);
 
   return (
-    <div className="page-stack">
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">CCTV Attendance</h1>
-          <div className="page-subtitle">Read one frame from a CCTV or IP camera stream and mark attendance automatically.</div>
+          <h1 className="eds-title">CCTV Attendance</h1>
+          <p className="eds-subtitle">Read one frame from a CCTV or IP camera stream and mark attendance automatically.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
-      <section className="card" style={{ marginTop: "1rem", padding: "1.4rem", border: "none", background: "linear-gradient(135deg, rgba(9,14,31,0.98), rgba(15,23,42,0.94))", color: "#fff" }}>
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "minmax(0, 1.4fr) minmax(280px, 0.6fr)" }}>
+      <div className="eds-page">
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--emerald"><CctvIcons.Camera /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Capture configuration</h2>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+            <span className="eds-status eds-status--present">Backend camera capture</span>
+            <span className="eds-status eds-status--info">Attendance API linked</span>
+            <span className="eds-status eds-status--warn">60 s duplicate guard</span>
+          </div>
+        </div>
+        <div className="eds-card-body" style={{ gap: 18 }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.22)", color: "#d3f9d8", fontSize: "0.82rem", fontWeight: 700 }}>Backend camera capture</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.22)", color: "#dbeafe", fontSize: "0.82rem", fontWeight: 700 }}>Attendance API linked</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.22)", color: "#fef3c7", fontSize: "0.82rem", fontWeight: 700 }}>60 s duplicate guard</span>
-            </div>
-
-            <div style={{ marginTop: "1.1rem", display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera
+            <div className="eds-form-grid3">
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera</span>
                 {dbCameras.length > 0 ? (
                   <select
+                    className="eds-input"
                     value={selectedCamId}
                     onChange={(e) => handleCamSelect(e.target.value === "" ? "" : Number(e.target.value))}
-                    style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }}
                   >
                     <option value="">— Select camera —</option>
                     {dbCameras.map((c) => (
@@ -388,38 +416,50 @@ export default function CctvAttendance() {
                     ))}
                   </select>
                 ) : (
-                  <input type="text" value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder="rtsp://user:pass@192.168.1.20:554/Streaming/Channels/101" style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+                  <input className="eds-input" type="text" value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder="rtsp://user:pass@192.168.1.20:554/Streaming/Channels/101" />
                 )}
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera ID
-                <input type="text" value={cameraId} onChange={(e) => setCameraId(e.target.value)} placeholder="gate-1" style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera ID</span>
+                <input className="eds-input" type="text" value={cameraId} onChange={(e) => setCameraId(e.target.value)} placeholder="gate-1" />
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera Purpose
-                <select value={cameraType} onChange={(e) => setCameraType(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }}>
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera Purpose</span>
+                <select className="eds-input" value={cameraType} onChange={(e) => setCameraType(e.target.value)}>
                   <option value="IN">Check-in (IN)</option>
                   <option value="OUT">Check-out (OUT)</option>
                   <option value="BREAK_OUT">Break-out (BREAK_OUT)</option>
                   <option value="BREAK_IN">Break-in (BREAK_IN)</option>
                 </select>
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Match threshold
-                <input type="number" step="0.01" min="0" max="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Match threshold</span>
+                <input className="eds-input" type="number" step="0.01" min="0" max="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Auto-scan interval (seconds)
-                <input type="number" min="5" step="1" value={scanInterval} onChange={(e) => setScanInterval(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Auto-scan interval (seconds)</span>
+                <input className="eds-input" type="number" min="5" step="1" value={scanInterval} onChange={(e) => setScanInterval(e.target.value)} />
               </label>
             </div>
 
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "1.1rem" }}>
-              <button className="btn btn-primary" type="button" onClick={() => void runScan()}>Scan once</button>
-              <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(true)}>Start auto-scan</button>
-              <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(false)}>Stop auto-scan</button>
-              <NavLink className="btn btn-secondary" to="/attendance">Review Attendance</NavLink>
-              <NavLink className="btn btn-secondary" to="/cctv-cameras">📷 Camera Manager</NavLink>
+            <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginTop: 18 }}>
+              <button className="eds-action eds-action--go" type="button" onClick={() => void runScan()}>
+                <CctvIcons.Play />
+                Scan once
+              </button>
+              <button className="eds-action" type="button" onClick={() => setAutoScan(true)}>
+                <CctvIcons.Play />
+                Start auto-scan
+              </button>
+              <button className="eds-action" type="button" onClick={() => setAutoScan(false)}>
+                <CctvIcons.Stop />
+                Stop auto-scan
+              </button>
+              <NavLink className="eds-action" to="/attendance">Review Attendance</NavLink>
+              <NavLink className="eds-action" to="/cctv-cameras">
+                <CctvIcons.Camera />
+                Camera Manager
+              </NavLink>
             </div>
           </div>
 
@@ -452,17 +492,17 @@ export default function CctvAttendance() {
                     onClick={toggleFullscreen}
                     style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem", borderRadius: 8, cursor: "pointer", background: "rgba(122,162,255,0.15)", border: "1px solid rgba(122,162,255,0.3)", color: "#cfe0ff" }}
                   >
-                    ⛶ Fullscreen
+                    Fullscreen
                   </button>
                 ) : null}
               </div>
               {selectedCamId !== "" && mediaToken ? (
-                <div ref={feedRef} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
+                <div ref={feedRef} className="cctv-feed" style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
                     key={`${selectedCamId}-${feedNonce}`}
+                    className="cctv-feed-img"
                     src={camerasApi.streamUrl(selectedCamId as number, mediaToken, feedNonce)}
                     alt="Live camera feed"
-                    style={{ width: "100%", display: "block", objectFit: "contain", background: "#000" }}
                     onError={() => {
                       // Reconnect once after a short delay; guard against stacking
                       // multiple timers if onError fires repeatedly.
@@ -519,7 +559,7 @@ export default function CctvAttendance() {
         </div>
       ) : null}
 
-      <section className="card" style={{ marginTop: "1rem", padding: "1.1rem", borderRadius: 22, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <section className="card" style={{ marginTop: "1rem", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
           <div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(122,162,255,0.12)", border: "1px solid rgba(122,162,255,0.18)", color: "#cfe0ff", fontSize: "0.82rem", fontWeight: 700 }}>Recognition output</div>
@@ -645,20 +685,21 @@ export default function CctvAttendance() {
 
       <section style={{ marginTop: "1rem", display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
         <NavLink to="/attendance" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
             <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Attendance Review</div>
             <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Open the daily and monthly attendance grid.</div>
             <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Open Attendance</div>
           </div>
         </NavLink>
         <NavLink to="/cctv-cameras" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(99,102,241,0.3)" }}>
-            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>📷 Camera Manager</div>
+          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
+            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Camera Manager</div>
             <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Add, configure, and monitor Hikvision DVR cameras.</div>
             <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Manage Cameras</div>
           </div>
         </NavLink>
       </section>
+      </div>
     </div>
   );
 }

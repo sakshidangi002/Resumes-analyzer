@@ -6,7 +6,8 @@ import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import CustomSelect from "../components/CustomSelect";
-import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import { useTableControls } from "../components/dataTable";
+import type { SortState } from "../components/dataTable";
 
 interface SalaryStructure {
   id: number;
@@ -96,15 +97,93 @@ function structuresForMonth(
   return byEmployee;
 }
 
-// Premium SVG Icons for Actions
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-chip 16px, .eds-iconbtn 15px, .eds-empty-tile 20px). */
 const Icons = {
   View: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"></path>
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   ),
+  Rupee: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="2" x2="12" y2="22" />
+      <path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </svg>
+  ),
+  Users: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20" />
+      <circle cx="10.5" cy="8" r="3.5" />
+      <path d="M20 20v-1.5a3.5 3.5 0 0 0-2.6-3.4" />
+    </svg>
+  ),
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5" />
+      <line x1="21" y1="21" x2="16.7" y2="16.7" />
+    </svg>
+  ),
 };
+
+/* Icons for the Salary Advances panel, which is declared above the page. */
+const AdvIcons = {
+  Wallet: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="18" height="13" rx="2.5" />
+      <path d="M3 10h18" />
+      <circle cx="17" cy="14.5" r="1.2" />
+    </svg>
+  ),
+  Trash: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 14h10l1-14" />
+    </svg>
+  ),
+};
+
+/** Column header for the payroll register. `money` right-aligns the column so
+ *  the header sits over the figures. Sorting stays in useTableControls. */
+function PaySortTh({
+  label,
+  columnKey,
+  sort,
+  onToggle,
+  notSortable,
+  money,
+  className,
+}: {
+  label: string;
+  columnKey: string;
+  sort: SortState;
+  onToggle: (key: string) => void;
+  notSortable?: boolean;
+  money?: boolean;
+  className?: string;
+}) {
+  const cls = [className, notSortable || money ? "is-actions" : ""].filter(Boolean).join(" ");
+  if (notSortable) return <th className={cls || undefined}>{label}</th>;
+  const active = sort.key === columnKey;
+  return (
+    <th className={cls || undefined}>
+      <button
+        type="button"
+        className={`eds-sort${active ? " is-active" : ""}`}
+        onClick={() => onToggle(columnKey)}
+        title={`Sort by ${label}`}
+      >
+        {label}
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+          {!active || sort.direction !== "asc" ? <polyline points="7 15 12 20 17 15" /> : null}
+          {!active || sort.direction !== "desc" ? <polyline points="7 9 12 4 17 9" /> : null}
+        </svg>
+      </button>
+    </th>
+  );
+}
 
 // Salary Advances (Feature 6). Self-contained: manages its own fetch/state.
 // An advance is recovered in full on the next payroll run.
@@ -178,28 +257,27 @@ function SalaryAdvancesPanel({
   };
 
   return (
-    <div className="card" style={{ marginBottom: "1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-        <div>
-          <h3 style={{ margin: 0 }}>Salary Advances</h3>
-          <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: 2 }}>
-            Recovered in full from the employee's next payroll run.
-          </div>
+    <section className="eds-card">
+      <div className="eds-card-head">
+        <span className="eds-chip eds-chip--amber"><AdvIcons.Wallet /></span>
+        <div className="eds-card-titles">
+          <h2 className="eds-card-title">Salary Advances</h2>
+          <p className="eds-card-sub">Recovered in full from the employee's next payroll run.</p>
         </div>
         {canEdit && (
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => { setError(""); setShowForm((s) => !s); }}>
+          <button type="button" className="eds-action eds-action--go" onClick={() => { setError(""); setShowForm((s) => !s); }}>
             {showForm ? "Cancel" : "Add Advance"}
           </button>
         )}
       </div>
 
-      {error && <div className="alert alert-error" style={{ marginTop: "0.75rem" }}>{error}</div>}
+      {error && <div className="alert alert-error" style={{ margin: "0.75rem 20px 0" }}>{error}</div>}
 
       {canEdit && showForm && (
-        <form onSubmit={submit} style={{ marginTop: "1rem" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-            <div className="form-group">
-              <label>Employee</label>
+        <form onSubmit={submit} className="eds-card-body">
+          <div className="eds-form-grid3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+            <div className="eds-fieldset">
+              <span className="eds-fieldset-label">Employee</span>
               <CustomSelect
                 value={form.employee_id}
                 onChange={(v) => setForm({ ...form, employee_id: String(v) })}
@@ -210,70 +288,79 @@ function SalaryAdvancesPanel({
                 ]}
               />
             </div>
-            <div className="form-group">
-              <label>Amount (₹)</label>
-              <input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+            <div className="eds-fieldset">
+              <span className="eds-fieldset-label">Amount (₹)</span>
+              <input className="eds-input" type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
             </div>
-            <div className="form-group">
-              <label>Date Taken</label>
-              <input type="date" value={form.date_taken} onChange={(e) => setForm({ ...form, date_taken: e.target.value })} required />
+            <div className="eds-fieldset">
+              <span className="eds-fieldset-label">Date Taken</span>
+              <input className="eds-input" type="date" value={form.date_taken} onChange={(e) => setForm({ ...form, date_taken: e.target.value })} required />
             </div>
-            <div className="form-group">
-              <label>Reason (optional)</label>
-              <input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Medical emergency" />
+            <div className="eds-fieldset">
+              <span className="eds-fieldset-label">Reason (optional)</span>
+              <input className="eds-input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Medical emergency" />
             </div>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Saving…" : "Save Advance"}</button>
+          <div className="eds-controls-end">
+            <button type="submit" className="eds-action eds-action--go" disabled={busy}>{busy ? "Saving…" : "Save Advance"}</button>
+          </div>
         </form>
       )}
 
-      <div style={{ marginTop: "1rem" }}>
-        {loading ? (
-          <p className="text-muted">Loading advances…</p>
-        ) : advances.length === 0 ? (
-          <p className="text-muted">No advances recorded.</p>
-        ) : (
-          <div className="table-wrap table-wrap--dark">
-            <table className="table-modern table-modern--dark">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th style={{ textAlign: "right" }}>Amount</th>
-                  <th>Date Taken</th>
-                  <th>Reason</th>
-                  <th>Status</th>
-                  {canEdit && <th></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {advances.map((a) => (
-                  <tr key={a.id}>
-                    <td>{empName(a.employee_id)}</td>
-                    <td style={{ textAlign: "right" }}>{money(a.amount)}</td>
-                    <td>{a.date_taken}</td>
-                    <td>{a.reason || "—"}</td>
+      {loading ? (
+        <div className="eds-empty--card">
+          <span className="eds-empty-tile"><AdvIcons.Wallet /></span>
+          <span>Loading advances…</span>
+        </div>
+      ) : advances.length === 0 ? (
+        <div className="eds-empty--card">
+          <span className="eds-empty-tile"><AdvIcons.Wallet /></span>
+          <span>No advances recorded.</span>
+        </div>
+      ) : (
+        <div className="eds-table-wrap">
+          <table className="eds-table eds-table--auto">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th className="is-actions">Amount</th>
+                <th>Date Taken</th>
+                <th>Reason</th>
+                <th>Status</th>
+                {canEdit && <th className="is-actions">Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {advances.map((a) => (
+                <tr key={a.id}>
+                  <td className="eds-cell-strong">{empName(a.employee_id)}</td>
+                  <td className="eds-money">{money(a.amount)}</td>
+                  <td className="eds-cell-mid">{a.date_taken}</td>
+                  <td className="eds-cell-dim">{a.reason || "—"}</td>
+                  <td>
+                    <span className={`eds-status${a.status === "DEDUCTED" ? " eds-status--present" : " eds-status--warn"}`}>
+                      <i></i>
+                      {a.status === "DEDUCTED" ? "Recovered" : a.status === "PENDING" ? "Pending" : a.status}
+                    </span>
+                  </td>
+                  {canEdit && (
                     <td>
-                      <span style={{ fontWeight: 700, color: a.status === "DEDUCTED" ? "#22c55e" : "#f59e0b" }}>
-                        {a.status === "DEDUCTED" ? "Recovered" : a.status === "PENDING" ? "Pending" : a.status}
-                      </span>
-                    </td>
-                    {canEdit && (
-                      <td style={{ textAlign: "right" }}>
+                      <div className="eds-rowactions">
                         {a.status === "PENDING" && (
-                          <button type="button" className="btn btn-secondary btn-sm" style={{ color: "#f87171" }} onClick={() => remove(a.id)}>
-                            Delete
+                          <button type="button" className="eds-iconbtn eds-iconbtn--del" onClick={() => remove(a.id)} title="Delete Advance">
+                            <AdvIcons.Trash />
                           </button>
                         )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -561,69 +648,88 @@ export default function PayrollManagement() {
 
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Payroll Management</h1>
-          <div className="page-subtitle">Manage salary structures and payroll processing</div>
+          <h1 className="eds-title">Payroll Management</h1>
+          <p className="eds-subtitle">Manage salary structures and payroll processing</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       <SalaryAdvancesPanel employees={employees} canEdit={canEdit} />
 
-      <div className="card" style={{ marginBottom: "1rem" }}>
-        <div className="payroll-filter-bar">
-          <span className="payroll-filter-bar__label">Monthly Payroll Summary</span>
-          <div className="payroll-filter-bar__controls">
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--emerald"><Icons.Rupee /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Monthly Payroll Summary</h2>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, flexShrink: 0 }}>
             <CustomSelect
+              className="eds-cselect"
               value={String(selectedMonth)}
               onChange={(val) => setSelectedMonth(Number(val))}
               options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
-              style={{ width: "120px" }}
+              style={{ width: "140px" }}
             />
             <input
+              className="eds-input"
               type="number"
               value={selectedYear}
               onChange={(e) => setSelectedYear(Number(e.target.value))}
               min={2020}
               max={2030}
-              className="payroll-filter-bar__year"
+              style={{ width: "110px", height: "36px" }}
             />
           </div>
-
         </div>
-      </div>
+      </section>
 
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
-          <h3 style={{ margin: 0 }}>
-            Employees - {monthYearLabel()}
-          </h3>
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--sky"><Icons.Users /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Employees — {monthYearLabel()}</h2>
+          </div>
+          {canEdit && (
+            <button type="button" className="eds-action eds-action--go" onClick={openAdd} title="Add New Salary Structure/Payroll">
+              Add Payroll
+            </button>
+          )}
         </div>
-        <TableToolbar
-          search={rowSearch}
-          onSearchChange={setRowSearch}
-          placeholder="Search employee or payslip status..."
-          showClear={rowHasActive}
-          onClear={clearRowControls}
-          count={{ shown: displayedRows.length, total: rows.length }}
-          rightControls={
-            canEdit ? (
-              <button type="button" className="btn btn-primary btn-uniform" onClick={openAdd} title="Add New Salary Structure/Payroll">
-                Add Payroll
-              </button>
-            ) : null
-          }
-        />
+
+        <div className="eds-tablebar">
+          <label className="eds-search">
+            <Icons.Search />
+            <input
+              type="search"
+              value={rowSearch}
+              onChange={(e) => setRowSearch(e.target.value)}
+              placeholder="Search employee or payslip status..."
+            />
+          </label>
+          {rowHasActive && (
+            <button type="button" className="eds-action" onClick={clearRowControls} title="Clear search and sort">
+              Clear filters
+            </button>
+          )}
+          <span className="eds-showing">
+            Showing <b>{displayedRows.length}</b> of <b>{rows.length}</b>
+          </span>
+        </div>
 
         {loading ? (
           <SectionLoader rows={5} />
         ) : rows.length === 0 ? (
-          <p className="text-muted">No salary structure effective for {monthYearLabel()}. Add payroll with effective date covering this month.</p>
+          <div className="eds-empty--card">
+            <span className="eds-empty-tile"><Icons.Rupee /></span>
+            <span>No salary structure effective for {monthYearLabel()}. Add payroll with effective date covering this month.</span>
+          </div>
         ) : (
-          <div className="table-wrap table-wrap--dark" style={payrollTableShellStyle}>
-            <table className="table-modern table-modern--dark" style={payrollTableStyle}>
+          <div className="eds-table-wrap" style={payrollTableShellStyle}>
+            <table className="eds-table" style={payrollTableStyle}>
               <colgroup>
                 <col style={{ width: "5%" }} />
                 <col style={{ width: "18%" }} />
@@ -638,22 +744,22 @@ export default function PayrollManagement() {
               </colgroup>
               <thead>
                 <tr>
-                  <SortableHeader className="hide-md" label="S.NO" columnKey="__sno" sort={rowSort} onToggle={toggleRowSort} align="center" notSortable style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader label="EMPLOYEE" columnKey="employee" sort={rowSort} onToggle={toggleRowSort} style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-sm" label="PAID DAYS" columnKey="paid_days" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-sm" label="LOP DAYS" columnKey="lop_days" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-md" label="GROSS (MONTH)" columnKey="gross" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-lg" label="EARNINGS" columnKey="earnings" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-lg" label="DEDUCTIONS" columnKey="deductions" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader label="NET SALARY" columnKey="net" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader className="hide-sm" label="PAYSLIP" columnKey="payslip_status" sort={rowSort} onToggle={toggleRowSort} align="center" style={{ whiteSpace: "nowrap" }} />
-                  <SortableHeader label="ACTIONS" columnKey="__actions" sort={rowSort} onToggle={toggleRowSort} align="center" notSortable style={{ whiteSpace: "nowrap" }} />
+                  <PaySortTh className="hide-md" label="S.No" columnKey="__sno" sort={rowSort} onToggle={toggleRowSort} notSortable />
+                  <PaySortTh label="Employee" columnKey="employee" sort={rowSort} onToggle={toggleRowSort} />
+                  <PaySortTh className="hide-sm" label="Paid days" columnKey="paid_days" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh className="hide-sm" label="LOP days" columnKey="lop_days" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh className="hide-md" label="Gross (month)" columnKey="gross" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh className="hide-lg" label="Earnings" columnKey="earnings" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh className="hide-lg" label="Deductions" columnKey="deductions" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh label="Net salary" columnKey="net" sort={rowSort} onToggle={toggleRowSort} money />
+                  <PaySortTh className="hide-sm" label="Payslip" columnKey="payslip_status" sort={rowSort} onToggle={toggleRowSort} />
+                  <PaySortTh label="Actions" columnKey="__actions" sort={rowSort} onToggle={toggleRowSort} notSortable />
                 </tr>
               </thead>
               <tbody>
                 {displayedRows.length === 0 && (
                   <tr>
-                    <td colSpan={10} style={{ textAlign: "center", padding: "1.25rem", opacity: 0.65 }}>
+                    <td colSpan={10} className="eds-table-empty">
                       No rows match your search.
                     </td>
                   </tr>
@@ -667,42 +773,36 @@ export default function PayrollManagement() {
                   const net = p ? Number(p.net_salary) : 0;
                   return (
                     <tr key={row.employee.id}>
-                      <td className="hide-md" style={{ textAlign: "center" }}>{idx + 1}</td>
-                      <td>
-                        <div style={{ fontWeight: 600, textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {row.employee.full_name}
-                        </div>
+                      <td className="hide-md eds-money eds-money--zero">{idx + 1}</td>
+                      <td className="eds-cell-strong" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {row.employee.full_name}
                       </td>
-                      <td className="hide-sm" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
-                        {p ? paidDays : "-"}
-                      </td>
-                      <td className="hide-sm" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+                      <td className="hide-sm eds-money">{p ? paidDays : "-"}</td>
+                      <td className={`hide-sm eds-money${p && lopDays > 0 ? " eds-money--lop" : " eds-money--zero"}`}>
                         {p ? lopDays : "-"}
                       </td>
-                      <td className="hide-md" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
-                        ₹ {row.gross.toFixed(2)}
-                      </td>
-                      <td className="hide-lg" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+                      <td className="hide-md eds-money">₹ {row.gross.toFixed(2)}</td>
+                      <td className="hide-lg eds-money">
                         {p ? `₹ ${earnings.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-"}
                       </td>
-                      <td className="hide-lg" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+                      <td className={`hide-lg eds-money${p && deductions > 0 ? " eds-money--minus" : " eds-money--zero"}`}>
                         {p ? `₹ ${deductions.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-"}
                       </td>
-                      <td style={{ fontWeight: 700, whiteSpace: "nowrap", color: "#60a5fa", textAlign: "center" }}>
+                      <td className="eds-money eds-money--net">
                         {p ? `₹ ${net.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-"}
                       </td>
-                      <td className="hide-sm" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+                      <td className="hide-sm">
                         {p ? (
-                          <span className="payslip-pill payslip-pill--generated">Generated</span>
+                          <span className="eds-status eds-status--present"><i></i>Generated</span>
                         ) : (
-                          <span className="payslip-pill payslip-pill--notrun">Not run</span>
+                          <span className="eds-status"><i></i>Not run</span>
                         )}
                       </td>
-                      <td style={{ textAlign: "center" }}>
-                        <div style={{ display: "flex", justifyContent: "center" }}>
+                      <td>
+                        <div className="eds-rowactions">
                           <button
                             type="button"
-                            className="btn btn-secondary btn-icon btn-sm"
+                            className="eds-iconbtn eds-iconbtn--view"
                             onClick={() => openDetail(row)}
                             title="View Complete Salary and Payslip Details"
                           >
@@ -717,6 +817,7 @@ export default function PayrollManagement() {
             </table>
           </div>
         )}
+      </section>
       </div>
 
       {/* Add/Edit salary structure modal */}
@@ -1141,7 +1242,7 @@ export default function PayrollManagement() {
         }
         confirmText="Yes, Delete Structure"
       />
-    </>
+    </div>
   );
 }
 

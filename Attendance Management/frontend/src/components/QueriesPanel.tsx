@@ -13,30 +13,42 @@ const CATEGORIES = [
   "General question",
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  OPEN: "#f59e0b",
-  PENDING: "#3b82f6",
-  RESOLVED: "#22c55e",
+/** Open needs attention (amber), pending is in flight (sky), resolved is
+ *  settled (emerald). */
+const STATUS_TONES: Record<string, string> = {
+  OPEN: " eds-status--warn",
+  PENDING: " eds-status--info",
+  RESOLVED: " eds-status--present",
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] || "#9ca3af";
   return (
-    <span
-      style={{
-        fontSize: "0.7rem",
-        fontWeight: 800,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
-        color,
-        border: `1px solid ${color}`,
-        borderRadius: 999,
-        padding: "2px 10px",
-      }}
-    >
-      {status}
+    <span className={`eds-status${STATUS_TONES[status] || ""}`}>
+      <i></i>
+      {status.charAt(0) + status.slice(1).toLowerCase()}
     </span>
   );
+}
+
+const ChevronDown = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const InboxIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 8l9 6 9-6" />
+    <rect x="3" y="5" width="18" height="14" rx="2.5" />
+  </svg>
+);
+
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+function initialsOf(name: string): string {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.slice(0, 2).map((p) => p[0]).join("").toUpperCase();
 }
 
 export default function QueriesPanel() {
@@ -114,30 +126,30 @@ export default function QueriesPanel() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <span className="text-muted" style={{ fontSize: "0.85rem" }}>Filter:</span>
-          <div style={{ minWidth: 160 }}>
-            <CustomSelect
-              value={statusFilter}
-              onChange={(v) => setStatusFilter(String(v))}
-              options={[
-                { value: "", label: "All statuses" },
-                { value: "OPEN", label: "Open" },
-                { value: "PENDING", label: "Pending" },
-                { value: "RESOLVED", label: "Resolved" },
-              ]}
-            />
-          </div>
-        </div>
+      <div className="eds-controls" style={{ marginBottom: "1rem" }}>
+        <span className="eds-filter-label">Filter</span>
+        <CustomSelect
+          className="eds-cselect eds-cselect--filter"
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(String(v))}
+          options={[
+            { value: "", label: "All statuses" },
+            { value: "OPEN", label: "Open" },
+            { value: "PENDING", label: "Pending" },
+            { value: "RESOLVED", label: "Resolved" },
+          ]}
+        />
+        <span className="eds-tally" style={{ marginLeft: "auto" }}>
+          <b>{items.length}</b> {items.length === 1 ? "query" : "queries"}
+        </span>
         {!isHR && (
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => { setError(""); setShowNew((s) => !s); }}>
+          <button type="button" className="eds-action eds-action--go" onClick={() => { setError(""); setShowNew((s) => !s); }}>
             {showNew ? "Cancel" : "New Query"}
           </button>
         )}
       </div>
 
-      {error && <div className="card" style={{ color: "#f87171", marginBottom: "1rem" }}>{error}</div>}
+      {error && <div className="alert alert-error">{error}</div>}
 
       {!isHR && showNew && (
         <form className="card" onSubmit={submitNew} style={{ marginBottom: "1rem" }}>
@@ -165,59 +177,64 @@ export default function QueriesPanel() {
       {loading ? (
         <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
       ) : items.length === 0 ? (
-        <div className="card" style={{ color: "rgba(255,255,255,0.92)" }}>
-          {isHR ? "No employee queries yet." : "You haven't raised any queries yet."}
-        </div>
+        <section className="eds-card">
+          <div className="eds-empty--card">
+            <span className="eds-empty-tile"><InboxIcon /></span>
+            <span>{isHR ? "No employee queries yet." : "You haven't raised any queries yet."}</span>
+          </div>
+        </section>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        <section className="eds-card">
           {items.map((q) => {
             const isOpen = expanded === q.id;
             return (
-              <li key={q.id} className="card" style={{ marginBottom: "0.5rem" }}>
+              <div key={q.id} className="eds-query">
                 <div
-                  style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", cursor: "pointer" }}
+                  className="eds-feed-row"
+                  style={{ cursor: "pointer" }}
                   onClick={() => setExpanded(isOpen ? null : q.id)}
                 >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{q.subject}</div>
-                    <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.65)", marginTop: 6 }}>
+                  <span className={`eds-avatar eds-avatar--lg ${AVATAR_TINTS[q.id % AVATAR_TINTS.length]}`}>
+                    {initialsOf(q.employee_name || q.subject)}
+                  </span>
+                  <div className="eds-feed-body">
+                    <span className="eds-feed-title" style={{ fontWeight: 600, color: "var(--eds-text)" }}>{q.subject}</span>
+                    <span className="eds-feed-meta">
                       {isHR && <span>From: {q.employee_name || "—"} · </span>}
                       {q.category ? <span>{q.category} · </span> : null}
                       {formatDate(q.created_at)} {formatTimeIST(q.created_at)} IST
                       {q.replies.length > 0 && <span> · {q.replies.length} repl{q.replies.length === 1 ? "y" : "ies"}</span>}
-                    </div>
+                    </span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexShrink: 0 }}>
+                  <div className="eds-feed-actions">
                     <StatusBadge status={q.status} />
-                    <span style={{ fontSize: "0.8rem", color: "var(--brand-400)", fontWeight: 800 }}>{isOpen ? "▲" : "▼"}</span>
+                    <span
+                      className="eds-iconbtn"
+                      style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 160ms ease" }}
+                      aria-hidden
+                    >
+                      <ChevronDown />
+                    </span>
                   </div>
                 </div>
 
                 {isOpen && (
-                  <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.9rem" }}>
+                  <div className="eds-query-detail">
                     {/* Original message */}
-                    <div style={{ marginBottom: "0.6rem" }}>
-                      <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "rgba(255,255,255,0.6)" }}>
+                    <div className="eds-msg">
+                      <div className="eds-msg-head">
                         {q.employee_name || "Employee"} · {formatDate(q.created_at)} {formatTimeIST(q.created_at)}
                       </div>
-                      <div style={{ whiteSpace: "pre-wrap", marginTop: 3 }}>{q.message}</div>
+                      <div className="eds-msg-body">{q.message}</div>
                     </div>
 
                     {/* Threaded replies */}
                     {q.replies.map((r) => (
-                      <div
-                        key={r.id}
-                        style={{
-                          marginTop: "0.5rem",
-                          padding: "0.5rem 0.7rem",
-                          borderRadius: 8,
-                          background: r.author_role === "HR" ? "rgba(59,130,246,0.12)" : "rgba(255,255,255,0.05)",
-                        }}
-                      >
-                        <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
+                      <div key={r.id} className={`eds-msg eds-msg--reply${r.author_role === "HR" ? " is-hr" : ""}`}>
+                        <div className="eds-msg-head">
                           {r.author_name || "—"}{r.author_role ? ` (${r.author_role})` : ""} · {formatDate(r.created_at)} {formatTimeIST(r.created_at)}
                         </div>
-                        <div style={{ whiteSpace: "pre-wrap", marginTop: 3 }}>{r.message}</div>
+                        <div className="eds-msg-body">{r.message}</div>
                       </div>
                     ))}
 
@@ -231,7 +248,7 @@ export default function QueriesPanel() {
                           onChange={(e) => setReplyText((prev) => ({ ...prev, [q.id]: e.target.value }))}
                           style={{ flex: 1 }}
                         />
-                        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => sendReply(q.id)}>
+                        <button type="button" className="eds-action eds-action--go" disabled={busy} onClick={() => sendReply(q.id)}>
                           Reply
                         </button>
                       </div>
@@ -239,15 +256,15 @@ export default function QueriesPanel() {
 
                     {/* HR status controls */}
                     {isHR && (
-                      <div style={{ marginTop: "0.8rem", display: "flex", gap: "0.5rem" }}>
-                        <button type="button" className="btn btn-secondary btn-sm" disabled={busy || q.status === "PENDING"} onClick={() => changeStatus(q.id, "PENDING")}>
+                      <div style={{ marginTop: "0.8rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" className="eds-action" disabled={busy || q.status === "PENDING"} onClick={() => changeStatus(q.id, "PENDING")}>
                           Mark Pending
                         </button>
-                        <button type="button" className="btn btn-secondary btn-sm" disabled={busy || q.status === "RESOLVED"} onClick={() => changeStatus(q.id, "RESOLVED")}>
+                        <button type="button" className="eds-action" disabled={busy || q.status === "RESOLVED"} onClick={() => changeStatus(q.id, "RESOLVED")}>
                           Mark Resolved
                         </button>
                         {q.status === "RESOLVED" && (
-                          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => changeStatus(q.id, "OPEN")}>
+                          <button type="button" className="eds-action" disabled={busy} onClick={() => changeStatus(q.id, "OPEN")}>
                             Reopen
                           </button>
                         )}
@@ -255,10 +272,10 @@ export default function QueriesPanel() {
                     )}
                   </div>
                 )}
-              </li>
+              </div>
             );
           })}
-        </ul>
+        </section>
       )}
     </div>
   );

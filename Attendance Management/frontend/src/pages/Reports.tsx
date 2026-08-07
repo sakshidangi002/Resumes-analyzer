@@ -3,6 +3,29 @@ import { reports as api } from "../api/client";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import CustomSelect from "../components/CustomSelect";
 
+const Icons = {
+  Bars: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  ),
+  Building: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21V8l9-5 9 5v13" /><line x1="3" y1="21" x2="21" y2="21" /><rect x="9" y="13" width="6" height="8" />
+    </svg>
+  ),
+  Refresh: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" /><polyline points="20.5 4 20.5 9.5 15 9.5" />
+    </svg>
+  ),
+  Download: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  ),
+};
+
 export default function Reports() {
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
@@ -31,114 +54,129 @@ export default function Reports() {
   };
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Reports</h1>
-          <div className="page-subtitle">Attendance, leave, headcount, and payroll reports</div>
+          <h1 className="eds-title">Reports</h1>
+          <p className="eds-subtitle">Attendance, leave, headcount, and payroll reports</p>
         </div>
         <GlobalHeaderControls />
-      </div>
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Monthly attendance</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            <div className="form-group" style={{ marginBottom: 0, width: "130px" }}>
-              <label>Month</label>
-              <CustomSelect
-                value={String(month)}
-                onChange={(val) => setMonth(Number(val))}
-                options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => ({
-                  value: String(m),
-                  label: new Date(2000, m - 1).toLocaleString("default", { month: "long" })
-                }))}
-              />
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Year</label>
-              <CustomSelect
-                value={String(year)}
-                onChange={(val) => setYear(Number(val))}
-                style={{ width: "120px" }}
-                options={[2026].map(y => ({ value: String(y), label: String(y) }))}
-              />
+      </header>
+
+      <div className="eds-page">
+        <section className="eds-card">
+          <div className="eds-card-head">
+            <span className="eds-chip eds-chip--sky"><Icons.Bars /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Monthly attendance</h2>
             </div>
           </div>
-          <div style={{ alignSelf: "flex-end" }}>
-            <button type="button" className="btn btn-primary btn-uniform" onClick={loadAttendance} disabled={loading}>Load</button>
-            <button type="button" className="btn btn-secondary btn-uniform" onClick={exportExcel} style={{ marginLeft: "0.5rem", backgroundColor: "var(--brand-500)" }}>Export Excel</button>
+          <div className="eds-card-body">
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+              <div className="eds-fieldset">
+                <span className="eds-fieldset-label">Month</span>
+                <CustomSelect
+                  className="eds-cselect eds-cselect--month"
+                  value={String(month)}
+                  onChange={(val) => setMonth(Number(val))}
+                  options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => ({
+                    value: String(m),
+                    label: new Date(2000, m - 1).toLocaleString("default", { month: "long" })
+                  }))}
+                />
+              </div>
+              <div className="eds-fieldset">
+                <span className="eds-fieldset-label">Year</span>
+                <CustomSelect
+                  className="eds-cselect eds-cselect--year"
+                  value={String(year)}
+                  onChange={(val) => setYear(Number(val))}
+                  options={[2026].map(y => ({ value: String(y), label: String(y) }))}
+                />
+              </div>
+              <div className="eds-controls-end">
+                <button type="button" className="eds-action" onClick={loadAttendance} disabled={loading}>
+                  <Icons.Refresh />
+                  Load
+                </button>
+                <button type="button" className="eds-action eds-action--go" onClick={exportExcel}>
+                  <Icons.Download />
+                  Export Excel
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-        {attSummary && (
-          <div className="table-wrap table-wrap--dark">
-            <table className="table-modern table-modern--dark">
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>Code</th>
-                  <th style={{ textAlign: 'left' }}>Name</th>
-                  <th style={{ textAlign: 'center' }}>Present</th>
-                  <th style={{ textAlign: 'center' }}>Absent</th>
-                  <th style={{ textAlign: 'center' }}>Half day</th>
-                  <th style={{ textAlign: 'center' }}>Week Off</th>
-                  <th style={{ textAlign: 'center' }}>Working Days</th>
-                  <th style={{ textAlign: 'center' }}>Total Leaves</th>
-                  <th style={{ textAlign: 'center' }}>Total Attendance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attSummary.summary.map((s) => (
-                  <tr key={s.employee_id}>
-                    <td style={{ fontWeight: 600, color: "var(--brand-400)", textAlign: 'left', paddingLeft: '1.5rem' }}>{s.employee_code || "-"}</td>
-                    <td style={{ textAlign: 'left' }}>{s.first_name} {s.last_name}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.present}</div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.absent}</div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.half_day}</div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.week_off}</div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.working_days}</div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.total_leaves}</div>
-                    </td>
-                    <td style={{ fontWeight: 800, color: "#fff", textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{s.total_attendance}</div>
-                    </td>
+
+          {attSummary && (
+            <div className="eds-table-wrap">
+              <table className="eds-table eds-table--auto">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th className="is-actions">Present</th>
+                    <th className="is-actions">Absent</th>
+                    <th className="is-actions">Half day</th>
+                    <th className="is-actions">Week Off</th>
+                    <th className="is-actions">Working Days</th>
+                    <th className="is-actions">Total Leaves</th>
+                    <th className="is-actions">Total Attendance</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {attSummary.summary.map((s) => (
+                    <tr key={s.employee_id}>
+                      <td><span className="eds-code eds-code--sky">{s.employee_code || "-"}</span></td>
+                      <td className="eds-cell-strong">{s.first_name} {s.last_name}</td>
+                      <td className="eds-money">{s.present}</td>
+                      <td className={`eds-money${s.absent > 0 ? " eds-money--minus" : " eds-money--zero"}`}>{s.absent}</td>
+                      <td className={`eds-money${s.half_day > 0 ? " eds-money--lop" : " eds-money--zero"}`}>{s.half_day}</td>
+                      <td className="eds-money eds-money--zero">{s.week_off}</td>
+                      <td className="eds-money">{s.working_days}</td>
+                      <td className="eds-money">{s.total_leaves}</td>
+                      <td className="eds-money eds-money--net">{s.total_attendance}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="eds-card">
+          <div className="eds-card-head">
+            <span className="eds-chip eds-chip--violet"><Icons.Building /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Department headcount</h2>
+            </div>
           </div>
-        )}
+          {headcount.length === 0 ? (
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Building /></span>
+              <span>No headcount data available.</span>
+            </div>
+          ) : (
+            <div className="eds-table-wrap">
+              <table className="eds-table eds-table--auto">
+                <thead>
+                  <tr>
+                    <th>Department</th>
+                    <th className="is-actions">Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {headcount.map((h) => (
+                    <tr key={h.department_id}>
+                      <td className="eds-cell-strong">{h.department_name || "N/A"}</td>
+                      <td className="eds-money eds-money--net">{h.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Department headcount</h3>
-        <div className="table-wrap table-wrap--dark">
-          <table className="table-modern table-modern--dark" style={{ width: '100%' }}>
-            <thead>
-              <tr>
-                <th style={{ width: '50%', textAlign: 'left', paddingLeft: '1.5rem' }}>Department</th>
-                <th style={{ width: '50%', textAlign: 'right', paddingRight: '1.5rem' }}>Count</th>
-              </tr>
-            </thead>
-            <tbody>
-              {headcount.map((h) => (
-                <tr key={h.department_id}>
-                  <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>{h.department_name || "N/A"}</td>
-                  <td style={{ textAlign: 'right', paddingRight: '1.5rem' }}>{h.count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
+    </div>
   );
 }

@@ -165,6 +165,79 @@ function buildRtspUrl(form: FormState): string {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
+/* The design replaces the source's emoji glyphs (📷 🔍) with inline SVG.
+   Size comes from the control that holds them (.eds-action 13px,
+   .eds-empty-tile 20px, .eds-hero-tile 26px). */
+const CamIcons = {
+  Camera: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="6" width="14" height="12" rx="2.5" />
+      <path d="M16 10l6-3v10l-6-3z" />
+    </svg>
+  ),
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5" />
+      <line x1="21" y1="21" x2="16.7" y2="16.7" />
+    </svg>
+  ),
+  Plus: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  ),
+  Refresh: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" />
+      <polyline points="20.5 4 20.5 9.5 15 9.5" />
+    </svg>
+  ),
+  Play: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="7 4 20 12 7 20" />
+    </svg>
+  ),
+  Stop: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  ),
+  Screen: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="4" width="19" height="13" rx="2.5" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  ),
+  Edit: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5" />
+      <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z" />
+    </svg>
+  ),
+  Trash: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 14h10l1-14" />
+    </svg>
+  ),
+  Plug: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3v6M15 3v6" />
+      <path d="M6 9h12v3a6 6 0 0 1-12 0z" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
+  ),
+  Close: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+};
+
 export default function CctvCameraManager() {
   const [cameraList, setCameraList] = useState<Camera[]>([]);
   const [loading, setLoading] = useState(true);
@@ -492,6 +565,10 @@ export default function CctvCameraManager() {
   };
 
   const btnStyle = (variant: "primary" | "secondary" | "danger" | "ghost"): React.CSSProperties => ({
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "0.4rem",
     padding: "0.45rem 0.9rem",
     borderRadius: 8,
     border: "1px solid",
@@ -499,6 +576,8 @@ export default function CctvCameraManager() {
     fontSize: "0.82rem",
     fontWeight: 600,
     transition: "all 0.15s",
+    lineHeight: 1.2,
+    verticalAlign: "middle",
     borderColor: variant === "primary" ? "#6366f1"
       : variant === "danger" ? "rgba(239,68,68,0.5)"
       : variant === "ghost" ? "rgba(255,255,255,0.12)"
@@ -512,46 +591,65 @@ export default function CctvCameraManager() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="page-stack">
+    <div className="eds">
       {/* Header */}
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">📷 Camera Manager</h1>
-          <div className="page-subtitle">Manage Hikvision DVR channels for automatic attendance</div>
+          <h1 className="eds-title">Camera Manager</h1>
+          <p className="eds-subtitle">Manage Hikvision DVR channels for automatic attendance</p>
         </div>
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button type="button" className="eds-action" onClick={() => setShowDiscoveryModal(true)}>
+            <CamIcons.Search />
+            Discover DVR
+          </button>
+          <button type="button" className="eds-action eds-action--go" onClick={openAddModal}>
+            <CamIcons.Plus />
+            Add Camera
+          </button>
           <GlobalHeaderControls />
-          <button type="button" style={btnStyle("secondary")} onClick={() => setShowDiscoveryModal(true)}>🔍 Discover DVR</button>
-          <button type="button" style={btnStyle("primary")} onClick={openAddModal}>+ Add Camera</button>
         </div>
-      </div>
+      </header>
 
+      <div className="eds-page">
       {/* Error */}
-      {error && (
-        <div style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 12, padding: "0.9rem 1.2rem", color: "#fca5a5" }}>
-          {error}
-        </div>
-      )}
+      {error && <div className="alert alert-error">{error}</div>}
 
       {/* Loading */}
       {loading && (
-        <div style={{ color: "rgba(255,255,255,0.5)", padding: "3rem", textAlign: "center" }}>
-          Loading cameras...
-        </div>
+        <section className="eds-card">
+          <div className="eds-empty--card">
+            <span className="eds-empty-tile"><CamIcons.Camera /></span>
+            <span>Loading cameras…</span>
+          </div>
+        </section>
       )}
 
       {/* Empty state */}
       {!loading && cameraList.length === 0 && !error && (
-        <div style={{ ...cardStyle, textAlign: "center", padding: "3rem", color: "rgba(255,255,255,0.4)" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📷</div>
-          <div style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: "0.5rem" }}>No cameras configured</div>
-          <div style={{ fontSize: "0.9rem", marginBottom: "1.5rem" }}>Add your Hikvision DVR channels to get started</div>
-          <button type="button" style={btnStyle("primary")} onClick={openAddModal}>Add First Camera</button>
-        </div>
+        <section className="eds-card">
+          <div className="eds-empty--hero">
+            <span className="eds-hero-tile"><CamIcons.Camera /></span>
+            <div className="eds-hero-copy">
+              <span className="eds-hero-title">No cameras configured</span>
+              <span className="eds-hero-sub">Add your Hikvision DVR channels to get started</span>
+            </div>
+            <div className="eds-hero-actions">
+              <button type="button" className="eds-action eds-action--go" onClick={openAddModal}>
+                <CamIcons.Plus />
+                Add First Camera
+              </button>
+              <button type="button" className="eds-action" onClick={() => setShowDiscoveryModal(true)}>
+                <CamIcons.Search />
+                Discover DVR
+              </button>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* Camera grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "1.25rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "16px" }}>
         {cameraList.map((cam) => {
           const live = cam.live;
           return (
@@ -567,7 +665,7 @@ export default function CctvCameraManager() {
                 <div>
                   <div style={{ fontWeight: 700, fontSize: "1rem", marginBottom: "0.25rem" }}>{cam.name}</div>
                   {cam.location && (
-                    <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.45)" }}>📍 {cam.location}</div>
+                    <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.45)" }}>{cam.location}</div>
                   )}
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
@@ -622,25 +720,26 @@ export default function CctvCameraManager() {
               {/* Actions */}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 {cam.enabled && live?.status !== "running" && live?.status !== "connecting" ? (
-                  <button style={btnStyle("secondary")} onClick={() => void handleRestart(cam.id)}>🔄 Reconnect</button>
+                  <button className="cam-btn" style={btnStyle("secondary")} onClick={() => void handleRestart(cam.id)}><CamIcons.Refresh />Reconnect</button>
                 ) : cam.enabled ? (
-                  <button style={btnStyle("secondary")} onClick={() => void handleRestart(cam.id)}>🔄 Restart</button>
+                  <button className="cam-btn" style={btnStyle("secondary")} onClick={() => void handleRestart(cam.id)}><CamIcons.Refresh />Restart</button>
                 ) : null}
 
                 {cam.enabled ? (
-                  <button style={btnStyle("secondary")} onClick={() => void handleStop(cam.id)}>⏹ Stop</button>
+                  <button className="cam-btn" style={btnStyle("secondary")} onClick={() => void handleStop(cam.id)}><CamIcons.Stop />Stop</button>
                 ) : (
-                  <button style={{ ...btnStyle("secondary"), borderColor: "rgba(34,197,94,0.4)", color: "#86efac" }}
-                    onClick={() => void handleStart(cam.id)}>▶ Start</button>
+                  <button className="cam-btn" style={{ ...btnStyle("secondary"), borderColor: "rgba(34,197,94,0.4)", color: "#86efac" }}
+                    onClick={() => void handleStart(cam.id)}><CamIcons.Play />Start</button>
                 )}
 
-                <button style={btnStyle("ghost")} onClick={() => setPreviewId(cam.id)}>🖥 Preview</button>
-                <button style={btnStyle("ghost")} onClick={() => openEditModal(cam)}>✏ Edit</button>
-                <button style={btnStyle("danger")} onClick={() => setDeleteId(cam.id)}>🗑</button>
+                <button className="cam-btn" style={btnStyle("ghost")} onClick={() => setPreviewId(cam.id)}><CamIcons.Screen />Preview</button>
+                <button className="cam-btn" style={btnStyle("ghost")} onClick={() => openEditModal(cam)}><CamIcons.Edit />Edit</button>
+                <button className="cam-btn" style={btnStyle("danger")} onClick={() => setDeleteId(cam.id)}><CamIcons.Trash /></button>
               </div>
             </div>
           );
         })}
+      </div>
       </div>
 
       {/* ── Add/Edit Modal ── */}
@@ -769,7 +868,7 @@ export default function CctvCameraManager() {
             <div style={{ marginTop: "1.2rem" }}>
               <button style={{ ...btnStyle("secondary"), marginRight: "0.75rem" }}
                 onClick={() => void handleTestConnection()} disabled={testing}>
-                {testing ? "Testing..." : "🔌 Test Connection"}
+                {testing ? "Testing..." : <><CamIcons.Plug />Test Connection</>}
               </button>
               {testResult && (
                 <span style={{
@@ -826,7 +925,7 @@ export default function CctvCameraManager() {
               Authorising preview…
             </div>
           )}
-          <button style={btnStyle("secondary")} onClick={() => setPreviewId(null)}>✕ Close Preview</button>
+          <button className="cam-btn" style={btnStyle("secondary")} onClick={() => setPreviewId(null)}><CamIcons.Close />Close Preview</button>
         </div>
       )}
 
@@ -867,7 +966,7 @@ export default function CctvCameraManager() {
             maxHeight: "90vh", overflowY: "auto",
           }}>
             <h2 style={{ margin: "0 0 1.5rem", fontSize: "1.2rem" }}>
-              🔍 Discover Hikvision DVR Cameras
+              Discover Hikvision DVR Cameras
             </h2>
 
             {!discoveredDevice ? (
@@ -909,7 +1008,7 @@ export default function CctvCameraManager() {
                 <div style={{ marginTop: "1.5rem", display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
                   <button type="button" style={btnStyle("ghost")} onClick={() => setShowDiscoveryModal(false)}>Cancel</button>
                   <button type="button" style={btnStyle("primary")} onClick={() => void handleDiscoverDVR()} disabled={discovering}>
-                    {discovering ? "Discovering..." : "🔍 Discover Cameras"}
+                    {discovering ? "Discovering..." : <><CamIcons.Search />Discover Cameras</>}
                   </button>
                 </div>
               </>
@@ -988,5 +1087,4 @@ export default function CctvCameraManager() {
     </div>
   );
 }
-
 

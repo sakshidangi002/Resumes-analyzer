@@ -37,11 +37,28 @@ interface EmployeeOption {
 }
 
 // Premium SVG Icons for Actions
+/** Identity tint for an employee card avatar, stable per employee. */
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-iconbtn 15px, .eds-action 13px, .eds-empty-tile 20px). */
 const Icons = {
   Edit: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
+      <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path>
+    </svg>
+  ),
+  Plus: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+  ),
+  Leave: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20"></path>
+      <circle cx="10.5" cy="8" r="3.5"></circle>
+      <polyline points="17 11 19 13 22 9"></polyline>
     </svg>
   ),
 };
@@ -164,54 +181,68 @@ export default function LeaveAllocations() {
 
   if (!canManage) {
     return (
-      <div className="card">
-        <p>Access denied. HR/Admin only.</p>
+      <div className="eds">
+        <div className="eds-page">
+          <section className="eds-card">
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Leave /></span>
+              <span>Access denied. HR/Admin only.</span>
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Leave Allocations</h1>
-          <div className="page-subtitle">
+          <h1 className="eds-title">Leave Allocations</h1>
+          <p className="eds-subtitle">
             Set or edit paid/unpaid leave days per employee per financial year.
-          </div>
+          </p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       {success && <div className="alert alert-success">{success}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div className="card">
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between", gap: "1rem", marginBottom: "2rem" }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Financial year</label>
-            <CustomSelect
-              value={String(selectedFyId ?? "")}
-              onChange={(val) => setSelectedFyId(Number(val) || null)}
-              style={{ width: "320px", maxWidth: "100%" }}
-              options={financialYears.map((fy) => ({
-                value: String(fy.id),
-                label: `${fy.name} (${formatDate(fy.start_date)} to ${formatDate(fy.end_date)})`
-              }))}
-            />
-          </div>
-          <div style={{ alignSelf: "flex-end" }}>
-            <button type="button" className="btn btn-primary btn-uniform" onClick={openAdd} title="Assign New Leave Allocation for an Employee">
-              Add allocation
-            </button>
-          </div>
+      <div className="eds-controls" style={{ alignItems: "flex-end" }}>
+        <div className="eds-fieldset">
+          <span className="eds-fieldset-label">Financial year</span>
+          <CustomSelect
+            className="eds-cselect"
+            value={String(selectedFyId ?? "")}
+            onChange={(val) => setSelectedFyId(Number(val) || null)}
+            style={{ width: "330px", maxWidth: "100%" }}
+            options={financialYears.map((fy) => ({
+              value: String(fy.id),
+              label: `${fy.name} (${formatDate(fy.start_date)} to ${formatDate(fy.end_date)})`
+            }))}
+          />
         </div>
+        <div className="eds-controls-end">
+          <button type="button" className="eds-action eds-action--go" onClick={openAdd} title="Assign New Leave Allocation for an Employee">
+            <Icons.Plus />
+            Add allocation
+          </button>
+        </div>
+      </div>
 
         {loading ? (
           <SectionLoader rows={4} />
         ) : allocations.length === 0 ? (
-          <p className="text-muted">
-            No leave allocations for this financial year. Click &quot;Add allocation&quot; to set days for an employee (e.g. 1 paid leave, 0, or more as per policy).
-          </p>
+          <section className="eds-card">
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Leave /></span>
+              <span>
+                No leave allocations for this financial year. Click &quot;Add allocation&quot; to set days for an employee (e.g. 1 paid leave, 0, or more as per policy).
+              </span>
+            </div>
+          </section>
         ) : (() => {
           const sortedAllocations = [...allocations].sort((a, b) => {
             const empA = employees.find(e => e.id === a.employee_id);
@@ -229,7 +260,7 @@ export default function LeaveAllocations() {
           });
 
           return (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "1.5rem" }}>
+            <div className="eds-alloc-grid">
               {Array.from(groupedMap.entries()).map(([empId, allocs]) => {
                 const label = employeeLabel(empId);
                 const parts = label.split("-");
@@ -237,36 +268,33 @@ export default function LeaveAllocations() {
                 const name = parts[1]?.trim() || label;
                 const initial = name.charAt(0).toUpperCase();
                 return (
-                  <div key={empId} className="card" style={{ display: "flex", flexDirection: "column", padding: "1.5rem", background: "rgba(255,255,255,0.02)", margin: 0, color: "#fff" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem", paddingBottom: "1rem", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                      <div style={{
-                        width: 44, height: 44, borderRadius: "50%", background: "var(--brand-500)",
-                        display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold", fontSize: "1.2rem", color: "#fff", flexShrink: 0
-                      }}>
+                  <section key={empId} className="eds-card">
+                    <div className="eds-card-head">
+                      <span className={`eds-avatar eds-avatar--xl ${AVATAR_TINTS[empId % AVATAR_TINTS.length]}`}>
                         {initial}
-                      </div>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <h3 style={{ margin: 0, fontSize: "1.1rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</h3>
-                        <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>{code}</div>
+                      </span>
+                      <div className="eds-card-titles">
+                        <h2 className="eds-card-title">{name}</h2>
+                        <p className="eds-card-sub">{code}</p>
                       </div>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1rem", flex: 1 }}>
+                    <div className="eds-alloc-list">
                       {allocs.map((a) => (
-                        <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem", background: "rgba(0,0,0,0.2)", borderRadius: "8px" }}>
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{typeName(a.leave_type_id)}</div>
-                            <div style={{ fontSize: "0.8rem", opacity: 0.7, marginTop: "0.2rem" }}>
-                              Alloc: {Math.round(a.allocated_days)} &bull; Used: {Math.round(Number(a.used_days))}
-                            </div>
+                        <div key={a.id} className="eds-alloc-row">
+                          <div className="eds-alloc-type">
+                            <span className="eds-alloc-name">{typeName(a.leave_type_id)}</span>
+                            <span className="eds-alloc-meta">
+                              Alloc: {Math.round(a.allocated_days)} &middot; Used: {Math.round(Number(a.used_days))}
+                            </span>
                           </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-                            <div style={{ textAlign: "right" }}>
-                              <div style={{ fontSize: "0.75rem", opacity: 0.7 }}>Balance</div>
-                              <div style={{ fontWeight: 700, color: "var(--brand-400)", fontSize: "1.1rem" }}>{Math.round(Number(a.balance_days))}</div>
+                          <div className="eds-alloc-end">
+                            <div className="eds-alloc-balance">
+                              <span className="eds-eyebrow">Balance</span>
+                              <span className="eds-alloc-figure">{Math.round(Number(a.balance_days))}</span>
                             </div>
                             <button
                               type="button"
-                              className="btn btn-secondary btn-icon btn-sm"
+                              className="eds-iconbtn eds-iconbtn--view"
                               onClick={() => openEdit(a)}
                               title="Edit Allocation"
                             >
@@ -276,7 +304,7 @@ export default function LeaveAllocations() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </section>
                 );
               })}
             </div>
@@ -349,6 +377,6 @@ export default function LeaveAllocations() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

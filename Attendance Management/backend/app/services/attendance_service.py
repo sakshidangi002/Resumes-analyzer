@@ -142,6 +142,11 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     # module-level import here would be circular.
     from app.services.attendance_event_service import business_date
 
+    # An HR edit is authoritative. Keep the selected status even when a later
+    # camera event triggers a summary recalculation for the same day.
+    if rec.source == "ADMIN":
+        return
+
     # Business day, not calendar day. At 00:30 the in-progress day is still
     # yesterday's record, and a calendar comparison would finalise a night
     # shift's status to Half Day while the employee is still working.

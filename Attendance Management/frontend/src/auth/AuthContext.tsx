@@ -4,6 +4,7 @@ import {
   startNotificationSocket,
   stopNotificationSocket,
 } from "../lib/notificationsSocket";
+import { teardownPushSubscription } from "../lib/push";
 
 export interface UserInfo {
   id: number;
@@ -107,9 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = () => {
     // Fire-and-forget cleanup of any Web Push subscription registered for this
     // user. Don't await — logout must be instant from the user's POV.
-    import("../lib/push")
-      .then((m) => m.teardownPushSubscription())
-      .catch(() => {});
+    void teardownPushSubscription().catch(() => {});
     stopNotificationSocket();
     void authApi.logout().catch(() => undefined);
     setUser(null);

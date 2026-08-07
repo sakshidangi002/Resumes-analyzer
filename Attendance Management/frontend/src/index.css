@@ -3507,6 +3507,12 @@ a.dashboard-action-tile:hover {
   letter-spacing: -0.01em;
 }
 
+/* Legacy leave content uses .card markup inside the shared enterprise shell.
+   Let the shell own vertical spacing so it matches the other sections. */
+.eds-page > .card {
+  margin-bottom: 0;
+}
+
 .modal-confirm-text {
   color: rgba(255, 255, 255, 0.75);
   font-size: 0.98rem;
@@ -4255,4 +4261,4005 @@ input[type="date"] {
 .dvr-feed:fullscreen img {
   max-height: 100vh !important;
   object-fit: contain !important;
+}
+
+/* ==========================================================================
+   Premium dark enterprise surface — dashboard (.eds-*) and nav rail.
+   Purely presentational: the page's data, routes and state are untouched.
+   Accents are semantic only — emerald present, sky informational/leave,
+   amber late, violet holidays/departments, rose absent. No grey lighter
+   than #8b93a1 carries text on these surfaces.
+   ========================================================================== */
+/* Tokens live on :root, not on .eds, so .eds-* classes also resolve inside
+   modals and any other subtree rendered outside the page wrapper. */
+:root {
+  --eds-ground: #07090b;
+  --eds-shell: #0b0d10;
+  --eds-card: #14171c;
+  --eds-border: rgba(255, 255, 255, 0.07);
+  --eds-divider: rgba(255, 255, 255, 0.06);
+  --eds-recess: rgba(0, 0, 0, 0.16);
+  --eds-text: #e7e9ee;
+  --eds-dim: #8b93a1;
+  --eds-emerald: #34d399;
+  --eds-sky: #60a5fa;
+  --eds-amber: #fbbf24;
+  --eds-violet: #c084fc;
+  --eds-rose: #fb7185;
+}
+
+.eds {
+  margin: 1rem 0 0;
+  border-radius: 16px;
+  background: var(--eds-shell);
+  border: 1px solid var(--eds-border);
+  /* The one outer shadow in the composition: the app frame. */
+  box-shadow: 0 32px 64px -28px rgba(0, 0, 0, 0.7);
+  color: var(--eds-text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+}
+
+@keyframes eds-rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes eds-grow-right {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes eds-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.42; transform: scale(0.8); }
+}
+
+.eds h1,
+.eds h2,
+.eds p {
+  margin: 0;
+}
+
+/* ---- top bar ---- */
+.eds-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--eds-divider);
+  animation: eds-rise-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-transform: capitalize;
+}
+
+.eds-subtitle {
+  margin-top: 3px;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+/* ---- 12-column content grid ---- */
+.eds-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+  padding: 20px 22px 22px;
+  align-items: start;
+}
+
+/* Explicit column lines — auto-placement must never decide the layout. */
+.eds-c1-3 { grid-column: 1 / span 3; }
+.eds-c1-4 { grid-column: 1 / span 4; }
+.eds-c1-8 { grid-column: 1 / span 8; }
+.eds-c1-12 { grid-column: 1 / span 12; }
+.eds-c4-5 { grid-column: 4 / span 5; }
+.eds-c4-9 { grid-column: 4 / span 9; }
+.eds-c5-4 { grid-column: 5 / span 4; }
+.eds-c9-4 { grid-column: 9 / span 4; }
+
+.eds-grid > * {
+  animation: eds-rise-in 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-grid > *:nth-child(1) { animation-delay: 60ms; }
+.eds-grid > *:nth-child(2) { animation-delay: 120ms; }
+.eds-grid > *:nth-child(3) { animation-delay: 180ms; }
+.eds-grid > *:nth-child(4) { animation-delay: 240ms; }
+.eds-grid > *:nth-child(5) { animation-delay: 300ms; }
+.eds-grid > *:nth-child(6) { animation-delay: 360ms; }
+.eds-grid > *:nth-child(7) { animation-delay: 420ms; }
+.eds-grid > *:nth-child(8) { animation-delay: 480ms; }
+.eds-grid > *:nth-child(n + 9) { animation-delay: 540ms; }
+
+/* ---- card anatomy ---- */
+.eds-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  overflow: hidden;
+  transition: border-color 160ms ease;
+}
+
+.eds-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.eds-card-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--eds-divider);
+}
+
+.eds-chip {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-dim);
+}
+
+.eds-chip svg {
+  width: 19px;
+  height: 19px;
+}
+
+.eds-card-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.eds-card-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.eds-card-sub {
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-card-head > .eds-action,
+.eds-card-head > .eds-live,
+.eds-card-head > .eds-key {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.eds-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  flex: 1;
+}
+
+.eds-card-foot {
+  padding: 12px 20px;
+  border-top: 1px solid var(--eds-divider);
+  background: var(--eds-recess);
+}
+
+/* ---- actions ---- */
+.eds-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-dim);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.eds-action:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--eds-text);
+}
+
+.eds-action--primary {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.28);
+  color: var(--eds-emerald);
+}
+
+.eds-action--primary:hover {
+  background: rgba(52, 211, 153, 0.16);
+  color: var(--eds-emerald);
+}
+
+.eds-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  color: var(--eds-emerald);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.eds-live-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: eds-pulse 2s ease-in-out infinite;
+}
+
+/* ---- shared type atoms ---- */
+.eds-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+.eds-figure {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status words rather than a number — a metric size would shout. */
+.eds-figure--text {
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.eds-label {
+  font-size: 15px;
+  color: var(--eds-text);
+}
+
+.eds-sub {
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+/* Chart keys — every tinted tone on this page is named by one of these. */
+.eds-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+.eds-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eds-key-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.eds-key-dot--emerald { background: var(--eds-emerald); }
+.eds-key-dot--sky { background: var(--eds-sky); }
+.eds-key-dot--amber { background: var(--eds-amber); }
+.eds-key-dot--violet { background: var(--eds-violet); }
+.eds-key-dot--rose { background: var(--eds-rose); }
+
+/* ---- stat tiles ---- */
+.eds-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.eds-tile {
+  --eds-a: 255, 255, 255;
+  --eds-a-surface: 0.04;
+  --eds-a-border: 0.07;
+  --eds-a-chip: 0.06;
+  --eds-fg: var(--eds-text);
+  --eds-chip-fg: var(--eds-dim);
+
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(var(--eds-a), var(--eds-a-surface));
+  border: 1px solid rgba(var(--eds-a), var(--eds-a-border));
+}
+
+.eds-tile--emerald {
+  --eds-a: 52, 211, 153;
+  --eds-a-surface: 0.08;
+  --eds-a-border: 0.24;
+  --eds-a-chip: 0.15;
+  --eds-fg: var(--eds-emerald);
+  --eds-chip-fg: var(--eds-emerald);
+}
+
+.eds-tile--sky {
+  --eds-a: 96, 165, 250;
+  --eds-a-surface: 0.08;
+  --eds-a-border: 0.24;
+  --eds-a-chip: 0.15;
+  --eds-fg: var(--eds-sky);
+  --eds-chip-fg: var(--eds-sky);
+}
+
+.eds-tile--amber {
+  --eds-a: 251, 191, 36;
+  --eds-a-surface: 0.08;
+  --eds-a-border: 0.24;
+  --eds-a-chip: 0.15;
+  --eds-fg: var(--eds-amber);
+  --eds-chip-fg: var(--eds-amber);
+}
+
+.eds-tile--violet {
+  --eds-a: 192, 132, 252;
+  --eds-a-surface: 0.08;
+  --eds-a-border: 0.24;
+  --eds-a-chip: 0.15;
+  --eds-fg: var(--eds-violet);
+  --eds-chip-fg: var(--eds-violet);
+}
+
+.eds-tile--rose {
+  --eds-a: 251, 113, 133;
+  --eds-a-surface: 0.08;
+  --eds-a-border: 0.24;
+  --eds-a-chip: 0.15;
+  --eds-fg: var(--eds-rose);
+  --eds-chip-fg: var(--eds-rose);
+}
+
+.eds-tile-chip {
+  display: flex;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: rgba(var(--eds-a), var(--eds-a-chip));
+  color: var(--eds-chip-fg);
+}
+
+.eds-tile-chip svg {
+  width: 20px;
+  height: 20px;
+}
+
+.eds-tile-figures {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.eds-tile-figures .eds-figure {
+  color: var(--eds-fg);
+}
+
+/* ---- clock ---- */
+.eds-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.eds-clock-time {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-clock-ampm {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eds-dim);
+}
+
+.eds-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-pill svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+/* ---- monthly overview ---- */
+.eds-monthly {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.eds-ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+.eds-ring-plot {
+  position: relative;
+  width: 104px;
+  height: 104px;
+}
+
+.eds-ring-plot svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.eds-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 3;
+}
+
+.eds-ring-fill {
+  fill: none;
+  stroke: var(--eds-emerald);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.eds-ring-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-monthly .eds-tiles {
+  flex: 1;
+  min-width: 260px;
+}
+
+/* ---- weekly overview ---- */
+.eds-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+}
+
+.eds-week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 13px 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--eds-border);
+}
+
+.eds-week-day--today {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.26);
+}
+
+.eds-week-dow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+.eds-week-date {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-week-day--today .eds-week-dow,
+.eds-week-day--today .eds-week-date {
+  color: var(--eds-emerald);
+}
+
+.eds-week-foot {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.eds-week-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.eds-week-block--end {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.eds-week-block .eds-figure {
+  font-size: 18px;
+}
+
+.eds-week-block--logged .eds-figure {
+  color: var(--eds-emerald);
+}
+
+.eds-meter {
+  flex: 1;
+  min-width: 128px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.eds-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--eds-emerald);
+  transform-origin: left;
+  animation: eds-grow-right 700ms 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---- lists ---- */
+.eds-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.eds-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 0;
+  min-width: 0;
+}
+
+.eds-row + .eds-row {
+  border-top: 1px solid var(--eds-divider);
+}
+
+.eds-row:first-child {
+  padding-top: 0;
+}
+
+.eds-row:last-child {
+  padding-bottom: 0;
+}
+
+.eds-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.eds-row-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eds-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-row-meta {
+  flex-shrink: 0;
+  max-width: 48%;
+  font-size: 13px;
+  color: var(--eds-dim);
+  text-align: right;
+}
+
+.eds-row-when {
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.eds-avatar {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-dim);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* Identity tints for member avatars — variety, not status. */
+.eds-avatar--blue { background: rgba(96, 165, 250, 0.16); color: var(--eds-sky); }
+.eds-avatar--green { background: rgba(52, 211, 153, 0.16); color: var(--eds-emerald); }
+.eds-avatar--purple { background: rgba(192, 132, 252, 0.16); color: var(--eds-violet); }
+.eds-avatar--rose { background: rgba(251, 113, 133, 0.16); color: var(--eds-rose); }
+
+.eds-tag {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-dim);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.eds-date-pill {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(192, 132, 252, 0.1);
+  border: 1px solid rgba(192, 132, 252, 0.24);
+  color: var(--eds-violet);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-agg {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+.eds-agg b {
+  color: var(--eds-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- empty state: recessed, never a lighter grey ---- */
+.eds-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 18px;
+  border-radius: 12px;
+  background: var(--eds-recess);
+  border: 1px solid var(--eds-divider);
+  text-align: center;
+}
+
+.eds-empty .eds-chip {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+}
+
+.eds-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eds-text);
+}
+
+.eds-empty-note {
+  font-size: 13px;
+  color: var(--eds-dim);
+  max-width: 34ch;
+}
+
+/* ---- page footer ---- */
+.eds-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 22px;
+  border-top: 1px solid var(--eds-divider);
+  background: var(--eds-recess);
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+/* ---- responsive: collapse the 12-column grid with the rail ---- */
+@media (max-width: 1200px) {
+  .eds-grid {
+    grid-template-columns: 1fr;
+    padding: 18px 16px 20px;
+  }
+
+  .eds-c1-3,
+  .eds-c1-4,
+  .eds-c1-8,
+  .eds-c1-12,
+  .eds-c4-5,
+  .eds-c4-9,
+  .eds-c5-4,
+  .eds-c9-4 {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .eds {
+    margin-top: 0.75rem;
+    border-radius: 14px;
+  }
+
+  .eds-topbar,
+  .eds-foot {
+    padding: 16px;
+  }
+
+  .eds-week-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eds *,
+  .eds *::before,
+  .eds *::after,
+  .eds-topbar,
+  .eds-grid > * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ==========================================================================
+   Attendance — extends the card vocabulary above with tabs, a day navigator,
+   a data table and the day-summary timeline. Same tokens, same accents.
+   ========================================================================== */
+.eds-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 28px 28px;
+}
+
+/* Inputs inside .eds fields have to beat the global `input { height: 42px
+   !important }` rule — the field wrapper owns the height here. */
+.eds-datefield input,
+.eds-search input {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--eds-text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- roster tabs ---- */
+.eds-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  animation: eds-rise-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--eds-dim);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.eds-tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--eds-text);
+}
+
+.eds-tab svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.eds-tab.is-active {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.28);
+  color: var(--eds-sky);
+  font-weight: 600;
+}
+
+.eds-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-tab.is-active .eds-tab-count {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+/* ---- attendance card header ---- */
+.eds-att-head {
+  /* 20px matches the table's first-column padding, so the header chip and the
+     row avatars share a left edge. */
+  padding: 16px 20px;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+}
+
+.eds-att-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.eds-att-counts {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 22px;
+  border-left: 1px solid var(--eds-border);
+}
+
+.eds-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eds-dim);
+}
+
+.eds-count-pill b {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--eds-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-count-pill--present {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: var(--eds-emerald);
+}
+
+.eds-count-pill--present b {
+  color: var(--eds-emerald);
+}
+
+.eds-att-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+/* ---- date field: own leading icon, native picker covers the whole field ---- */
+.eds-datefield {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 13px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: border-color 160ms ease;
+}
+
+.eds-datefield:hover,
+.eds-datefield:focus-within {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.eds-datefield > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--eds-dim);
+}
+
+.eds-datefield input[type="date"] {
+  padding-right: 0 !important;
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: dark;
+}
+
+.eds-datefield input::-webkit-calendar-picker-indicator {
+  display: none;
+  opacity: 0;
+  filter: none;
+}
+
+/* ---- segmented day navigator ---- */
+.eds-seg {
+  display: flex;
+  gap: 5px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--eds-border);
+}
+
+.eds-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: none;
+  border: none;
+  color: var(--eds-dim);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.eds-seg-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.eds-seg-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-text);
+}
+
+.eds-seg-btn--today {
+  padding: 6px 14px;
+  background: rgba(52, 211, 153, 0.14);
+  color: var(--eds-emerald);
+  font-weight: 700;
+}
+
+.eds-seg-btn--today:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.2);
+  color: var(--eds-emerald);
+}
+
+/* Disabled reads as a recessed well, not as faded text. */
+.eds-seg-btn:disabled {
+  background: rgba(0, 0, 0, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  color: var(--eds-dim);
+  cursor: not-allowed;
+}
+
+.eds-seg-btn:disabled svg {
+  opacity: 0.45;
+}
+
+/* ---- table toolbar ---- */
+.eds-tablebar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--eds-divider);
+  background: var(--eds-recess);
+}
+
+.eds-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 360px;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 13px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-dim);
+  transition: border-color 160ms ease;
+}
+
+.eds-search:hover,
+.eds-search:focus-within {
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.eds-search svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.eds-search input {
+  font-weight: 500;
+}
+
+.eds-search input::placeholder {
+  color: var(--eds-dim);
+  font-weight: 500;
+}
+
+.eds-search input::-webkit-search-cancel-button {
+  filter: invert(1);
+  cursor: pointer;
+}
+
+.eds-showing {
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-showing b {
+  color: var(--eds-text);
+  font-weight: 600;
+}
+
+/* ---- data table ---- */
+.eds-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.eds-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+}
+
+/* Keep the employee roster inside the card at every viewport width. Long
+   values are clipped in their cells instead of forcing a horizontal scroller. */
+.eds-table--employees {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.eds-table th {
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--eds-border);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.eds-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 15px;
+  color: var(--eds-text);
+  vertical-align: middle;
+}
+
+.eds-table th:first-child,
+.eds-table td:first-child {
+  padding-left: 20px;
+}
+
+.eds-table th:last-child,
+.eds-table td:last-child {
+  padding-right: 20px;
+}
+
+/* Only an actions column is right-aligned — a table whose last column is real
+   data (e.g. Holidays without manage rights) must stay left-aligned. */
+.eds-table .is-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Variable column counts: let the browser size them. */
+.eds-table--auto {
+  min-width: 770px;
+  table-layout: auto;
+}
+
+.eds-cell-strong {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--eds-text);
+}
+
+.eds-cell-clip {
+  max-width: 350px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-table tbody tr {
+  transition: background 160ms ease;
+}
+
+.eds-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.eds-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.eds-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.eds-sort svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.eds-sort.is-active,
+.eds-sort:hover {
+  color: var(--eds-sky);
+}
+
+.eds-cell-time {
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-cell-dim {
+  font-size: 15px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-dash {
+  color: var(--eds-dim);
+}
+
+.eds-member {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.eds-member-name {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-avatar--lg {
+  width: 38px;
+  height: 38px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.eds-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.eds-hours-val {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eds-emerald);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-hours-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.eds-hours-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--eds-emerald);
+  transform-origin: left;
+  animation: eds-grow-right 800ms 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--eds-dim);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.eds-status i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.eds-status--present {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: var(--eds-emerald);
+}
+
+.eds-status--absent {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.24);
+  color: var(--eds-rose);
+}
+
+.eds-status--info {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgba(96, 165, 250, 0.24);
+  color: var(--eds-sky);
+}
+
+.eds-status--warn {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.24);
+  color: var(--eds-amber);
+}
+
+/* ---- expandable query rows ---- */
+.eds-query + .eds-query {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.eds-query-detail {
+  padding: 4px 20px 18px 70px;
+}
+
+.eds-msg {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--eds-divider);
+}
+
+.eds-msg + .eds-msg {
+  margin-top: 8px;
+}
+
+.eds-msg--reply.is-hr {
+  background: rgba(96, 165, 250, 0.08);
+  border-color: rgba(96, 165, 250, 0.2);
+}
+
+.eds-msg-head {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--eds-dim);
+}
+
+.eds-msg-body {
+  margin-top: 4px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--eds-text);
+  white-space: pre-wrap;
+}
+
+.eds-rowactions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.eds-iconbtn {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-dim);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.eds-iconbtn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.eds-iconbtn--view:hover {
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.26);
+  color: var(--eds-sky);
+}
+
+.eds-iconbtn--month:hover {
+  background: rgba(192, 132, 252, 0.14);
+  border-color: rgba(192, 132, 252, 0.26);
+  color: var(--eds-violet);
+}
+
+.eds-iconbtn--edit:hover {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.26);
+  color: var(--eds-emerald);
+}
+
+.eds-table-empty {
+  padding: 28px 20px;
+  text-align: center;
+  font-size: 15px;
+  color: var(--eds-dim);
+}
+
+.eds-att-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-att-foot b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-att-foot .is-emerald { color: var(--eds-emerald); }
+.eds-att-foot .is-text { color: var(--eds-text); }
+
+.eds-att-foot > :last-child {
+  margin-left: auto;
+}
+
+/* ---- day summary + event timeline (HR modal and employee view) ---- */
+.eds-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.eds-metric {
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--eds-border);
+}
+
+.eds-metric-lab {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+.eds-metric-val {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-metric-val.is-emerald { color: var(--eds-emerald); }
+.eds-metric-val.is-amber { color: var(--eds-amber); }
+
+.eds-timeline {
+  padding: 2px 14px;
+  border-radius: 12px;
+  background: var(--eds-recess);
+  border: 1px solid var(--eds-divider);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.eds-timeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 15px;
+}
+
+.eds-timeline-row + .eds-timeline-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.eds-timeline-time {
+  color: var(--eds-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-timeline-label {
+  font-weight: 600;
+}
+
+.eds-timeline-label.is-in { color: var(--eds-emerald); }
+.eds-timeline-label.is-out { color: var(--eds-amber); }
+.eds-timeline-label.is-other { color: var(--eds-dim); }
+
+.eds-timeline-empty {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-note {
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-note b {
+  color: var(--eds-text);
+  font-weight: 600;
+}
+
+@media (max-width: 1200px) {
+  .eds-page {
+    padding: 18px 16px 20px;
+  }
+
+  .eds-att-counts {
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .eds-att-nav {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .eds-search {
+    width: 100%;
+  }
+
+  .eds-showing {
+    margin-left: 0;
+  }
+}
+
+/* ==========================================================================
+   Calendar, Company Policies and Employees — same tokens and card anatomy,
+   plus a sky primary action, accent header chips, month navigator, document
+   cards, dashed empty wells and a filter toolbar.
+   ========================================================================== */
+
+/* Sky primary action: Add holiday / Add Event / Add Employee / Publish. */
+.eds-action--info {
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.3);
+  color: var(--eds-sky);
+  font-weight: 700;
+}
+
+.eds-action--info:hover {
+  background: rgba(96, 165, 250, 0.22);
+  color: var(--eds-sky);
+}
+
+.eds-action:disabled {
+  background: rgba(0, 0, 0, 0.42);
+  border-color: var(--eds-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  color: var(--eds-dim);
+  cursor: not-allowed;
+}
+
+.eds-actionbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+  animation: eds-rise-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Accent variants of the 34px header chip — one per calendar category. */
+.eds-chip--emerald { background: rgba(52, 211, 153, 0.15); color: var(--eds-emerald); }
+.eds-chip--sky { background: rgba(96, 165, 250, 0.15); color: var(--eds-sky); }
+.eds-chip--amber { background: rgba(251, 191, 36, 0.15); color: var(--eds-amber); }
+.eds-chip--violet { background: rgba(192, 132, 252, 0.15); color: var(--eds-violet); }
+.eds-chip--rose { background: rgba(251, 113, 133, 0.15); color: var(--eds-rose); }
+
+/* "N this month" counter beside a card title. */
+.eds-count-chip {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--eds-dim);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.eds-count-chip b {
+  color: var(--eds-text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-count-chip--rose {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.24);
+  color: var(--eds-rose);
+}
+
+.eds-count-chip--rose b { color: var(--eds-rose); }
+
+.eds-card-head > .eds-action,
+.eds-card-head > .eds-count-chip {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ---- month navigator ---- */
+.eds-monthnav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--eds-border);
+}
+
+.eds-monthnav button {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: none;
+  border: none;
+  color: var(--eds-dim);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.eds-monthnav button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-text);
+}
+
+.eds-monthnav button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.eds-monthnav-label {
+  min-width: 92px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ---- three synced cards ---- */
+.eds-cards-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  animation: eds-rise-in 520ms 60ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---- dashed empty well ---- */
+.eds-well {
+  display: flex;
+  flex: 1;
+  padding: 20px;
+}
+
+.eds-empty--dashed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 30px 18px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  background: none;
+  text-align: center;
+}
+
+.eds-empty--dashed .eds-chip {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.eds-empty--dashed .eds-chip svg {
+  width: 21px;
+  height: 21px;
+}
+
+.eds-empty--dashed .eds-empty-title {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+/* ---- compact three-column list inside a card ---- */
+.eds-minitable {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+}
+
+.eds-minitable-head,
+.eds-minitable-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.eds-minitable-head {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+.eds-minitable-row {
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 160ms ease;
+}
+
+.eds-minitable-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.eds-minitable-day {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.eds-minitable-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.eds-minitable-who span:last-child {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-minitable-date {
+  text-align: right;
+  font-size: 15px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-avatar--sm {
+  width: 30px;
+  height: 30px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* ---- type pills and auto badge ---- */
+.eds-type {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--eds-dim);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.eds-type--violet {
+  background: rgba(192, 132, 252, 0.1);
+  border-color: rgba(192, 132, 252, 0.24);
+  color: var(--eds-violet);
+}
+
+.eds-type--rose {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.24);
+  color: var(--eds-rose);
+}
+
+.eds-type--sky {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgba(96, 165, 250, 0.24);
+  color: var(--eds-sky);
+}
+
+.eds-type--emerald {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.24);
+  color: var(--eds-emerald);
+}
+
+.eds-type--amber {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.24);
+  color: var(--eds-amber);
+}
+
+/* Task Hub rows — hover was in a page-level <style> block before. */
+.checklist-item-hover {
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.checklist-item-hover:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.eds-auto {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(96, 165, 250, 0.14);
+  color: var(--eds-sky);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.eds-title-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.eds-title-inline > span:first-child {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-iconbtn--del:hover {
+  background: rgba(251, 113, 133, 0.14);
+  border-color: rgba(251, 113, 133, 0.26);
+  color: var(--eds-rose);
+}
+
+/* ---- document (policy) cards ---- */
+.eds-doc-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.eds-doc {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 340px;
+  max-width: 415px;
+  min-width: 0;
+  border-radius: 14px;
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  transition: border-color 200ms ease, transform 200ms ease;
+  animation: eds-rise-in 540ms 60ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-doc:hover {
+  border-color: rgba(52, 211, 153, 0.3);
+  transform: translateY(-2px);
+}
+
+.eds-doc .eds-card-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-doc-excerpt {
+  margin: 0;
+  padding: 16px 20px 18px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--eds-dim);
+  text-wrap: pretty;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.eds-doc-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: auto;
+  padding: 13px 20px;
+  border-top: 1px solid var(--eds-divider);
+  background: var(--eds-recess);
+  font-size: 14px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-ver {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  color: var(--eds-emerald);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.eds-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eds-sky);
+}
+
+.eds-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.eds-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-dim);
+}
+
+/* ---- filter toolbar (Employees) ---- */
+.eds-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--eds-divider);
+  background: var(--eds-recess);
+}
+
+/* Reskin CustomSelect's trigger for .eds pages — it keeps its portal menu,
+   keyboard handling and positioning; only the closed state is restyled. The
+   component sets those properties inline, hence !important. */
+.eds-cselect {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.eds-cselect--status {
+  width: 185px;
+}
+
+.eds-cselect .custom-select-trigger {
+  height: 38px !important;
+  padding: 0 13px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  color: var(--eds-text) !important;
+  font-size: 15px !important;
+  font-weight: 500;
+  transition: border-color 160ms ease;
+}
+
+.eds-cselect .custom-select-trigger:hover {
+  border-color: rgba(96, 165, 250, 0.4) !important;
+}
+
+.eds-cselect .custom-select-trigger svg {
+  stroke: var(--eds-dim);
+  width: 17px;
+  height: 17px;
+}
+
+.eds-search--wide { width: 430px; }
+
+.eds-avatar--md {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* ---- pager (Employees footer strip) ---- */
+.eds-pager {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eds-pager .eds-action {
+  padding: 5px 10px;
+  min-width: 32px;
+  justify-content: center;
+}
+
+.eds-pager-rows {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.eds-pager-rows select {
+  height: 30px !important;
+  min-height: 0 !important;
+  padding: 0 6px !important;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-text);
+  font-family: inherit;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.eds-pager-rows select option {
+  background: var(--eds-card);
+  color: var(--eds-text);
+}
+
+@media (max-width: 1200px) {
+  .eds-cards-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .eds-doc {
+    max-width: none;
+  }
+
+  .eds-cselect,
+  .eds-cselect--status,
+  .eds-search--wide {
+    width: 100%;
+  }
+
+  .eds-actionbar {
+    justify-content: flex-start;
+  }
+}
+
+/* ==========================================================================
+   Inbox, Task Hub and DSR — underline tabs, notification rows, vertical stat
+   tiles, and the in-card empty state (icon tile inside the card, no dashed
+   box — the pattern Turn 3 of the design moved to).
+   ========================================================================== */
+
+/* ---- underline tabs ---- */
+.eds-utabs {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--eds-border);
+  animation: eds-rise-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-utab {
+  padding: 11px 2px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--eds-dim);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.eds-utab:hover {
+  color: var(--eds-text);
+}
+
+.eds-utab.is-active {
+  border-bottom-color: var(--eds-emerald);
+  color: var(--eds-emerald);
+  font-weight: 600;
+}
+
+/* ---- emerald action (Mark all read / Add DSR) ---- */
+.eds-action--go {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.26);
+  color: var(--eds-emerald);
+  font-weight: 700;
+}
+
+.eds-action--go:hover {
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--eds-emerald);
+}
+
+.eds-action svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+/* A borderless text action that still reads as a control. */
+.eds-linkbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: none;
+  border: none;
+  color: var(--eds-sky);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.eds-linkbtn:hover {
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.eds-linkbtn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+/* ---- toolbar row above a card ---- */
+.eds-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  animation: eds-rise-in 500ms 40ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-controls-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.eds-tally {
+  font-size: 14px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-tally b {
+  color: var(--eds-text);
+  font-weight: 600;
+}
+
+.eds-filter-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eds-dim);
+}
+
+/* ---- notification rows ---- */
+.eds-feed {
+  display: flex;
+  flex-direction: column;
+}
+
+.eds-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 20px;
+  text-align: left;
+  transition: background 160ms ease;
+}
+
+.eds-feed-row + .eds-feed-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.eds-feed-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.eds-feed-row.is-unread {
+  background: rgba(96, 165, 250, 0.05);
+}
+
+.eds-feed-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.eds-feed-row.is-unread .eds-feed-dot {
+  background: var(--eds-sky);
+}
+
+.eds-feed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.eds-feed-title {
+  font-size: 15px;
+  font-weight: 500;
+  /* Read rows sit between dim and full white — still well above #8b93a1. */
+  color: #c6cbd4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eds-feed-row.is-unread .eds-feed-title {
+  font-weight: 600;
+  color: var(--eds-text);
+}
+
+.eds-feed-meta {
+  font-size: 14px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-feed-meta .is-unread-flag {
+  color: var(--eds-sky);
+  font-weight: 600;
+}
+
+.eds-feed-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ---- in-card empty state ---- */
+.eds-empty--card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 52px 20px;
+  text-align: center;
+}
+
+.eds-empty-tile {
+  display: flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-dim);
+}
+
+.eds-empty-tile svg {
+  width: 22px;
+  height: 22px;
+}
+
+.eds-empty--card span:last-child {
+  font-size: 15px;
+  color: var(--eds-dim);
+  max-width: 52ch;
+}
+
+/* ---- hero empty state: a first-run prompt with its own actions ---- */
+.eds-empty--hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 64px 24px;
+  text-align: center;
+}
+
+.eds-hero-tile {
+  display: flex;
+  width: 58px;
+  height: 58px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  color: var(--eds-sky);
+}
+
+.eds-hero-tile svg {
+  width: 26px;
+  height: 26px;
+}
+
+.eds-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.eds-hero-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--eds-text);
+}
+
+.eds-hero-sub {
+  font-size: 15px;
+  color: var(--eds-dim);
+  max-width: 52ch;
+}
+
+.eds-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ---- vertical stat tiles (DSR summary) ---- */
+.eds-vtiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 20px;
+}
+
+.eds-vtile {
+  --eds-a: 255, 255, 255;
+  --eds-fg: var(--eds-text);
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 12px;
+  background: rgba(var(--eds-a), 0.07);
+  border: 1px solid rgba(var(--eds-a), 0.2);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.eds-vtile--sky { --eds-a: 96, 165, 250; --eds-fg: var(--eds-sky); }
+.eds-vtile--emerald { --eds-a: 52, 211, 153; --eds-fg: var(--eds-emerald); }
+.eds-vtile--violet { --eds-a: 192, 132, 252; --eds-fg: var(--eds-violet); }
+.eds-vtile--amber { --eds-a: 251, 191, 36; --eds-fg: var(--eds-amber); }
+.eds-vtile--rose { --eds-a: 251, 113, 133; --eds-fg: var(--eds-rose); }
+
+.eds-vtile-chip {
+  display: flex;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: rgba(var(--eds-a), 0.15);
+  color: var(--eds-fg);
+}
+
+.eds-vtile-chip svg {
+  width: 21px;
+  height: 21px;
+}
+
+.eds-vtile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.eds-vtile-figure {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--eds-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-vtile-label {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--eds-text);
+}
+
+.eds-vtile-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eds-fg);
+}
+
+.eds-vtile-cue svg {
+  width: 14px;
+  height: 14px;
+}
+
+button.eds-vtile {
+  cursor: pointer;
+  transition: border-color 160ms ease;
+}
+
+button.eds-vtile:hover {
+  border-color: rgba(var(--eds-a), 0.4);
+}
+
+/* ---- progress (My Tasks) ---- */
+.eds-bigpct {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--eds-emerald);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-progress {
+  height: 6px;
+  margin: 14px 20px 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.eds-progress > div {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--eds-emerald);
+  transform-origin: left;
+  animation: eds-grow-right 700ms 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Grey header chip, for cards whose subject has no accent of its own. */
+.eds-chip--grey {
+  background: rgba(139, 147, 161, 0.15);
+  color: var(--eds-dim);
+}
+
+/* Select widths used by these screens. */
+.eds-cselect--wide { width: 216px; }
+.eds-cselect--filter { width: 200px; }
+.eds-cselect--month { width: 168px; }
+.eds-cselect--year { width: 130px; }
+
+@media (max-width: 1200px) {
+  .eds-vtiles {
+    grid-template-columns: 1fr;
+  }
+
+  .eds-cselect--wide,
+  .eds-cselect--filter,
+  .eds-cselect--month,
+  .eds-cselect--year {
+    width: 100%;
+  }
+
+  .eds-controls-end {
+    margin-left: 0;
+  }
+}
+
+/* ==========================================================================
+   Payroll, payslips, letters, reports, audit logs, departments, leave —
+   money columns right-aligned and tabular, monospace action tags, and a
+   search field that grows to fill its row.
+   ========================================================================== */
+
+/* Machine-readable codes (audit actions, template codes). */
+.eds-code {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.eds-code--emerald {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: var(--eds-emerald);
+}
+
+.eds-code--sky {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgba(96, 165, 250, 0.22);
+  color: var(--eds-sky);
+}
+
+.eds-code--amber {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.22);
+  color: var(--eds-amber);
+}
+
+.eds-code--rose {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.22);
+  color: var(--eds-rose);
+}
+
+.eds-code--violet {
+  background: rgba(192, 132, 252, 0.1);
+  border-color: rgba(192, 132, 252, 0.22);
+  color: var(--eds-violet);
+}
+
+/* ---- form controls inside .eds cards (letters, payroll forms) ---- */
+.eds-form-grid3 {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr 1fr;
+  gap: 20px;
+}
+
+.eds-input,
+textarea.eds-input {
+  height: 46px !important;
+  min-height: 46px !important;
+  padding: 0 14px !important;
+  width: 100%;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-text);
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 160ms ease;
+}
+
+.eds-input::placeholder {
+  color: var(--eds-dim);
+}
+
+.eds-input:hover,
+.eds-input:focus {
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.eds-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.eds-check input {
+  width: 18px !important;
+  height: 18px !important;
+  min-height: 0 !important;
+  flex-shrink: 0;
+  accent-color: var(--eds-emerald);
+  cursor: pointer;
+}
+
+.eds-check span {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--eds-text);
+}
+
+/* Monospace draft box with a caption strip (letter body). */
+.eds-codebox {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+  transition: border-color 160ms ease;
+}
+
+.eds-codebox:focus-within {
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.eds-codebox-area {
+  width: 100%;
+  max-width: 100%;
+  min-height: 200px !important;
+  height: auto !important;
+  padding: 16px 18px !important;
+  border: none;
+  background: none;
+  outline: none;
+  resize: vertical;
+  color: #c6cbd4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.eds-codebox-foot {
+  padding: 9px 18px;
+  border-top: 1px solid var(--eds-divider);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+/* Rendered letter preview. */
+.eds-preview {
+  padding: 28px 32px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-text);
+  font-size: 15px;
+  line-height: 1.7;
+  min-height: 220px;
+}
+
+@media (max-width: 1200px) {
+  .eds-form-grid3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Count badge beside a card title (e.g. Departments 6). */
+.eds-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--eds-text);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- per-employee leave allocation cards ---- */
+.eds-alloc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  align-items: start;
+  animation: eds-rise-in 540ms 90ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-avatar--xl {
+  width: 42px;
+  height: 42px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.eds-alloc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.eds-alloc-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--eds-divider);
+}
+
+.eds-alloc-type {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.eds-alloc-name {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eds-alloc-meta {
+  font-size: 13px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-alloc-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.eds-alloc-balance {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.eds-alloc-figure {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--eds-emerald);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1200px) {
+  .eds-alloc-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A labelled control (uppercase eyebrow above a select). */
+.eds-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.eds-fieldset-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+/* A search field that fills the remaining width of its control row. */
+.eds-search--grow {
+  flex: 1;
+  width: auto;
+  min-width: 215px;
+  height: 36px;
+}
+
+/* Table cells that read as slightly brighter than dim, per the design's
+   #c6cbd4 for secondary-but-legible values. */
+.eds-cell-mid {
+  font-size: 15px;
+  color: #c6cbd4;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- money columns ---- */
+.eds-table .is-money,
+.eds-money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.eds-money--net {
+  font-weight: 600;
+  color: var(--eds-emerald);
+}
+
+.eds-money--minus {
+  color: var(--eds-rose);
+}
+
+.eds-money--lop {
+  color: var(--eds-amber);
+}
+
+.eds-money--zero {
+  color: var(--eds-dim);
+}
+
+/* Payslip summary columns are easier to scan when their headings and values
+   share one centered axis. */
+.payslip-table th.pay-center,
+.payslip-table td.pay-center {
+  text-align: center;
+}
+
+/* ==========================================================================
+   Attendance Calendar (frame 7a) — the per-employee month grid. The component
+   keeps its <table> markup and its .emp-cal-* vocabulary; the cells become the
+   tinted day tiles the frame shows, with a status swatch and directional
+   check-in / check-out times.
+   ========================================================================== */
+.emp-cal-toolbar {
+  align-items: center;
+  gap: 12px;
+  padding: 0 0 16px;
+}
+
+.emp-cal-month-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--eds-text);
+}
+
+.emp-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--eds-border);
+}
+
+.emp-cal-nav-btn {
+  display: flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: none;
+  border: none;
+  color: var(--eds-dim);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.emp-cal-nav-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.emp-cal-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--eds-text);
+  transform: none;
+}
+
+.emp-cal-nav-btn:disabled {
+  background: rgba(0, 0, 0, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  color: var(--eds-dim);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.emp-cal-wrap {
+  background: none;
+  border: none;
+  box-shadow: none;
+  overflow-x: auto;
+}
+
+.emp-cal-table {
+  border-collapse: separate;
+  border-spacing: 6px;
+  width: 100%;
+}
+
+.emp-cal-table thead th {
+  padding: 0 2px 6px;
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+/* Day tile. Status tint comes from the --cal-a triple the modifier sets. */
+.emp-cal-cell {
+  --cal-a: 255, 255, 255;
+  vertical-align: top;
+  min-width: 84px;
+  height: 92px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: rgba(var(--cal-a), 0.08);
+  border: 1px solid rgba(var(--cal-a), 0.2);
+  transition: background 160ms ease;
+}
+
+.emp-cal-cell--clickable {
+  cursor: pointer;
+}
+
+.emp-cal-cell--clickable:hover {
+  background: rgba(var(--cal-a), 0.16);
+  transform: none;
+}
+
+/* Days outside the month recede rather than fade to an unreadable grey. */
+.emp-cal-cell--dim {
+  background: rgba(0, 0, 0, 0.24);
+  border-color: var(--eds-divider);
+  opacity: 1;
+}
+
+.emp-cal-cell--dim .emp-cal-day-num {
+  color: var(--eds-dim);
+}
+
+.emp-cal-day-num {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 0;
+  color: var(--eds-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The bar becomes the small status swatch in the tile's top-right. */
+.emp-cal-bar {
+  float: right;
+  width: 8px;
+  height: 8px;
+  margin: 6px 0 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.emp-cal-bar--present { background: var(--eds-emerald); }
+.emp-cal-bar--leave { background: var(--eds-sky); }
+.emp-cal-bar--half { background: var(--eds-amber); }
+.emp-cal-bar--absent { background: var(--eds-rose); }
+.emp-cal-bar--wo { background: rgba(255, 255, 255, 0.22); }
+.emp-cal-bar--holiday { background: var(--eds-violet); }
+.emp-cal-bar--empty { background: rgba(255, 255, 255, 0.12); }
+
+/* Tile tint follows the status of the bar inside it. */
+.emp-cal-cell:has(.emp-cal-bar--present) { --cal-a: 52, 211, 153; }
+.emp-cal-cell:has(.emp-cal-bar--leave) { --cal-a: 96, 165, 250; }
+.emp-cal-cell:has(.emp-cal-bar--half) { --cal-a: 251, 191, 36; }
+.emp-cal-cell:has(.emp-cal-bar--absent) { --cal-a: 251, 113, 133; }
+.emp-cal-cell:has(.emp-cal-bar--holiday) { --cal-a: 192, 132, 252; }
+
+.emp-cal-hours {
+  clear: both;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eds-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.emp-cal-times {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.emp-cal-time-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Check-in reads as arrival, check-out as departure. */
+.emp-cal-time-row--in { color: var(--eds-emerald); }
+.emp-cal-time-row--out { color: var(--eds-rose); }
+
+.emp-cal-time-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.emp-cal-time-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.emp-cal-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--eds-border);
+  color: var(--eds-dim);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.emp-cal-badge--leave { background: rgba(96, 165, 250, 0.12); border-color: rgba(96, 165, 250, 0.24); color: var(--eds-sky); }
+.emp-cal-badge--half { background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.24); color: var(--eds-amber); }
+.emp-cal-badge--absent { background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.24); color: var(--eds-rose); }
+.emp-cal-badge--holiday { background: rgba(192, 132, 252, 0.12); border-color: rgba(192, 132, 252, 0.24); color: var(--eds-violet); }
+
+.emp-cal-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--eds-divider);
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+.emp-cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emp-cal-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* ---- month summary strip, per the frame's left-hand card ---- */
+.emp-cal-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.emp-cal-sum-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px
+;  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--eds-divider);
+}
+
+.emp-cal-sum-row > span:first-child {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+.emp-cal-sum-label {
+  font-size: 14px;
+  color: #c6cbd4;
+}
+
+.emp-cal-sum-count {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--eds-text);
+}
+
+.emp-cal-rate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--eds-recess);
+  border: 1px solid var(--eds-divider);
+  margin-bottom: 16px;
+}
+
+.emp-cal-rate-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #c6cbd4;
+}
+
+.emp-cal-rate-value {
+  margin-left: auto;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--eds-emerald);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   
+/* Title and month navigator share a row, per the frame's `< July 2026 >`. */
+.emp-cal-title-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.emp-cal-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* An input inside a wrapper field must never paint its own box. The global
+   `input:not([type=checkbox]):not([type=radio])` rule outranks these selectors,
+   so the reset has to be !important. */
+.eds-search input,
+.eds-datefield input,
+.eds-lockfield input,
+.eds-field select,
+.eds-field input {
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Employee Profile — the page keeps its own .emp-profile-* / .emp-detail-*
+   vocabulary, brought onto the enterprise tokens here rather than rewritten
+   in a 2,400-line component. Flat #14171c cards, emerald underline tabs,
+   emerald identity avatar, no glass or brand gradients.
+   ========================================================================== */
+.emp-profile-hero {
+  border-radius: 14px;
+  border: 1px solid var(--eds-border);
+  background: var(--eds-card);
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: hidden;
+}
+
+.emp-profile-hero-inner {
+  grid-template-columns: 64px 1fr auto;
+  gap: 18px;
+  padding: 22px 24px;
+  align-items: center;
+}
+
+.emp-profile-avatar {
+  width: 62px;
+  height: 62px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  color: var(--eds-emerald);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  box-shadow: none;
+}
+
+/* Underline tabs, matching Inbox and DSR. */
+.emp-profile-tabs {
+  gap: 26px;
+  padding: 0 24px;
+  border-top: 1px solid var(--eds-divider);
+  background: none;
+}
+
+.emp-profile-tab {
+  padding: 11px 2px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--eds-dim);
+  border-bottom: 2px solid transparent;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.emp-profile-tab:hover {
+  color: var(--eds-text);
+}
+
+.emp-profile-tab--active {
+  color: var(--eds-emerald);
+  border-bottom-color: var(--eds-emerald);
+  font-weight: 600;
+}
+
+.emp-profile-card {
+  margin-top: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--eds-border);
+  background: var(--eds-card);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.emp-profile-about-head {
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.emp-profile-about-head h3 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--eds-text);
+}
+
+.emp-profile-status-pill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-dim);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.emp-profile-status-pill--active {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: var(--eds-emerald);
+}
+
+.emp-profile-status-pill--inactive {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.22);
+  color: var(--eds-rose);
+}
+
+/* Detail sections become the two-column card grid the frame shows. */
+.emp-detail-stack {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.emp-detail-section {
+  border-radius: 14px;
+  border: 1px solid var(--eds-border);
+  background: var(--eds-card);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.emp-detail-section__head {
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--eds-divider);
+  background: none;
+}
+
+.emp-detail-section__badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: rgba(96, 165, 250, 0.15);
+  color: var(--eds-sky);
+  box-shadow: none;
+}
+
+.emp-detail-section__title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--eds-text);
+}
+
+.emp-detail-section__subtitle {
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+@media (max-width: 1200px) {
+  .emp-detail-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .emp-profile-hero-inner {
+    grid-template-columns: 64px 1fr;
+  }
+}
+
+/* ==========================================================================
+   Standalone auth pages (change password, login, signup) — no nav rail, per
+   the source. A single centred panel on the app ground.
+   ========================================================================== */
+.eds-auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 72px 40px;
+  background: var(--eds-ground);
+  color: var(--eds-text);
+}
+
+.eds-auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  width: 450px;
+  max-width: 100%;
+  padding: 32px;
+  border-radius: 14px;
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  animation: eds-rise-in 520ms 60ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.eds-auth-head {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.eds-auth-head img {
+  height: 30px;
+  width: auto;
+  display: block;
+}
+
+.eds-auth-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.eds-auth-sub {
+  margin-top: 6px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--eds-dim);
+  text-wrap: pretty;
+}
+
+.eds-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Field with a leading icon; the input carries no chrome of its own. */
+.eds-lockfield {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: border-color 160ms ease;
+}
+
+.eds-lockfield:hover,
+.eds-lockfield:focus-within {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.eds-lockfield > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--eds-dim);
+}
+
+.eds-lockfield input {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+  min-width: 0;
+  background: none !important;
+  border: none !important;
+  outline: none;
+  color: var(--eds-text);
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.eds-lockfield input::placeholder {
+  color: var(--eds-dim);
+}
+
+.eds-auth-note {
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+.eds-auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  border-radius: 10px;
+  background: rgba(52, 211, 153, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  color: var(--eds-emerald);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.eds-auth-submit:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.2);
+}
+
+.eds-auth-submit:disabled {
+  background: rgba(0, 0, 0, 0.42);
+  border-color: var(--eds-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  color: var(--eds-dim);
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Shared vocabulary, brought onto the enterprise tokens.
+
+   The pages that have not been rewritten onto .eds-* are built almost entirely
+   from these globals (.card, .page-header, .btn, .form-group, .table-modern,
+   .modal, .alert). Restyling them here moves every one of those screens — and
+   every modal on the pages that HAVE been rewritten — onto the same surface,
+   type scale and accents, with no change to any markup.
+
+   Placed last so it wins on equal specificity. Nothing here changes layout
+   behaviour; only colour, radius, type and spacing.
+   ========================================================================== */
+
+/* ---- page header ---- */
+.page-header {
+  background: var(--eds-shell);
+  border-bottom: 1px solid var(--eds-divider);
+  box-shadow: none;
+  height: auto;
+  min-height: 0;
+  padding: 18px 22px;
+  margin: 0 -1rem 1rem;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--eds-text);
+  margin-bottom: 0;
+}
+
+.page-subtitle {
+  margin-top: 3px;
+  font-size: 14px;
+  color: var(--eds-dim);
+}
+
+.text-muted {
+  color: var(--eds-dim);
+  font-size: 14px;
+}
+
+/* ---- cards ---- */
+.card {
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  border-radius: 14px;
+  box-shadow: none;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+.card h2,
+.card h3,
+.card h4 {
+  color: var(--eds-text);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---- buttons ---- */
+.btn {
+  padding: 0 16px;
+  height: 40px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+/* Icons inside shared-vocabulary buttons, matched to .eds-action. */
+.btn svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+.btn-primary {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.26);
+  color: var(--eds-emerald);
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.btn-primary:hover {
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--eds-emerald);
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--eds-border);
+  color: var(--eds-dim);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--eds-text);
+}
+
+.btn-danger {
+  background: rgba(251, 113, 133, 0.12);
+  border-color: rgba(251, 113, 133, 0.26);
+  color: var(--eds-rose);
+}
+
+.btn-danger:hover {
+  background: rgba(251, 113, 133, 0.18);
+  color: var(--eds-rose);
+}
+
+.btn-success {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.26);
+  color: var(--eds-emerald);
+}
+
+.btn-success:hover {
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--eds-emerald);
+}
+
+/* Disabled reads as a recessed well, never as faded text. */
+.btn:disabled,
+.btn[disabled] {
+  background: rgba(0, 0, 0, 0.42);
+  border-color: var(--eds-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  color: var(--eds-dim);
+  cursor: not-allowed;
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- forms ---- */
+.form-group label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+}
+
+.form-group input:not([type="checkbox"]):not([type="radio"]),
+.form-group select,
+.form-group textarea,
+.card input:not([type="checkbox"]):not([type="radio"]),
+.card select,
+.card textarea,
+.modal input:not([type="checkbox"]):not([type="radio"]),
+.modal select,
+.modal textarea {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--eds-text);
+  font-family: inherit;
+  font-size: 15px;
+  transition: border-color 160ms ease;
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder,
+.card input::placeholder,
+.modal input::placeholder,
+.modal textarea::placeholder {
+  color: var(--eds-dim);
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus,
+.card input:focus,
+.modal input:focus,
+.modal textarea:focus {
+  border-color: rgba(96, 165, 250, 0.4);
+  outline: none;
+  box-shadow: none;
+}
+
+.form-group textarea,
+.card textarea,
+.modal textarea {
+  height: auto !important;
+  min-height: 84px !important;
+  padding: 12px 14px !important;
+  line-height: 1.6;
+}
+
+/* ---- tables ---- */
+/* A standalone table reads as its own card; one already nested inside a .card
+   drops the surface so the borders don't double up. */
+.table-wrap--dark {
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  border-radius: 14px;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.card .table-wrap--dark,
+.modal .table-wrap--dark {
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+.table-modern--dark {
+  background: none;
+}
+
+.table-modern--dark th {
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--eds-border);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--eds-dim);
+  white-space: nowrap;
+}
+
+.table-modern--dark td {
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 15px;
+  color: var(--eds-text);
+}
+
+.table-modern--dark tbody tr {
+  transition: background 160ms ease;
+}
+
+.table-modern--dark tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.table-modern--dark tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ---- modals ---- */
+.modal {
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  border-radius: 16px;
+  box-shadow: 0 32px 64px -28px rgba(0, 0, 0, 0.7);
+  padding: 22px;
+}
+
+.modal h3 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--eds-text);
+}
+
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+/* ---- alerts ---- */
+.alert {
+  padding: 11px 14px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.alert-error {
+  background: rgba(251, 113, 133, 0.1);
+  border: 1px solid rgba(251, 113, 133, 0.24);
+  color: var(--eds-rose);
+}
+
+.alert-success {
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  color: var(--eds-emerald);
+}
+
+/* ==========================================================================
+   Nav rail — same markup and routes, restyled to the enterprise surface:
+   #07090b ground, grouped eyebrows, active item tinted with a 2px emerald bar.
+   ========================================================================== */
+.app-layout,
+.main-content {
+  background: #07090b;
+}
+
+.sidebar {
+  background: #07090b;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-brand {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-section-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #8b93a1;
+}
+
+.sidebar-section:not(:first-child) {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-divider {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar a {
+  font-size: 15px;
+  font-weight: 500;
+  color: #8b93a1;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.sidebar a svg {
+  opacity: 1;
+  width: 19px;
+  height: 19px;
+}
+
+.sidebar a:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e7e9ee;
+}
+
+.sidebar a:hover svg {
+  transform: none;
+}
+
+.sidebar a.active {
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+  font-weight: 600;
+  /* Tint + 1px ring + a 2px bar on the left edge, no extra element needed. */
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.2), inset 2px 0 0 #34d399;
+}
+
+.sidebar a.active svg {
+  color: #34d399;
+}
+/* ==========================================================================
+   CCTV live preview — the feed <img> was width:100% with no height cap, so it
+   grew to the full column. Bounded to a normal preview size here; fullscreen
+   still fills the viewport.
+   ========================================================================== */
+.cctv-feed {
+  width: 100%;
+  max-width: 560px;
+}
+
+.cctv-feed-img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #000;
+}
+
+.cctv-feed:fullscreen {
+  max-width: none;
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+}
+
+.cctv-feed:fullscreen .cctv-feed-img {
+  max-height: 100vh;
+  max-width: 100vw;
+  height: 100vh;
+}
+
+@media (max-width: 900px) {
+  .cctv-feed {
+    max-width: 100%;
+  }
+
+  .cctv-feed-img {
+    max-height: 260px;
+  }
+}
+
+/* ==========================================================================
+   Overrides for controls whose own inline styles would otherwise win.
+   ========================================================================== */
+
+/* Camera Manager action buttons are styled by an inline btnStyle() object, so
+   no class-based rule reaches their icons. Without this the SVGs — which carry
+   no width/height attribute by design — expand to fill the button. */
+.cam-btn {
+  gap: 7px;
+}
+
+.cam-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+/* CustomSelect hardcodes `width: 100%` and `height: 42px` inline on its
+   container, which outranks any class. These have to be !important or every
+   filter row stretches full-width and wraps onto its own line. */
+.eds-cselect { width: 200px !important; }
+.eds-cselect--status { width: 185px !important; }
+.eds-cselect--wide { width: 216px !important; }
+.eds-cselect--filter { width: 200px !important; }
+.eds-cselect--month { width: 168px !important; }
+.eds-cselect--year { width: 130px !important; }
+
+.eds-cselect,
+.eds-cselect.custom-select-container {
+  height: auto !important;
+  flex-shrink: 0;
+}
+
+/* Keep the filter row on one line; only wrap when there genuinely is no room. */
+.eds-toolbar {
+  flex-wrap: nowrap;
+  row-gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .eds-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .eds-cselect,
+  .eds-cselect--status,
+  .eds-cselect--wide,
+  .eds-cselect--filter,
+  .eds-cselect--month,
+  .eds-cselect--year {
+    width: 100% !important;
+  }
+}
+
+/* ==========================================================================
+   Lighter fill for present days. The shared cell tint is rgba(accent, 0.08),
+   which read as a dark, muddy green across a whole month. Present days get a
+   brighter emerald wash and a clearer border; every other status keeps the
+   quieter default so present still stands out as the common case.
+   ========================================================================== */
+.emp-cal-cell:has(.emp-cal-bar--present) {
+  --cal-a: 52, 211, 153;
+  background: rgba(52, 211, 153, 0.15);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.emp-cal-cell--clickable:has(.emp-cal-bar--present):hover {
+  background: rgba(52, 211, 153, 0.22);
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
+/* ==========================================================================
+   Present day cells use the requested #2c3934 — a flat fill rather than a
+   translucent wash, so it reads the same regardless of what sits behind it.
+   The emerald border is kept so the tile still separates from the card, and
+   hover lifts to #35443e. Other statuses keep their own tints.
+   ========================================================================== */
+.emp-cal-cell:has(.emp-cal-bar--present) {
+  --cal-a: 52, 211, 153;
+  background: #2c3934;
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.emp-cal-cell--clickable:has(.emp-cal-bar--present):hover {
+  background: #35443e;
+  border-color: rgba(52, 211, 153, 0.45);
 }

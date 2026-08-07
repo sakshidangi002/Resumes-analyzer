@@ -9,16 +9,49 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 type EmpOpt = { id: number; full_name: string; employee_code: string };
 
 // Premium SVG Icons for Actions
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-chip 16px, .eds-iconbtn 15px, .eds-empty-tile 20px). */
 const Icons = {
   Delete: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-      <line x1="10" y1="11" x2="10" y2="17"></line>
-      <line x1="14" y1="11" x2="14" y2="17"></line>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6"></polyline>
+      <path d="M8 6V4h8v2"></path>
+      <path d="M6 6l1 14h10l1-14"></path>
+    </svg>
+  ),
+  Tasks: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 11 12 14 20 6"></polyline>
+      <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path>
+    </svg>
+  ),
+  TaskDone: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11l3 3 8-8"></path>
+      <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path>
+    </svg>
+  ),
+  List: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+      <line x1="8" y1="10" x2="16" y2="10"></line>
+      <line x1="8" y1="14" x2="13" y2="14"></line>
+    </svg>
+  ),
+  Clock: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <polyline points="12 7 12 12 15 14"></polyline>
     </svg>
   ),
 };
+
+/** High is urgent (rose), Medium is in-flight (amber), Low is informational. */
+function priorityTone(priority: string): string {
+  if (priority === "High") return " eds-type--rose";
+  if (priority === "Medium") return " eds-type--amber";
+  return " eds-type--sky";
+}
 
 export default function Onboarding() {
   const { user, hasRole } = useAuth();
@@ -153,24 +186,26 @@ export default function Onboarding() {
 
 
   return (
-    <>
-      <div className="content-shell--fade-in">
-        <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h1 className="page-title">Task Hub</h1>
-            <div className="page-subtitle">Manage and track your tasks</div>
-          </div>
-          <GlobalHeaderControls />
+    <div className="eds">
+      <header className="eds-topbar">
+        <div>
+          <h1 className="eds-title">Task Hub</h1>
+          <p className="eds-subtitle">Manage and track your tasks</p>
         </div>
+        <GlobalHeaderControls />
+      </header>
 
-
+      <div className="eds-page">
         {isHr && (
-          <div className="card" style={{ marginBottom: "1.5rem", border: "1px solid rgb(var(--brand-rgb) / 0.25)", position: "relative", padding: "1.5rem 2rem" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }} >
-              <h5 style={{ margin: "0", color: "#e6e7e8ff", fontSize: "0.9rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Assigned Tasks</h5>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", background: "rgba(255, 255, 255, 0.02)" }}>
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--sky"><Icons.Tasks /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Assigned Tasks</h2>
+              </div>
+              <div style={{ marginLeft: "auto", flexShrink: 0 }}>
                 <CustomSelect
-                  style={{ width: "220px" }}
+                  className="eds-cselect eds-cselect--wide"
                   value={String(selectedId)}
                   disabled={submitting}
                   onChange={(val) => {
@@ -189,13 +224,13 @@ export default function Onboarding() {
                 />
               </div>
             </div>
-            <div >
+            <div className="eds-card-body">
 
               {selectedId !== "" && (
                 <div>
                   {selectedId !== "all" && (
-                    <div style={{ marginBottom: "2.5rem", background: "rgba(255,255,255,0.02)", padding: "1.5rem", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.05)" }}>
-                      <h5 style={{ margin: "0 0 1rem 0", color: "white", fontSize: "0.9rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Create a new task</h5>
+                    <div style={{ marginBottom: "1.25rem", background: "rgba(255,255,255,0.03)", padding: "16px", borderRadius: "12px", border: "1px solid var(--eds-border)" }}>
+                      <div className="eds-eyebrow" style={{ marginBottom: "0.75rem" }}>Create a new task</div>
                       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                         <input
                           className="input"
@@ -251,8 +286,9 @@ export default function Onboarding() {
                   {hrLoading ? (
                     <SectionLoader rows={4} />
                   ) : hrTasks.length === 0 ? (
-                    <div style={{ textAlign: "center", padding: "4rem 2rem", border: "1px solid  rgba(255,255,255,0.08)", borderRadius: "16px" }}>
-                      <p className="text-muted" style={{ fontSize: "1rem" }}>No tasks assigned {selectedId === "all" ? "in the organization" : "to this employee"} yet.</p>
+                    <div className="eds-empty--card">
+                      <span className="eds-empty-tile"><Icons.List /></span>
+                      <span>No tasks assigned {selectedId === "all" ? "in the organization" : "to this employee"} yet.</span>
                     </div>
                   ) : (
                     <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -298,23 +334,13 @@ export default function Onboarding() {
                             </div>
                           </div>
 
-                          <div style={{
-                            padding: "6px 16px",
-                            borderRadius: "999px",
-                            fontSize: "0.75rem",
-                            fontWeight: 800,
-                            background: t.priority === "High" ? "rgba(239, 68, 68, 0.15)" : t.priority === "Medium" ? "rgba(34, 197, 94, 0.15)" : "rgba(21, 50, 115, 0.15)",
-                            color: t.priority === "High" ? "#f87171" : t.priority === "Medium" ? "#4ade80" : "#153273",
-                            border: `1px solid ${t.priority === "High" ? "rgba(239, 68, 68, 0.2)" : t.priority === "Medium" ? "rgba(34, 197, 94, 0.2)" : "rgba(21, 50, 115, 0.2)"}`,
-                            minWidth: "90px",
-                            textAlign: "center"
-                          }}>
+                          <span className={`eds-type${priorityTone(t.priority)}`} style={{ justifyContent: "center", minWidth: "82px" }}>
                             {t.priority.toUpperCase()}
-                          </div>
+                          </span>
 
                           <button
                             type="button"
-                            className="btn btn-danger btn-icon"
+                            className="eds-iconbtn eds-iconbtn--del"
                             onClick={() => removeHr(t)}
                             disabled={submitting}
                             title="Delete this Task Permanently"
@@ -340,43 +366,33 @@ export default function Onboarding() {
                 </div>
               )}
             </div>
-          </div>
+          </section>
         )}
 
         {user?.employee_id != null && (
-          <div style={{ marginTop: "1rem" }}>
-            <div className="card" style={{ padding: "1.5rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "1.5rem" }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 800 }}>My Tasks</h3>
-                  <div className="text-muted" style={{ fontSize: "0.9rem", marginTop: "4px" }}>
-                    Your progress: <strong>{done}</strong> of <strong>{total}</strong> tasks completed
-                  </div>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: "1.25rem", fontWeight: 900, color: "#54A832" }}>
-                    {total > 0 ? Math.round((done / total) * 100) : 0}%
-                  </div>
-                </div>
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--emerald"><Icons.TaskDone /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">My Tasks</h2>
+                <p className="eds-card-sub">
+                  Your progress: <b style={{ color: "var(--eds-text)", fontWeight: 600 }}>{done}</b> of <b style={{ color: "var(--eds-text)", fontWeight: 600 }}>{total}</b> tasks completed
+                </p>
               </div>
+              <span className="eds-bigpct">{total > 0 ? Math.round((done / total) * 100) : 0}%</span>
+            </div>
 
-              <div style={{ height: "8px", background: "rgba(255,255,255,0.06)", borderRadius: "4px", marginBottom: "2rem", overflow: "hidden" }}>
-                <div
-                  style={{
-                    height: "100%",
-                    width: `${total > 0 ? (done / total) * 100 : 0}%`,
-                    background: "#54A832",
-                    boxShadow: "0 0 12px rgba(84, 168, 50, 0.4)",
-                    transition: "width 0.4s ease"
-                  }}
-                />
-              </div>
+            <div className="eds-progress">
+              <div style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }} />
+            </div>
 
+            <div className="eds-card-body">
               {loading ? (
                 <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
               ) : mine.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "3rem", background: "rgba(255,255,255,0.02)", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)" }}>
-                  <p className="text-muted">You have no tasks assigned yet.</p>
+                <div className="eds-empty--card">
+                  <span className="eds-empty-tile"><Icons.Clock /></span>
+                  <span>You have no tasks assigned yet.</span>
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -406,60 +422,40 @@ export default function Onboarding() {
                       />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{
-                          fontWeight: 700,
-                          fontSize: "1.05rem",
-                          color: t.is_completed ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.95)",
+                          fontWeight: 600,
+                          fontSize: "14px",
+                          color: t.is_completed ? "var(--eds-dim)" : "var(--eds-text)",
                           textDecoration: t.is_completed ? "line-through" : "none"
                         }}>
                           {t.title}
                         </div>
                         {t.due_date && (
-                          <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.45)", marginTop: "2px" }}>
+                          <div style={{ fontSize: "12px", color: "var(--eds-dim)", marginTop: "2px" }}>
                             Due: {new Date(t.due_date).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' })}
                           </div>
                         )}
                       </div>
-                      <div style={{
-                        padding: "4px 12px",
-                        borderRadius: "999px",
-                        fontSize: "0.7rem",
-                        fontWeight: 800,
-                        background: t.priority === "High" ? "rgba(239, 68, 68, 0.1)" : t.priority === "Medium" ? "rgba(34, 197, 94, 0.1)" : "rgba(21, 50, 115, 0.1)",
-                        color: t.priority === "High" ? "#f87171" : t.priority === "Medium" ? "#4ade80" : "#153273",
-                        border: "1px solid currentColor"
-                      }}>
+                      <span className={`eds-type${priorityTone(t.priority)}`}>
                         {t.priority}
-                      </div>
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-          </div>
+          </section>
         )}
 
         {user?.employee_id == null && !isHr && (
-          <div className="card" style={{ padding: "3rem", textAlign: "center" }}>
-            <p className="text-muted" style={{ fontWeight: 700, textTransform: "uppercase", fontSize: "0.85rem", letterSpacing: "0.1em" }}>Account Pending Linkage</p>
-            <p style={{ fontSize: "1.1rem", maxWidth: "500px", margin: "1rem auto", lineHeight: 1.6 }}>Please contact HR to link your user account to an employee record so you can begin your onboarding journey.</p>
-          </div>
+          <section className="eds-card">
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Clock /></span>
+              <span className="eds-empty-title">Account Pending Linkage</span>
+              <span>Please contact HR to link your user account to an employee record so you can begin your onboarding journey.</span>
+            </div>
+          </section>
         )}
       </div>
-
-      <style>{`
-        .checklist-item-hover:hover {
-          background: rgba(255, 255, 255, 0.08) !important;
-          border-color: rgba(255, 255, 255, 0.2) !important;
-          transform: scale(1.005) translateX(4px);
-        }
-        .content-shell--fade-in {
-          animation: onboardingFadeIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-        }
-        @keyframes onboardingFadeIn {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
 
       <ConfirmModal
         isOpen={!!confirmDelete}
@@ -478,6 +474,6 @@ export default function Onboarding() {
         }
         confirmText="Yes, Remove Task"
       />
-    </>
+    </div>
   );
 }

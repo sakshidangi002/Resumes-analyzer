@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -25,7 +26,12 @@ export default function ConfirmModal({
 }: ConfirmModalProps) {
   if (!isOpen) return null;
 
-  return (
+  // Rendered through a portal to <body>. The backdrop is position:fixed, but
+  // several callers sit inside a container that animates `transform` (the page
+  // header, for one). A transformed ancestor becomes the containing block for
+  // fixed descendants, so `inset: 0` resolved to the header's box and the
+  // dialog was clipped to a sliver instead of covering the viewport.
+  return createPortal(
     <div className="modal-backdrop" style={{ zIndex: 3000 }}>
       <div className="modal-confirm">
         <div className={`modal-confirm-icon ${variant === "danger" ? "text-danger" : "text-warning"}`}>
@@ -63,6 +69,7 @@ export default function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

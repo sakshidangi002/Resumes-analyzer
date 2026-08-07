@@ -25,12 +25,50 @@ function formatTitle(n: AppNotificationRow) {
 
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-action 13px, .eds-iconbtn 15px, .eds-empty-tile 20px). */
+const Icons = {
+  Refresh: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" />
+      <polyline points="20.5 4 20.5 9.5 15 9.5" />
+    </svg>
+  ),
+  CheckAll: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2 13 7 18 15 8" />
+      <polyline points="12 15 15 18 22 9" />
+    </svg>
+  ),
+  ArrowRight: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="12" x2="19" y2="12" />
+      <polyline points="13 6 19 12 13 18" />
+    </svg>
+  ),
+  Trash: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 14h10l1-14" />
+    </svg>
+  ),
+  Bell: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  ),
+};
+
 export default function Inbox() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<"notifications" | "queries">("notifications");
   const [items, setItems] = useState<AppNotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -44,6 +82,13 @@ export default function Inbox() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pageItems = items.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const openItem = async (n: AppNotificationRow) => {
     if (!n.read_at) {
@@ -85,32 +130,27 @@ export default function Inbox() {
     }
   };
 
+  const unreadCount = items.filter((n) => !n.read_at).length;
+
   return (
-    <div>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Inbox</h1>
-          <div className="page-subtitle">Leave decisions, new letters, and task hub updates appear here.</div>
+          <h1 className="eds-title">Inbox</h1>
+          <p className="eds-subtitle">Leave decisions, new letters, and task hub updates appear here.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       {/* Tabs: Notifications (existing feed) + Queries (employee ↔ HR) */}
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+      <div className="eds-utabs">
         {(["notifications", "queries"] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            className="btn btn-secondary btn-sm"
-            style={{
-              background: "transparent",
-              border: "none",
-              borderBottom: tab === t ? "2px solid var(--brand-400)" : "2px solid transparent",
-              borderRadius: 0,
-              fontWeight: tab === t ? 800 : 500,
-              color: tab === t ? "#fff" : "rgba(255,255,255,0.6)",
-            }}
+            className={`eds-utab${tab === t ? " is-active" : ""}`}
           >
             {t === "notifications" ? "Notifications" : "Queries"}
           </button>
@@ -121,80 +161,96 @@ export default function Inbox() {
         <QueriesPanel />
       ) : (
       <>
-      {items.length > 0 && (<div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginBottom: "1rem" }}>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={load} title="Refresh Notification List" style={{ backgroundColor: "var(--brand-500)" }}>
-          Refresh
-        </button>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={markAll} title="Mark All Notifications as Read" style={{ backgroundColor: "var(--brand-500)" }}>
-          Mark all read
-        </button>
-      </div>)}
-      {/* <p className="text-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.9rem" }}>
-        Leave decisions, new letters, and task hub updates appear here.
-      </p> */}
+      {items.length > 0 && (
+        <div className="eds-controls">
+          <span className="eds-tally"><b>{unreadCount}</b> unread</span>
+          <div className="eds-controls-end">
+            <button type="button" className="eds-action" onClick={load} title="Refresh Notification List">
+              <Icons.Refresh />
+              Refresh
+            </button>
+            <button type="button" className="eds-action eds-action--go" onClick={markAll} title="Mark All Notifications as Read">
+              <Icons.CheckAll />
+              Mark all read
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
       ) : items.length === 0 ? (
-        <div className="card" style={{ color: "rgba(255, 255, 255, 0.92)" }}>You have no notifications yet.</div>
+        <section className="eds-card">
+          <div className="eds-empty--card">
+            <span className="eds-empty-tile"><Icons.Bell /></span>
+            <span>You have no notifications yet.</span>
+          </div>
+        </section>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {items.map((n) => (
-            <li
-              key={n.id}
-              className="card"
-              style={{
-                marginBottom: "0.4rem",
-                cursor: "pointer",
-                border: n.read_at ? undefined : "1px solid rgb(var(--brand-rgb) / 0.4)",
-                background: n.read_at ? undefined : "rgba(255, 255, 255, 0.06)",
-              }}
-              onClick={() => openItem(n)}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 900, color: n.read_at ? "rgba(255, 255, 255, 0.78)" : "rgba(255, 255, 255, 0.96)" }}>{formatTitle(n)}</div>
-                  <div style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.65)", marginTop: 8 }}>
+        <section className="eds-card">
+          <div className="eds-feed">
+            {pageItems.map((n) => (
+              <div
+                key={n.id}
+                className={`eds-feed-row${n.read_at ? "" : " is-unread"}`}
+                onClick={() => openItem(n)}
+                style={{ cursor: "pointer" }}
+              >
+                <span className="eds-feed-dot"></span>
+                <div className="eds-feed-body">
+                  <span className="eds-feed-title">{formatTitle(n)}</span>
+                  <span className="eds-feed-meta">
                     {formatDate(n.created_at)} {formatTimeIST(n.created_at)} IST
-                    {n.kind && (
-                      <span style={{ marginLeft: 8 }}>
-                        · {formatKind(n.kind)}
-                      </span>
-                    )}
-                    {!n.read_at && (
-                      <span style={{ marginLeft: 8, color: "var(--brand-400)", fontWeight: 800 }}>Unread</span>
-                    )}
-                  </div>
+                    {n.kind && <> · {formatKind(n.kind)}</>}
+                    {!n.read_at && <> <span className="is-unread-flag">Unread</span></>}
+                  </span>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexShrink: 0, marginTop: "auto", marginBottom: "auto" }}>
+                <div className="eds-feed-actions">
                   {n.link_path && (
-                    <span style={{ fontSize: "0.8rem", color: "var(--brand-400)", fontWeight: 800 }}>Open →</span>
+                    <span className="eds-linkbtn">Open <Icons.ArrowRight /></span>
                   )}
                   <button
                     type="button"
-                    className="btn btn-secondary btn-icon btn-sm"
+                    className="eds-iconbtn eds-iconbtn--del"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDelete(n.id);
                     }}
                     title="Delete Notification"
-                    style={{ border: "none", background: "transparent", color: "rgba(255, 255, 255, 0.4)", padding: "4px" }}
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f10c0c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      <line x1="10" y1="11" x2="10" y2="17"></line>
-                      <line x1="14" y1="11" x2="14" y2="17"></line>
-                    </svg>
+                    <Icons.Trash />
                   </button>
                 </div>
               </div>
-            </li>
-          ))}
-        </ul>
+            ))}
+          </div>
+          {totalPages > 1 && (
+            <div className="eds-controls" style={{ margin: "1rem 0 0", paddingTop: "1rem", borderTop: "1px solid var(--eds-divider)" }}>
+              <span className="eds-tally">
+                Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, items.length)} of {items.length}
+              </span>
+              <div className="eds-pager">
+                <label className="eds-pager-rows">
+                  Rows
+                  <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                  </select>
+                </label>
+                <button type="button" className="eds-action" onClick={() => setPage(1)} disabled={page === 1}>First</button>
+                <button type="button" className="eds-action" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}>Prev</button>
+                <span className="eds-pager-rows">Page {page} of {totalPages}</span>
+                <button type="button" className="eds-action" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page === totalPages}>Next</button>
+                <button type="button" className="eds-action" onClick={() => setPage(totalPages)} disabled={page === totalPages}>Last</button>
+              </div>
+            </div>
+          )}
+        </section>
       )}
       </>
       )}
+      </div>
 
       <ConfirmModal
         isOpen={!!confirmDelete}
