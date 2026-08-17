@@ -99,7 +99,7 @@ def get_events_for_day(db: Session, employee_id: int, d: date) -> list[Attendanc
 
 
 def get_latest_event_for_day(db: Session, employee_id: int, d: date) -> AttendanceEvent | None:
-    return (
+    event = (
         db.query(AttendanceEvent)
         .filter(
             AttendanceEvent.employee_id == employee_id,
@@ -108,6 +108,59 @@ def get_latest_event_for_day(db: Session, employee_id: int, d: date) -> Attendan
         .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
         .first()
     )
+    if event is not None:
+        return event
+
+    # Compatibility for manual rows created before ADMIN_SET boundary events
+    # were introduced. This prevents today's already-entered manual check-in
+    # from being interpreted as ABSENT until HR edits it again.
+    rec = db.query(AttendanceRecord).filter(
+        AttendanceRecord.employee_id == employee_id,
+        AttendanceRecord.date == d,
+    ).first()
+    if rec is None:
+        return None
+    if rec.sign_out_time is not None:
+        event_type, event_time = "OUT", rec.sign_out_time
+    elif rec.sign_in_time is not None:
+        event_type, event_time = "IN", rec.sign_in_time
+    else:
+        return None
+    return AttendanceEvent(
+        employee_id=employee_id, attendance_date=d,
+        event_time=datetime.combine(d, event_time), event_type=event_type,
+        source="LEGACY_MANUAL",
+    )
+
+
+def sync_manual_boundary_event(
+    db: Session, employee_id: int, d: date, event_type: str, event_time: time | None,
+) -> None:
+    """Expose an HR sign-in/out edit to the camera state machine.
+
+    The legacy admin endpoint changed only AttendanceRecord while camera logic
+    reads AttendanceEvent, making a manually checked-in employee look ABSENT.
+    These boundary events share one timeline with camera break events.
+    """
+    normalized = _normalize_event_type(event_type)
+    if normalized not in {"IN", "OUT"}:
+        raise ValueError("manual boundary must be IN or OUT")
+    db.query(AttendanceEvent).filter(
+        AttendanceEvent.employee_id == employee_id,
+        AttendanceEvent.attendance_date == d,
+        AttendanceEvent.event_type == normalized,
+        AttendanceEvent.source == "ADMIN_SET",
+    ).delete(synchronize_session=False)
+    if event_time is not None:
+        rec = get_or_create_attendance(db, employee_id, d)
+        db.add(AttendanceEvent(
+            employee_id=employee_id,
+            attendance_record_id=rec.id,
+            attendance_date=d,
+            event_time=datetime.combine(d, event_time),
+            event_type=normalized,
+            source="ADMIN_SET",
+        ))
 
 
 def _event_direction(event_type: str | None) -> str | None:

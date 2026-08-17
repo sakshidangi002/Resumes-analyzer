@@ -55,11 +55,9 @@ from app.models.camera import CameraConfig  # noqa: E402
 from app.models.employee import Employee  # noqa: E402
 from app.services.camera_service import open_capture_with_timeout  # noqa: E402
 from app.services.embedding_cache import (  # noqa: E402
-    blob_to_embedding,
-    embedding_to_blob,
     get_employee_candidates,
-    invalidate_embedding_cache,
 )
+from app.services.employee_face_service import enroll_embeddings  # noqa: E402
 from app.services.face_service import extract_faces_from_rgb  # noqa: E402
 from app.services.match import find_best_match  # noqa: E402
 
@@ -180,6 +178,9 @@ def capture(args) -> int:
                 "id": index, "file": f"{name}.jpg", "face_px": round(px, 1),
                 "det_score": round(det, 3),
                 "turn": round(asym, 3), "pose": pose,
+                "pose_values": face.get("pose") or {},
+                "camera_id": str(args.camera) if args.camera is not None else None,
+                "captured_at": datetime.now().isoformat(timespec="seconds"),
                 "current_best_match": best["employee_name"],
                 "current_best_score": round(best["score"], 3),
             })
@@ -218,45 +219,59 @@ def commit(args) -> int:
 
     wanted = [int(x) for x in args.faces.split(",") if x.strip()]
     vectors = []
+    manifest_path = review_dir / "manifest.json"
+    try:
+        manifest_rows = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"could not read {manifest_path.name}: {exc}") from exc
+    manifest_by_id = {int(row.get("id")): row for row in manifest_rows}
     for face_id in wanted:
         path = review_dir / f"face_{face_id:02d}.npy"
         if not path.exists():
             raise SystemExit(f"no such candidate: {path.name}")
-        vectors.append(np.load(path).astype(np.float32))
+        row = manifest_by_id.get(face_id)
+        if row is None:
+            raise SystemExit(f"manifest has no entry for candidate {face_id}")
+        vector = np.load(path).astype(np.float32)
+        pose_values = row.get("pose_values") or {}
+        vectors.append(
+            {
+                "embedding": vector,
+                "camera_id": row.get("camera_id"),
+                "source": "cctv",
+                "aligned": True,
+                "face_px": row.get("face_px"),
+                "quality_score": row.get("quality_score"),
+                "yaw": pose_values.get("yaw"),
+                "pitch": pose_values.get("pitch"),
+            }
+        )
 
     with SessionLocal() as db:
         emp = db.query(Employee).filter(Employee.id == args.employee).first()
         if not emp:
             raise SystemExit(f"employee {args.employee} not found")
 
-        existing = None
-        if emp.embedding is not None:
-            existing = blob_to_embedding(emp.embedding)
-            existing = existing[None, :] if existing.ndim == 1 else existing
-
-        new_stack = np.stack(vectors).astype(np.float32)
-        combined = new_stack if existing is None else np.vstack([existing, new_stack])
-
-        # Keep the newest if the stack grows large — camera-domain references
-        # are the ones we want to retain, and an unbounded stack slows matching.
-        if combined.shape[0] > MAX_STACK:
-            combined = combined[-MAX_STACK:]
-
-        before = 0 if existing is None else existing.shape[0]
         print(f"employee {emp.id} — {emp.full_name}")
-        print(f"  reference photos: {before} -> {combined.shape[0]} "
-              f"(adding {new_stack.shape[0]} from the camera)")
+        print(f"  adding {len(vectors)} camera-domain embedding(s)"
+              f" (gallery cap {MAX_STACK})")
 
         if args.dry_run:
             print("  DRY RUN — nothing written")
             return 0
 
-        emp.embedding = embedding_to_blob(combined)
-        emp.sample_count = int(combined.shape[0])
-        db.commit()
+    # Persist through the provenance-aware service. It rebuilds the hot matcher
+    # stack from active, model-compatible gallery rows and invalidates the cache.
+    # The database lookup above remains a friendly early validation for the CLI.
+    added = enroll_embeddings(
+        int(args.employee),
+        vectors,
+        source="cctv",
+        detector="insightface",
+        replace=False,
+    )
 
-    invalidate_embedding_cache()
-    print("  committed; embedding cache invalidated")
+    print(f"  committed {added} camera-domain embedding(s); embedding cache invalidated")
     print()
     print("Recognition uses the BEST match across the stack, so the clean photos")
     print("still apply — these camera-domain references are additive.")

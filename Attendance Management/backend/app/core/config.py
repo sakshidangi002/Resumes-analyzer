@@ -352,7 +352,7 @@ class Settings(BaseSettings):
     # MONITOR cameras only, and it can never mark attendance. A seat-derived
     # name is drawn in amber and labelled "by seat" so it is never mistaken for
     # a face identification.
-    seat_anchor_enabled: bool = True
+    seat_anchor_enabled: bool = False
     # How close a track must be to a remembered seat, in pixels. Too large and
     # neighbouring desks bleed into each other.
     seat_anchor_radius_px: int = 120

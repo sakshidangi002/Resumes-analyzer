@@ -38,8 +38,12 @@ import os
 
 _JPEG_QUALITY = 80
 _FPS_WINDOW = 30
-# Consecutive confirmations before attendance is recorded (see camera_service).
-_CONFIRM_FRAMES = int(os.getenv("CCTV_CONFIRM_FRAMES", "3"))
+
+# NOTE: _CONFIRM_FRAMES used to live here as a SECOND, independent copy of the
+# attendance rule (default 3, while camera_service used 1). Whichever worker a
+# camera happened to run therefore governed how much evidence its attendance
+# needed, and nothing surfaced which one that was. Both paths now call
+# services/attendance_gate with the camera's own profile.
 
 
 # ---------------------------------------------------------------------------
@@ -562,22 +566,58 @@ class HCNetSDKCameraWorker:
             skip_recognition = self.frame_skip > 0 and self._frame_counter % (self.frame_skip + 1) != 0
 
             # Step 3: Identify tracks seen in THIS frame (fresh embedding).
-            # Identification is side-effect free — attendance is only marked
-            # after the same employee is CONFIRMED across _CONFIRM_FRAMES.
+            # Identification is side-effect free — attendance is decided by
+            # services/attendance_gate from the whole track's evidence, using
+            # this camera's own profile.
             if not skip_recognition:
+                from app.services import attendance_gate, camera_profile, face_quality
+
+                profile = camera_profile.get_profile(self.camera_id, self.camera_purpose)
+
                 for track in tracks:
                     if track.consecutive_misses != 0 or track.face is None:
                         continue
 
-                    # Match from the already-computed embedding (no re-detect,
-                    # no attendance side effect).
+                    # Quality gate — this path had none at all. Any detected
+                    # face, at any size, pose or sharpness, went straight into a
+                    # match and could write attendance on a single frame.
+                    quality = face_quality.assess(
+                        track.face, rgb, limits=profile.limits,
+                    )
+                    if not quality.ok:
+                        logger.debug(
+                            "QUALITY camera=%s track=%s rejected=%s %s",
+                            self.camera_id, track.track_id, quality.reason,
+                            quality.as_log_fields(),
+                        )
+                        continue
+
+                    # Combine observations across the track before matching, so
+                    # the decision rests on the whole approach rather than on one
+                    # noisy frame (see services/embedding_fusion).
+                    match_face = track.face
+                    if not track.add_observation(
+                        track.face.get("embedding"), quality=quality.score
+                    ):
+                        logger.info(
+                            "FUSION camera=%s track=%s observation rejected as "
+                            "outlier — likely a track switch",
+                            self.camera_id, track.track_id,
+                        )
+                        continue
+                    fused = track.fused_embedding()
+                    if fused is not None:
+                        match_face = dict(track.face)
+                        match_face["embedding"] = fused
+
                     result = recognize_face(
-                        track.face,
-                        threshold=self.threshold,
+                        match_face,
+                        threshold=profile.threshold,
                         source="cctv",
                         camera_id=str(self.camera_id),
                         camera_purpose=self.camera_purpose,
                         mark_attendance=False,
+                        min_margin=profile.margin,
                     )
                     faces_data = result.get("faces", [])
                     face_data = faces_data[0] if faces_data else {}
@@ -591,26 +631,34 @@ class HCNetSDKCameraWorker:
                         confidence=face_data.get("score", 0.0),
                     )
 
-                    # Stable confirmation → mark attendance exactly once.
-                    should_mark = track.register_identification(
-                        emp_id, matched, _CONFIRM_FRAMES
+                    decision = attendance_gate.evaluate(
+                        track,
+                        employee_id=emp_id,
+                        matched=matched,
+                        score=float(face_data.get("score") or 0.0),
+                        margin=float(face_data.get("margin") or 0.0),
+                        profile=profile,
                     )
-                    if should_mark:
-                        logger.info(
-                            f"Camera {self.camera_id} [{self.camera_purpose}]: track={track.track_id} "
-                            f"CONFIRMED {track.employee_name} (id={emp_id}, conf={track.confidence * 100:.1f}%) "
-                            f"after {track.confirm_count} frames -> marking attendance"
-                        )
+                    logger.info(
+                        "DECISION camera=%s [%s] track=%s employee=%s(%s) "
+                        "allowed=%s reason=%s %s %s",
+                        self.camera_id, self.camera_purpose, track.track_id,
+                        face_data.get("employee_name") or "Unknown", emp_id,
+                        decision.allowed, decision.reason or "allowed",
+                        quality.as_log_fields(), decision.as_log_fields(),
+                    )
+
+                    if decision.allowed and profile.marks_attendance:
+                        track.attendance_marked = True
                         mark_cctv_attendance(
                             int(emp_id),
                             camera_id=str(self.camera_id),
                             camera_purpose=self.camera_purpose,
-                        )
-                    elif not matched:
-                        logger.debug(
-                            f"Camera {self.camera_id}: track={track.track_id} REJECTED "
-                            f"score={face_data.get('score', 0.0):.4f} "
-                            f"reason={face_data.get('state', 'no_match_or_below_threshold')}"
+                            evidence={
+                                "match_score": decision.score,
+                                "match_margin": decision.margin,
+                                "track_id": track.track_id,
+                            },
                         )
             
             # Step 4: Always annotate frame with enhanced overlay (shows persistent boxes)

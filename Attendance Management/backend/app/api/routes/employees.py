@@ -50,6 +50,8 @@ from app.services.employee_face_service import (
     process_face_uploads,
     save_employee_photo,
     delete_employee_photos,
+    enroll_embeddings,
+    gallery_summary,
 )
 
 router = APIRouter()
@@ -451,19 +453,37 @@ async def register_face_data(
         raise HTTPException(status_code=404, detail=f"Employee with ID {employee_id} not found in HRMS database.")
 
     prepared_images = await process_face_uploads(images)
-    # Store ALL enrolled embeddings (one row per photo/angle) as an (N, 512)
-    # stack — NOT averaged. Recognition matches against the best of them, which
-    # handles different angles/lighting far more accurately than a mean vector.
-    embeddings = [np.asarray(item["embedding"], dtype=np.float32) for item in prepared_images]
-    embedding_stack = np.stack(embeddings).astype(np.float32)  # (N, 512)
-    photo_path = save_employee_photo(employee_id, prepared_images[0]["bytes"], prepared_images[0]["filename"])
-
-    emp.embedding = embedding_to_blob(embedding_stack)
+    photo_path = save_employee_photo(
+        employee_id, prepared_images[0]["bytes"], prepared_images[0]["filename"]
+    )
     emp.photo_path = photo_path
-    emp.sample_count = len(prepared_images)
     db.commit()
+
+    # Store ALL enrolled embeddings (one row per photo/angle) — NOT averaged.
+    # Recognition matches against the best of them, which handles different
+    # angles/lighting far more accurately than a mean vector.
+    #
+    # `replace=True` because this endpoint is "register this employee's face
+    # data", not "append to it": re-running it after a bad first enrolment must
+    # actually supersede the bad vectors rather than leave them in the gallery
+    # competing with the good ones. Superseded rows are soft-deleted, so the
+    # audit trail of what the system believed when it wrote past attendance
+    # survives. enroll_embeddings rebuilds employees.embedding and invalidates
+    # the matcher cache.
+    enroll_embeddings(
+        employee_id=employee_id,
+        observations=[
+            {
+                "embedding": item["embedding"],
+                "aligned": item.get("aligned", True),
+                "quality": item.get("quality"),
+            }
+            for item in prepared_images
+        ],
+        source="upload",
+        replace=True,
+    )
     db.refresh(emp)
-    invalidate_embedding_cache()
 
     return {
         "message": "Employee registered successfully",
@@ -472,8 +492,10 @@ async def register_face_data(
             "name": clean_name,
             "department": clean_department,
             "photo_path": photo_path,
-            "sample_count": len(prepared_images),
+            "sample_count": int(emp.sample_count or 0),
         },
+        "skipped": prepared_images[0].get("skipped") or [],
+        "gallery": gallery_summary(employee_id),
     }
 
 
@@ -487,10 +509,16 @@ def get_face_status(
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
+    # The gallery breakdown is what tells HR whether this employee is likely to
+    # be recognised on a fixed ceiling camera: `has_camera_enrolment` false means
+    # every vector came from a studio photo, which is a different distribution
+    # from what the camera sees and is the most common cause of an employee who
+    # "never gets recognised".
     return {
         "employee_id": employee_id,
         "registered": emp.embedding is not None,
         "sample_count": int(emp.sample_count or 0),
+        "gallery": gallery_summary(employee_id),
     }
 
 
@@ -513,6 +541,22 @@ def delete_face_data(
     emp.embedding = None
     emp.photo_path = None
     emp.sample_count = 0
+
+    # Retire the provenance rows too, or the next enrolment would rebuild the
+    # stack from vectors the operator believed they had just deleted. Soft
+    # delete: an attendance row written last month was justified by these
+    # embeddings, and destroying that record would make a disputed event
+    # unauditable.
+    from app.models.employee_face import EmployeeFaceEmbedding
+
+    (
+        db.query(EmployeeFaceEmbedding)
+        .filter(
+            EmployeeFaceEmbedding.employee_id == employee_id,
+            EmployeeFaceEmbedding.active.is_(True),
+        )
+        .update({"active": False}, synchronize_session=False)
+    )
     db.commit()
     delete_employee_photos(employee_id)
     invalidate_embedding_cache()

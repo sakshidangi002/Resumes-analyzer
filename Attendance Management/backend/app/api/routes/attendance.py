@@ -34,6 +34,7 @@ from app.services.attendance_event_service import (
     calculate_intervals_from_events,
     count_attendance_events,
     format_duration,
+    sync_manual_boundary_event,
 )
 
 router = APIRouter()
@@ -64,6 +65,10 @@ def attendance_sign_in(
     if d == date.today() and sign_in_time > datetime.now().time():
         raise HTTPException(status_code=400, detail="Cannot record future Sign-In time for today")
     rec = sign_in(db, employee_id, d, sign_in_time)
+    rec.sign_in_manual = True
+    sync_manual_boundary_event(db, employee_id, d, "IN", sign_in_time)
+    db.commit()
+    db.refresh(rec)
     return rec
 
 
@@ -81,6 +86,10 @@ def attendance_sign_out(
     if d == date.today() and sign_out_time > datetime.now().time():
         raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
     rec = sign_out(db, employee_id, d, sign_out_time)
+    rec.sign_out_manual = True
+    sync_manual_boundary_event(db, employee_id, d, "OUT", sign_out_time)
+    db.commit()
+    db.refresh(rec)
     return rec
 
 
@@ -380,6 +389,12 @@ def admin_set_attendance(
     # camera.
     rec.sign_in_manual = data.sign_in_time is not None
     rec.sign_out_manual = data.sign_out_time is not None
+    sync_manual_boundary_event(
+        db, data.employee_id, data.date, "IN", data.sign_in_time,
+    )
+    sync_manual_boundary_event(
+        db, data.employee_id, data.date, "OUT", data.sign_out_time,
+    )
     if data.break_hours is not None:
         if data.break_hours < 0:
             raise HTTPException(status_code=400, detail="Break time cannot be negative")

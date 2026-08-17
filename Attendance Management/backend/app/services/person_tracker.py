@@ -107,6 +107,13 @@ class PersonTrack:
     last_crossing_time: float = 0.0
     crossed: bool = False  # has crossed the doorway line at least once
 
+    # The most recent attendance_gate decision for this track. Held between the
+    # identification stage and the attendance stage of the same analysis tick,
+    # which are separated because line-crossing state has to be updated in
+    # between. Cleared once acted on.
+    pending_decision: object = None
+    unknown_event_marked: bool = False
+
     def centroid(self) -> Tuple[float, float]:
         x1, y1, x2, y2 = self.box
         return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
@@ -124,9 +131,15 @@ class PersonTrack:
     def is_expired(self) -> bool:
         return self.consecutive_misses >= self.max_misses
 
-    def add_observation(self, embedding, quality: float) -> None:
-        """Fold one face embedding into this body track's fused template."""
-        self.fuser.add(embedding, quality)
+    def add_observation(self, embedding, quality: float) -> bool:
+        """Fold one face embedding into this body track's fused template.
+
+        ``quality`` is the FaceQuality soft score in (0, 1]. Returns False when
+        the fuser rejected the observation as an outlier — on a body track that
+        usually means the tracker handed this box to a different person, which
+        is routine when people pass each other in a doorway.
+        """
+        return self.fuser.add(embedding, quality)
 
     def fused_embedding(self):
         """Quality-weighted mean of every face seen on this person, or None."""
@@ -135,6 +148,15 @@ class PersonTrack:
     @property
     def observations(self) -> int:
         return self.fuser.observations
+
+    @property
+    def consensus(self) -> float:
+        """How much this track's face observations agree with each other."""
+        return self.fuser.consensus()
+
+    @property
+    def best_quality(self) -> float:
+        return self.fuser.best_quality
 
     def needs_recognition(self, reverify_sec: float) -> bool:
         """Recognise when not yet identified, or periodically to re-verify."""
@@ -171,23 +193,8 @@ class PersonTrack:
         self.identity_source = source
         self.last_recognition_time = time.time()
 
-    def register_identification(
-        self, employee_id: Optional[int], matched: bool, confirm_frames: int
-    ) -> bool:
-        """Return True once the same employee is confirmed N times (attendance)."""
-        if not matched or employee_id is None:
-            self.pending_employee_id = None
-            self.confirm_count = 0
-            return False
-        if self.pending_employee_id == employee_id:
-            self.confirm_count += 1
-        else:
-            self.pending_employee_id = employee_id
-            self.confirm_count = 1
-        if self.confirm_count >= confirm_frames and not self.attendance_marked:
-            self.attendance_marked = True
-            return True
-        return False
+    # The attendance decision moved to services/attendance_gate — see the note
+    # on FaceTrack for why a consecutive-frame counter was the wrong test.
 
     def get_display_info(self) -> dict:
         return {

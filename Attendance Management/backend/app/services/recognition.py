@@ -238,7 +238,19 @@ def _build_face_result(
     camera_id: str | None = None,
     camera_purpose: str | None = None,
     mark_attendance: bool = True,
+    min_margin: float | None = None,
 ) -> dict:
+    # Per-camera margin when the caller supplies one, else the global setting.
+    #
+    # The margin is the more effective of the two knobs against this system's
+    # known failure and was the one never tuned: the documented mislabelling had
+    # the WRONG employee at 0.77 while correct matches sat at 0.73-0.79, so no
+    # THRESHOLD can separate them — but a noisy embedding does not pull clear of
+    # the runner-up the way a genuine match does. An attendance camera therefore
+    # runs a stricter margin than a monitor camera, which a single global
+    # constant could not express.
+    margin_floor = MIN_MATCH_MARGIN if min_margin is None else float(min_margin)
+
     # Pass 1 — the narrowed pool. Fewer candidates means the runner-up is a
     # genuine alternative rather than an employee who is demonstrably elsewhere,
     # so the margin gate becomes meaningfully stricter at no accuracy cost.
@@ -247,7 +259,7 @@ def _build_face_result(
         face["embedding"],
         narrowed,
         threshold=threshold,
-        min_margin=MIN_MATCH_MARGIN,
+        min_margin=margin_floor,
     )
 
     # Pass 2 — fall back to the full pool when the prior produced nothing. This
@@ -257,7 +269,7 @@ def _build_face_result(
             face["embedding"],
             candidates,
             threshold=threshold,
-            min_margin=MIN_MATCH_MARGIN,
+            min_margin=margin_floor,
         )
         if full["status"]:
             logger.info(
@@ -406,6 +418,7 @@ def recognize_face(
     camera_id: str | None = None,
     camera_purpose: str | None = None,
     mark_attendance: bool = True,
+    min_margin: float | None = None,
 ) -> dict:
     """Recognize a single, ALREADY-DETECTED face.
 
@@ -431,7 +444,7 @@ def recognize_face(
     return _recognize_from_faces(
         [face], threshold=threshold, source=source,
         camera_id=camera_id, camera_purpose=camera_purpose,
-        mark_attendance=mark_attendance,
+        mark_attendance=mark_attendance, min_margin=min_margin,
     )
 
 
@@ -442,6 +455,7 @@ def _recognize_from_faces(
     camera_id: str | None = None,
     camera_purpose: str | None = None,
     mark_attendance: bool = True,
+    min_margin: float | None = None,
 ) -> dict:
     # ── Step 1: Webcam frame received ────────────────────────────────────────
     logger.info(
@@ -487,7 +501,7 @@ def _recognize_from_faces(
         outcome = _build_face_result(
             face, candidates, threshold, source,
             camera_id=camera_id, camera_purpose=camera_purpose,
-            mark_attendance=mark_attendance,
+            mark_attendance=mark_attendance, min_margin=min_margin,
         )
         any_match = any_match or outcome["any_match"]
         if attendance is None and outcome["attendance"] is not None:

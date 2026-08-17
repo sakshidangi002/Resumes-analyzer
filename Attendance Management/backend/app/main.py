@@ -298,6 +298,16 @@ async def _attendance_closeout_tick() -> None:
     except Exception:
         logger.exception("Attendance snapshot pruning failed")
 
+    try:
+        from app.services.unknown_faces import purge_older_than
+
+        # Unknown-face rows carry an embedding and a face crop — the same class
+        # of biometric data as the snapshots above, and they accumulate with
+        # every unrecognised passer-by. Retention is not optional.
+        await asyncio.to_thread(purge_older_than)
+    except Exception:
+        logger.exception("Unknown-face purge failed")
+
 
 def _start_background_scheduler():
     """Start APScheduler. We tick every minute and decide inside the tick

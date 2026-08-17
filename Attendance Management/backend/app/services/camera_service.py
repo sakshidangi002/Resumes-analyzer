@@ -50,8 +50,13 @@ import numpy as np
 
 from app.services.face_tracker import FaceTracker
 from app.services.person_tracker import PersonTracker, check_line_crossing
-from app.services import person_detector
+from app.services import attendance_gate
 from app.services import bytetrack_engine
+from app.services import camera_profile
+from app.services import face_quality
+from app.services import person_detector
+from app.services import unknown_faces
+from app.services import unknown_attendance
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +105,7 @@ _EMBEDDING_FUSION = os.getenv("CCTV_EMBEDDING_FUSION", "true").lower() in {"1", 
 # reuse that to name them later when no face is visible. Independent of the
 # body Re-ID flag above — appearance matching was unreliable here, position is
 # not. MONITOR cameras only; can never mark attendance.
-_SEAT_ANCHOR = os.getenv("CCTV_SEAT_ANCHOR", "true").lower() in {"1", "true", "yes"}
+_SEAT_ANCHOR = os.getenv("CCTV_SEAT_ANCHOR", "false").lower() in {"1", "true", "yes"}
 
 
 # ---------------------------------------------------------------------------
@@ -205,35 +210,33 @@ def _redact_url(url: str) -> str:
     except Exception:
         # Never let redaction raise — a log call must not become an exception.
         return "<redacted>"
-# Number of consecutive detected+matched frames before attendance is recorded.
-# Default 1: exit cameras detect faces slowly and intermittently, so requiring 2
-# consecutive frames caused recognitions to never confirm (name showed but no
-# event). A single match is safe because the margin gate (min_match_margin)
-# already rejects ambiguous/lookalike matches, and the per-camera cooldown
-# blocks duplicates. Raise via CCTV_CONFIRM_FRAMES for stricter confirmation.
-_CONFIRM_FRAMES       = int(os.getenv("CCTV_CONFIRM_FRAMES",   "1"))
+# NOTE ON REMOVED CONSTANTS
+# --------------------------
+# CCTV_CONFIRM_FRAMES, CCTV_IDENT_CONFIRM, CCTV_MIN_FACE_PX, CCTV_ATTENDANCE_
+# COOLDOWN, CCTV_ANALYSIS_INTERVAL, CCTV_MIN_THRESHOLD and CCTV_FACE_CROP_SCALE
+# used to live here as process-wide values. They are now per-camera settings in
+# the database — see services/camera_profile.py and CameraWorker.profile().
+#
+# The reason is not tidiness. One global value had to serve both the check-in
+# camera, whose matches become payroll rows, and the ceiling-mounted room
+# cameras that can never mark attendance. Every time the room cameras stopped
+# seeing anyone, the shared value was loosened — and that loosening silently
+# applied to the payroll cameras too. CCTV_MIN_FACE_PX walking 45 -> 24 -> 16 is
+# that process recorded in the git history.
+#
+# Existing env vars are no longer read. Set the equivalent per-camera columns, or
+# leave them NULL to inherit the purpose defaults in camera_profile.
+#
 # Target FPS for the display/encode thread. This is decoupled from recognition
 # so the live feed stays smooth even while face analysis runs in the background.
 _DISPLAY_FPS          = float(os.getenv("CCTV_DISPLAY_FPS",    "25"))
-# Attendance cooldown PER CAMERA PER EMPLOYEE. Once an employee is marked on a
-# camera, further marks are ignored until this many seconds pass — this covers
-# the "employee lingers in view / leaves and comes back" case. IN and OUT are
-# separate cameras (separate workers) so they never block each other.
-_ATTENDANCE_COOLDOWN  = float(os.getenv("CCTV_ATTENDANCE_COOLDOWN", "20"))
+# Fallback attendance cooldown, used only for sizing the bounded `_last_marked`
+# dict and the warm-from-DB window at worker start. The value that actually
+# gates a write is per-camera — CameraWorker.attendance_cooldown.
+_COOLDOWN_HINT        = 20.0
 # Optional: downscale the longest frame side to this many px BEFORE detection to
 # speed up analysis on high-res streams (0 = disabled, detect at full res).
 _DETECT_MAXSIDE       = int(os.getenv("CCTV_DETECT_MAXSIDE",   "0"))
-# How often the analysis (detect+track+identify) loop runs. Kept small so face
-# boxes follow people smoothly; the actual rate is bounded by detector speed.
-_ANALYSIS_INTERVAL    = float(os.getenv("CCTV_ANALYSIS_INTERVAL", "0.12"))
-# MONITOR cameras are display-only (never mark attendance) and often have people
-# permanently in view (e.g. a seating area), so at the fast interval they run
-# detection every cycle and MONOPOLISE the single global inference lock —
-# starving the IN/OUT attendance cameras (a person at the entrance then waits
-# 20-30s for a free inference slot). Monitor cameras therefore analyse at a much
-# slower rate, reserving inference throughput for the attendance cameras. Their
-# on-screen boxes/names simply refresh a little less often (no attendance impact).
-_MONITOR_ANALYSIS_INTERVAL = float(os.getenv("CCTV_MONITOR_ANALYSIS_INTERVAL", "1.5"))
 # How long (seconds) a RECOGNISED person keeps their name after their face is no
 # longer visible — the box coasts along their motion until they leave the frame.
 _IDENTITY_HOLD_SEC    = float(os.getenv("CCTV_IDENTITY_HOLD_SEC", "2.5"))
@@ -297,8 +300,12 @@ _REID_ENABLED         = os.getenv("CCTV_REID_ENABLED", "false").lower() in {"1",
 # once labelled "Saloni Pathania" at 77%). Score and face size CANNOT separate the
 # good from the bad — the correct matches sat in the same 73-79% range.
 #
-# The defence is therefore NOT to disable this, but _IDENT_CONFIRM below: a false
-# match is random and won't repeat, a real one will.
+# The defence is NOT to disable this. It is the evidence gate in
+# services/attendance_gate: a false match is random and does not survive being
+# combined with the rest of the track's observations, while a real one does. The
+# zoom stays; what changed is that its output must now clear a quality gate
+# (pose included) and contribute to a consistent fused template before it can
+# name anybody, and it can never mark attendance on its own.
 _FACE_CROP_ENABLED    = os.getenv("CCTV_FACE_CROP", "true").lower() in {"1", "true", "yes"}
 # Cameras mounted at a STEEP top-down angle. Their people score only ~0.11 (a
 # well-aimed camera scores 0.36-0.67), so the normal 0.30 track threshold throws
@@ -311,53 +318,18 @@ _STEEP_CAMERAS = {
 }
 _STEEP_CONF           = float(os.getenv("CCTV_STEEP_PERSON_CONF", "0.08"))
 _STEEP_TRACKER_CFG    = os.getenv("CCTV_STEEP_TRACKER", "models/bytetrack_person_lowconf.yaml")
-_FACE_CROP_SCALE      = int(os.getenv("CCTV_FACE_CROP_SCALE", "3"))     # upscale factor
 _FACE_CROP_HEAD_RATIO = float(os.getenv("CCTV_FACE_CROP_HEAD", "0.55"))  # top N of the body box
-# Minimum REAL face width (original-frame pixels) before we even try to recognise.
-# ArcFace needs genuine facial detail; upscaling a 25px face makes a BIGGER BLURRY
-# face, not a more detailed one, and its embedding is meaningless — it can score
-# high against the WRONG person (a man was labelled "Saloni Pathania"). Below this
-# size we leave the person as "Person #N" instead of risking a wrong name.
-#
-# 45 was too strict: the faces these cameras genuinely resolve are ~30-40px, and
-# they were producing CORRECT names (73-79%). Blocking them left everyone Unknown.
-# 24 keeps those working while still rejecting the truly tiny faces whose
-# embeddings are meaningless.
-_MIN_FACE_PX          = int(os.getenv("CCTV_MIN_FACE_PX", "16"))
-# How many times IN A ROW the same employee must be recognised on a track before
-# their name is shown.
-#
-# The real defence against wrong names. Face size and score CANNOT separate good
-# from bad here: the correct names scored 73-79% and the WRONG one ("Saloni
-# Pathania" on a man) scored 77% — the same range, from faces of the same size.
-# But a false match is RANDOM: it does not repeat. A genuine one does. Requiring
-# two consecutive agreeing reads therefore filters the impostor while every real
-# person still gets named (a few seconds later).
-# How many times IN A ROW the same employee must be recognised before their name
-# is shown. 1 = name them on the first good face match.
-#
-# It was briefly 2, to guard against the wrong name ("Saloni Pathania" on a man).
-# But the evidence shows that wrong name came from BODY Re-ID (which scored 0.77
-# for the wrong person and is now disabled), NOT from a face. Meanwhile requiring
-# 2 consecutive face matches made naming almost impossible: a face here is only
-# visible for a MOMENT — a person glancing at the camera is caught once, never
-# twice — so nobody ever got named.
-#
-# Face matches on these cameras are correct when they happen (73-79%), so 1 is
-# right. Raise this to 2 only if a wrong name ever appears from a FACE match.
-_IDENT_CONFIRM        = int(os.getenv("CCTV_IDENT_CONFIRM", "1"))
+# How many times a SEAT/Re-ID guess must repeat before it may put a name on a
+# box. MONITOR cameras only — this path can never mark attendance, so the cost
+# of being wrong is a briefly-wrong overlay label. It is NOT the attendance
+# confirmation, which lives in services/attendance_gate.
+_ANCHOR_CONFIRM       = int(os.getenv("CCTV_ANCHOR_CONFIRM", "2"))
 
 
-def _face_px_width(face: dict, scale: int = 1) -> float:
-    """Face width in ORIGINAL frame pixels (a zoomed crop is `scale`x enlarged)."""
-    box = face.get("box") or []
-    if len(box) < 4:
-        return 0.0
-    return abs(float(box[2]) - float(box[0])) / max(1, scale)
-# Safety floor for a camera's recognition threshold. Older camera rows may still
-# hold the legacy 0.05 value, which accepts near-random faces as a match. We
-# never let a worker run below this floor regardless of the stored DB value.
-_MIN_THRESHOLD        = float(os.getenv("CCTV_MIN_THRESHOLD", "0.35"))
+# Face size, threshold and margin floors are per-camera now — see
+# services/camera_profile.py. `face_px_width` moved to services/face_quality so
+# that the pixel measurement and the gate that uses it cannot drift apart.
+_face_px_width = face_quality.face_px_width
 
 
 # ---------------------------------------------------------------------------
@@ -634,13 +606,13 @@ def _draw_enhanced_overlay(
         _display_name = employee_name if matched else "Unknown"
         if not _display_name or _display_name in ("Person", "Unknown Person"):
             _display_name = "Unknown"
-        label_lines = [f"{_display_name} #{track_id}"]
+        label_lines = [f"{_display_name} - Track {track_id}"]
 
         if matched and identity_source == "seat":
             # Say plainly that this is a positional inference, not a face
             # identification. An operator must be able to tell the difference at
             # a glance — the name may be wrong if somebody swapped desks.
-            label_lines = [f"{_display_name}? #{track_id}"]
+            label_lines = [f"{_display_name}? - Track {track_id}"]
             label_lines.append("by seat - face not seen")
         elif matched:
             # Add confidence percentage
@@ -862,7 +834,7 @@ def _is_blurry(gray: np.ndarray, threshold: float = 80.0) -> bool:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < threshold
 
 
-def _face_in_person_crop(rgb: np.ndarray, box) -> Optional[dict]:
+def _face_in_person_crop(rgb: np.ndarray, box, profile) -> tuple:
     """Find a face by zooming INTO one person, instead of scanning the whole frame.
 
     On a ceiling-mounted room camera a seated person's face is only ~20-30 px wide
@@ -880,7 +852,7 @@ def _face_in_person_crop(rgb: np.ndarray, box) -> Optional[dict]:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
     if bw <= 0 or bh <= 0:
-        return None
+        return None, None
 
     # Head region: the top slice of the body box, with a little padding.
     pad = int(bw * 0.15)
@@ -888,27 +860,32 @@ def _face_in_person_crop(rgb: np.ndarray, box) -> Optional[dict]:
     cx2 = min(rgb.shape[1], x2 + pad)
     cy2 = min(rgb.shape[0], y1 + int(bh * _FACE_CROP_HEAD_RATIO))
     if cx2 - cx1 < 12 or cy2 - cy1 < 12:
-        return None
+        return None, None
 
     crop = rgb[cy1:cy2, cx1:cx2]
     if crop.size == 0:
-        return None
+        return None, None
 
+    scale = int(profile.face_crop_scale)
     up = cv2.resize(
         crop,
-        (crop.shape[1] * _FACE_CROP_SCALE, crop.shape[0] * _FACE_CROP_SCALE),
+        (crop.shape[1] * scale, crop.shape[0] * scale),
         interpolation=cv2.INTER_CUBIC,
     )
     faces = extract_faces_from_rgb(up)
     if not faces:
-        return None
-    best = max(faces, key=lambda f: float(f.get("confidence", 0.0)))
-    # The crop was enlarged _FACE_CROP_SCALE times, so divide back out to get the
-    # REAL number of face pixels the camera actually captured. Too few = the
-    # embedding is guesswork and could match the wrong employee.
-    if _face_px_width(best, _FACE_CROP_SCALE) < _MIN_FACE_PX:
-        return None
-    return best
+        return None, None
+    # Size/pose/blur are judged by the caller through face_quality, against this
+    # camera's profile and with `scale` divided back out. Doing it here as well
+    # would mean two thresholds that can disagree — which is what the old
+    # `_MIN_FACE_PX` check here did against the one in _analyze_person.
+    #
+    # The UPSCALED image is returned alongside the face because the face box
+    # coordinates are in that image, not in the frame. Without it the caller
+    # cannot measure blur at all — and the zoom path is precisely where blur
+    # matters most, since bicubic upsampling invents no detail and an
+    # interpolated smear is what scores high against the wrong employee.
+    return max(faces, key=lambda f: float(f.get("confidence", 0.0))), up
 
 
 def _frame_capture_time(frame_ts: float):
@@ -959,6 +936,102 @@ def _build_evidence(
     except Exception:
         logger.exception("evidence snapshot failed camera=%s", camera_id)
     return evidence
+
+
+# How long after an attendance write before a track is re-matched. Not zero —
+# re-running recognition every tick on someone already recorded is wasted
+# inference — and not infinite, which is what it effectively was before (a
+# recorded track was skipped for the rest of its life, welding its identity on).
+_POST_MARK_REVERIFY_SEC = float(os.getenv("CCTV_POST_MARK_REVERIFY_SEC", "4.0"))
+
+
+def _log_decision(
+    w: "CameraWorker",
+    track_id: int,
+    face_data: dict,
+    quality,
+    decision,
+    employee_id,
+    matched: bool,
+) -> None:
+    """One structured line per attendance decision, allowed or not.
+
+    This is the debugging surface the system did not have. Previously a
+    non-decision produced either nothing or a DEBUG line with a score, so
+    "why was this person not marked?" was unanswerable in production — and
+    equally, "why WAS this person marked?" had only a score to show for it.
+
+    Every field the gate weighed appears here, so a day of logs can be grepped
+    into a distribution: how many decisions died on low_quality, how many on
+    inconsistent_track, what the score/margin spread looked like. That is also
+    the input to tuning the camera profile.
+    """
+    fields = dict(quality.as_log_fields())
+    fields.update(decision.as_log_fields())
+    fields["reason"] = decision.reason or "allowed"
+    level = logging.INFO if (decision.allowed or matched) else logging.DEBUG
+    logger.log(
+        level,
+        "DECISION camera=%s [%s] track=%s employee=%s(%s) allowed=%s %s",
+        w.camera_id, w.camera_purpose, track_id,
+        face_data.get("employee_name") or "Unknown", employee_id,
+        decision.allowed, fields,
+    )
+
+
+def _mark_from_track(
+    w: "CameraWorker",
+    track,
+    employee_id: int,
+    decision,
+    event_time=None,
+) -> bool:
+    """Record attendance for a track the gate approved. Returns True if queued.
+
+    The per-camera cooldown is checked and recorded BEFORE the write is queued,
+    so a duplicate can never be enqueued even though the write itself happens on
+    a background thread.
+
+    ``attendance_marked`` is set here rather than inside the gate: the gate is
+    pure so it can be tested and so a caller can evaluate a decision without
+    causing one. Setting it here also means a track blocked by the cooldown is
+    NOT flagged as marked, so it can try again once the window passes instead of
+    being silently dropped for its whole life.
+    """
+    if not w.can_mark_attendance(employee_id):
+        logger.info(
+            "Camera %s [%s]: track=%s %s within cooldown (%.0fs) -> not re-marked",
+            w.camera_id, w.camera_purpose, getattr(track, "track_id", "?"),
+            getattr(track, "employee_name", None), w.attendance_cooldown,
+        )
+        return False
+
+    track.attendance_marked = True
+    w.note_attendance_marked(employee_id)
+    w.state.recognition_status = "recognized"
+
+    # Carry the gate's evidence onto the stored row alongside the match score,
+    # so a disputed record shows not just "0.61" but how many observations,
+    # how consistent they were, and which decision path allowed it.
+    evidence = dict(getattr(track, "last_evidence", None) or {})
+    evidence.setdefault("match_score", decision.score)
+    evidence.setdefault("match_margin", decision.margin)
+    evidence.setdefault("track_id", getattr(track, "track_id", None))
+
+    logger.info(
+        "ATTENDANCE camera=%s [%s] track=%s employee=%s(%s) via=%s %s",
+        w.camera_id, w.camera_purpose, getattr(track, "track_id", "?"),
+        getattr(track, "employee_name", None), employee_id,
+        decision.path, decision.as_log_fields(),
+    )
+    _submit_attendance(
+        employee_id,
+        camera_id=str(w.camera_id),
+        camera_purpose=w.camera_purpose,
+        evidence=evidence,
+        event_time=event_time,
+    )
+    return True
 
 
 def _face_in_box(faces: list, box) -> Optional[dict]:
@@ -1281,9 +1354,10 @@ class _RecognitionThread(threading.Thread):
         self._blur_logged = False
         self._motion_logged = False
         self._stage_sig: Optional[tuple] = None  # last (persons, faces) logged
-        # track_id -> [employee_id, consecutive_agreeing_reads]. A name is only
-        # shown once the SAME employee is recognised _IDENT_CONFIRM times in a row,
-        # which filters out random false matches (see _IDENT_CONFIRM).
+        # track_id -> [employee_id, consecutive_agreeing_reads], used ONLY by the
+        # MONITOR seat/Re-ID anchoring path (_anchor_identities) to decide when a
+        # positional guess may put a name on a box. Face identification and the
+        # attendance decision no longer use it — see services/attendance_gate.
         self._pending_ident: dict = {}
 
     def stop(self) -> None:
@@ -1443,12 +1517,12 @@ class _RecognitionThread(threading.Thread):
                 self._pending_ident[pt.track_id] = [int(emp_id), 1]
 
             name, code = identity_manager.label(emp_id)
-            if self._pending_ident[pt.track_id][1] < _IDENT_CONFIRM:
+            if self._pending_ident[pt.track_id][1] < _ANCHOR_CONFIRM:
                 logger.info(
                     "IDENTITY camera=%s track=%d candidate=%s score=%.3f via=%s "
                     "(%d/%d confirmations — still Person #%d)",
                     w.camera_id, pt.track_id, name, float(score), source,
-                    self._pending_ident[pt.track_id][1], _IDENT_CONFIRM, pt.track_id,
+                    self._pending_ident[pt.track_id][1], _ANCHOR_CONFIRM, pt.track_id,
                 )
                 continue
 
@@ -1500,23 +1574,13 @@ class _RecognitionThread(threading.Thread):
         # Anchor any attendance event to the frame's capture time, not to
         # whenever the background writer gets to it.
         frame_ist_time = _frame_capture_time(frame_ts)
+        profile = w.profile()
 
         # Precompute the doorway line position in pixels (if crossing enabled).
         line_px = None
         if w.crossing_enabled:
             h, wpx = frame.shape[:2]
             line_px = w.line_position * (wpx if w.line_orientation == "vertical" else h)
-
-        def _mark(emp_id: int, track=None) -> None:
-            if emp_id is not None and w.can_mark_attendance(int(emp_id)):
-                w.note_attendance_marked(int(emp_id))
-                w.state.recognition_status = "recognized"
-                # Off-thread: never block body tracking on the DB round-trip.
-                _submit_attendance(
-                    int(emp_id), camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
-                    evidence=getattr(track, "last_evidence", None),
-                    event_time=frame_ist_time,
-                )
 
         # Each detected face belongs to exactly one person. Overlapping body
         # boxes would otherwise both claim it and be recognised as the same
@@ -1532,59 +1596,101 @@ class _RecognitionThread(threading.Thread):
             #     is still unknown or a periodic re-verify is due.
             if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC):
                 face = face_by_track.get(pt.track_id)
-                # Too few real face pixels -> the embedding is unreliable and can
-                # match the WRONG employee. Better "Person #N" than a wrong name.
-                if face is not None and _face_px_width(face) < _MIN_FACE_PX:
-                    face = None
+                face_scale = 1.0
+                face_image = rgb          # the image `face`'s box refers to
                 # Zoom into this person when the full-frame pass found no face on
                 # them. On a ceiling camera the face is far too small to detect at
                 # frame scale — this is what makes identification possible at all.
                 if face is None and _FACE_CROP_ENABLED and not skip_faces:
-                    face = _face_in_person_crop(rgb, pt.box)
+                    face, face_image = _face_in_person_crop(rgb, pt.box, profile)
+                    if face is not None:
+                        # Coordinates (and therefore the measured width) are in
+                        # the upscaled crop, not the frame.
+                        face_scale = float(profile.face_crop_scale)
+
+                # ── Quality gate ────────────────────────────────────────────
+                # Replaces a bare `_face_px_width(face) < _MIN_FACE_PX` check.
+                # Size alone cannot tell a usable face from a 30px full profile,
+                # and a profile embedding is what lands on an arbitrary employee.
+                quality = None
                 if face is not None:
-                    # Fuse across every face ever seen on this body track before
+                    quality = face_quality.assess(
+                        face, face_image, limits=profile.limits, scale=face_scale,
+                    )
+                    if not quality.ok:
+                        # The full-frame detector can find a 16px face but the
+                        # quality gate quite correctly rejects it. Retry only
+                        # the size failure on an upscaled head crop; this adds
+                        # pixels for SCRFD without weakening the payroll
+                        # threshold, margin, pose, or blur rules.
+                        if (
+                            quality.reason == "face_too_small"
+                            and _FACE_CROP_ENABLED
+                            and not skip_faces
+                            and face_scale == 1.0
+                        ):
+                            cropped_face, cropped_image = _face_in_person_crop(
+                                rgb, pt.box, profile,
+                            )
+                            if cropped_face is not None:
+                                cropped_quality = face_quality.assess(
+                                    cropped_face, cropped_image,
+                                    limits=profile.limits,
+                                    scale=float(profile.face_crop_scale),
+                                )
+                                if cropped_quality.ok:
+                                    face = cropped_face
+                                    face_image = cropped_image
+                                    face_scale = float(profile.face_crop_scale)
+                                    quality = cropped_quality
+                        if not quality.ok:
+                            logger.debug(
+                                "QUALITY camera=%s track=%d rejected=%s %s",
+                                w.camera_id, pt.track_id, quality.reason,
+                                quality.as_log_fields(),
+                            )
+                            face = None
+
+                if face is not None:
+                    # Fuse across every face seen on this body track before
                     # matching. This matters more here than at the entrance: a
                     # seated person is in view for minutes, so there are many
-                    # observations to average, and a room camera's faces are the
+                    # observations to combine, and a room camera's faces are the
                     # smallest and noisiest in the system. Matching each glance
                     # in isolation throws all of that evidence away.
                     match_face = face
+                    accepted = True
                     if _EMBEDDING_FUSION:
-                        # The zoomed crop is `_FACE_CROP_SCALE`x enlarged, so
-                        # divide back out for the TRUE pixel count — otherwise an
-                        # upscaled blur would outweigh a real close-up face.
-                        px = _face_px_width(face)
-                        if px < _MIN_FACE_PX:
-                            px = _face_px_width(face, _FACE_CROP_SCALE)
-                        pt.add_observation(face.get("embedding"), quality=max(1.0, px))
+                        accepted = pt.add_observation(
+                            face.get("embedding"), quality=quality.score,
+                        )
                         fused = pt.fused_embedding()
                         if fused is not None:
                             match_face = dict(face)
                             match_face["embedding"] = fused
 
-                    result = recognize_face(
-                        match_face, threshold=w.threshold, source="cctv",
-                        camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
-                        mark_attendance=False,
-                    )
-                    fd = (result.get("faces") or [{}])[0]
-                    _prev_emp = pt.employee_id
-
-                    # ── Stable confirmation ─────────────────────────────────
-                    # Never name someone on a single read. A false match is random
-                    # and won't repeat; a real one will. Only bind after the SAME
-                    # employee is recognised _IDENT_CONFIRM times consecutively.
-                    _emp = fd.get("employee_id") if fd.get("matched") else None
-                    if _emp is None:
-                        self._pending_ident.pop(pt.track_id, None)
+                    if not accepted:
+                        # Inconsistent with the rest of this track — on a body
+                        # track that usually means the tracker handed this box to
+                        # a different person, which is routine when people pass
+                        # each other. Matching on it would name the wrong person.
+                        logger.info(
+                            "FUSION camera=%s track=%d observation rejected as "
+                            "outlier (accepted=%d rejected=%d) — likely a track switch",
+                            w.camera_id, pt.track_id,
+                            pt.fuser.accepted, pt.fuser.rejected,
+                        )
                     else:
-                        _p = self._pending_ident.get(pt.track_id)
-                        if _p and _p[0] == _emp:
-                            _p[1] += 1
-                        else:
-                            self._pending_ident[pt.track_id] = [_emp, 1]
+                        result = recognize_face(
+                            match_face, threshold=profile.threshold, source="cctv",
+                            camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
+                            mark_attendance=False, min_margin=profile.margin,
+                        )
+                        fd = (result.get("faces") or [{}])[0]
+                        _prev_emp = pt.employee_id
+                        _emp = fd.get("employee_id") if fd.get("matched") else None
 
-                        if self._pending_ident[pt.track_id][1] >= _IDENT_CONFIRM:
+                        if _emp is not None:
                             pt.bind_identity(
                                 _emp, fd.get("employee_name") or "Person",
                                 fd.get("employee_code"), True, fd.get("score", 0.0),
@@ -1598,25 +1704,63 @@ class _RecognitionThread(threading.Thread):
                                 pt.last_evidence = _build_evidence(
                                     frame, pt.box, fd, pt.track_id, _emp, w.camera_id,
                                 )
-                        else:
+                            face_confirmed.append((pt, fd))
+
+                        # Log only when the identity on this track actually
+                        # changes — a periodic re-verify stays silent.
+                        if pt.employee_id != _prev_emp and pt.employee_id is not None:
                             logger.info(
-                                "IDENTITY camera=%s track=%d candidate=%s score=%.3f "
-                                "(%d/%d confirmations — still Person #%d)",
-                                w.camera_id, pt.track_id, fd.get("employee_name"),
-                                float(fd.get("score") or 0.0),
-                                self._pending_ident[pt.track_id][1], _IDENT_CONFIRM,
-                                pt.track_id,
+                                "IDENTITY camera=%s track=%d employee=%s (id=%s) score=%.3f",
+                                w.camera_id, pt.track_id, pt.employee_name,
+                                pt.employee_id, float(fd.get("score") or 0.0),
                             )
-                    # Log only when the identity on this track actually changes —
-                    # a periodic re-verify of the same person stays silent.
-                    if pt.employee_id != _prev_emp and pt.employee_id is not None:
-                        logger.info(
-                            "IDENTITY camera=%s track=%d employee=%s (id=%s) score=%.3f",
-                            w.camera_id, pt.track_id, pt.employee_name,
-                            pt.employee_id, float(fd.get("score") or 0.0),
-                        )
-                    if fd.get("matched") and fd.get("employee_id"):
-                        face_confirmed.append((pt, fd))
+
+                        # ── Attendance decision ─────────────────────────────
+                        if profile.marks_attendance:
+                            decision = attendance_gate.evaluate(
+                                pt,
+                                employee_id=_emp,
+                                matched=bool(fd.get("matched")),
+                                score=float(fd.get("score") or 0.0),
+                                margin=float(fd.get("margin") or 0.0),
+                                profile=profile,
+                            )
+                            _log_decision(
+                                w, pt.track_id, fd, quality, decision,
+                                _emp, bool(fd.get("matched")),
+                            )
+                            # Carry the EMPLOYEE alongside the decision. The
+                            # attendance stage runs after line-crossing state is
+                            # updated and may not be reached on the same tick, and
+                            # `pt.employee_id` can be rebound in between — acting
+                            # on a stale approval against a newly-bound identity
+                            # would write attendance the gate never approved for
+                            # that person.
+                            pt.pending_decision = (decision, _emp)
+                            if decision.reason == "no_match":
+                                unknown_id = unknown_faces.capture(
+                                    camera_id=str(w.camera_id),
+                                    embedding=match_face.get("embedding"),
+                                    quality=quality,
+                                    frame_bgr=frame,
+                                    box=pt.box,
+                                    best_score=fd.get("score"),
+                                    best_margin=fd.get("margin"),
+                                    best_employee_id=fd.get("employee_id"),
+                                )
+                                if unknown_id is not None and not pt.unknown_event_marked:
+                                    unknown_attendance.record(
+                                        camera_id=str(w.camera_id),
+                                        purpose=w.camera_purpose,
+                                        event_time=frame_ist_time,
+                                        track_id=pt.track_id,
+                                        unknown_face_id=unknown_id,
+                                        crop_path=None,
+                                        quality_score=getattr(quality, "score", None),
+                                        match_score=fd.get("score"),
+                                        match_margin=fd.get("margin"),
+                                    )
+                                    pt.unknown_event_marked = True
             if pt.matched:
                 any_match = True
 
@@ -1625,12 +1769,19 @@ class _RecognitionThread(threading.Thread):
             if w.is_monitor:
                 continue
 
-            # (b) Attendance. A recognised person is marked ONCE per track when
-            #     EITHER they cross the doorway line OR their identity is stably
-            #     confirmed — whichever happens first. This makes marking robust
-            #     to a mis-set line and to recognition landing a frame after the
-            #     crossing. Duplicates are still blocked by the per-camera
-            #     cooldown and the IN/OUT presence state machine.
+            # (b) Attendance.
+            #
+            # Line crossing used to be an ALTERNATIVE trigger:
+            #     trigger = pt.crossed or confirmed
+            # so someone walking through the doorway was marked on whatever
+            # identity happened to be bound to their track, with no evidence
+            # requirement at all — the weakest path in the whole system, and the
+            # one most likely to fire, because a crossing is guaranteed while a
+            # good face is not.
+            #
+            # Crossing is now a DIRECTION signal, not an identity signal. The
+            # evidence gate must pass either way; a crossing only removes the
+            # requirement to wait for further observations once it has.
             if fresh:
                 if w.crossing_enabled and check_line_crossing(
                     pt, w.line_orientation, line_px, w.entry_direction
@@ -1643,26 +1794,23 @@ class _RecognitionThread(threading.Thread):
                         pt.track_id, pt.employee_name or "Person",
                     )
 
-                if pt.matched and not pt.attendance_marked:
-                    # Count consecutive recognised frames of the same employee.
-                    if pt.pending_employee_id == pt.employee_id:
-                        pt.confirm_count += 1
-                    else:
-                        pt.pending_employee_id = pt.employee_id
-                        pt.confirm_count = 1
-
-                    confirmed = pt.confirm_count >= _CONFIRM_FRAMES
-                    # If a line is configured, a crossing is required OR a longer
-                    # confirmation as fallback; without a line, confirmation alone.
-                    trigger = pt.crossed or confirmed
-                    if trigger:
-                        pt.attendance_marked = True
-                        logger.info(
-                            "Camera %s [%s]: ATTENDANCE track=%d emp=%s via=%s",
-                            w.camera_id, w.camera_purpose, pt.track_id,
-                            pt.employee_name, "cross" if pt.crossed else "confirm",
+                pending = getattr(pt, "pending_decision", None)
+                if pending is not None:
+                    decision, decided_employee = pending
+                    # Only act while the track still holds the identity the gate
+                    # approved. A rebind between the two stages invalidates the
+                    # approval; dropping it costs at most a few hundred
+                    # milliseconds, since the next tick re-evaluates.
+                    if (
+                        decision.allowed
+                        and decided_employee is not None
+                        and pt.employee_id == decided_employee
+                    ):
+                        _mark_from_track(
+                            w, pt, int(decided_employee), decision,
+                            event_time=frame_ist_time,
                         )
-                        _mark(pt.employee_id, pt)
+                    pt.pending_decision = None
 
         # (a2) Identity anchoring — MONITOR cameras only, and only AFTER the
         #      attendance loop above has run. Gating on `is_monitor` guarantees a
@@ -1824,41 +1972,77 @@ class _RecognitionThread(threading.Thread):
                     skip_recognition = w.frame_skip > 0 and w._frame_counter % (w.frame_skip + 1) != 0
 
                 # Step 3: Identify tracks seen in THIS frame (fresh embedding).
-                # Identification is side-effect free — attendance is only marked
-                # after the same employee is CONFIRMED across _CONFIRM_FRAMES.
+                # Identification is side-effect free — attendance is decided by
+                # services/attendance_gate from the WHOLE track's evidence.
+                profile = w.profile()
                 _match_ms = 0.0
                 if not skip_recognition:
                     for track in tracks:
                         if track.consecutive_misses != 0 or track.face is None:
                             continue
 
-                        # Reuse identity: once a track is confirmed & recorded,
-                        # keep displaying it and stop re-matching (Issue 3). This
-                        # both saves work and prevents identity flicker.
-                        if track.attendance_marked and track.matched:
+                        # A recognised track used to be skipped forever once its
+                        # attendance had been written. That welded the identity
+                        # on: a wrong match owned the box for the rest of the
+                        # track's life, and a tracker ID-switch handed that name
+                        # to whoever inherited it. Keep re-verifying, at a slower
+                        # cadence, so the fused template keeps improving and a
+                        # wrong label can correct itself.
+                        if track.attendance_marked and not track.needs_reverify(
+                            _POST_MARK_REVERIFY_SEC
+                        ):
+                            continue
+
+                        # ── Quality gate ────────────────────────────────────
+                        # The one check that did not exist on this path. Before,
+                        # any detected face — a 16px full profile, a motion-blur
+                        # smear — was folded into the template and could name an
+                        # employee. Pose in particular was unreachable: the value
+                        # it would have read was hardcoded to 0 by a bad
+                        # attribute lookup in face_service.
+                        quality = face_quality.assess(
+                            track.face, rgb, limits=profile.limits,
+                        )
+                        if not quality.ok:
+                            logger.debug(
+                                "QUALITY camera=%s track=%d rejected=%s %s",
+                                w.camera_id, track.track_id, quality.reason,
+                                quality.as_log_fields(),
+                            )
                             continue
 
                         logger.debug(
-                            "STAGE-identify camera=%s track=%d box=%s",
+                            "STAGE-identify camera=%s track=%d box=%s quality=%s",
                             w.camera_id, track.track_id, track.box,
+                            quality.as_log_fields(),
                         )
 
-                        # Accumulate this frame into the track's fused template,
-                        # weighted by face size, then match on the FUSION rather
-                        # than on this one frame.
+                        # Accumulate into the track's fused template, weighted by
+                        # QUALITY (not raw pixel width), then match on the fusion.
                         #
                         # Matching a single frame of a small face is the core
                         # accuracy problem on a fixed ceiling camera: the
-                        # embedding is mostly noise. Averaging the 15-25 frames
-                        # of an approach cuts that noise ~4x, and the size
-                        # weighting means the close-up frames — the only ones
-                        # with real facial detail — dominate.
+                        # embedding is mostly noise. Combining the frames of an
+                        # approach cuts that noise ~sqrt(N), and quality
+                        # weighting means the sharp frontal frames dominate the
+                        # blurred profiles instead of merely the larger ones.
                         match_face = track.face
                         if _EMBEDDING_FUSION:
-                            track.add_observation(
-                                track.face.get("embedding"),
-                                quality=_face_px_width(track.face),
+                            accepted = track.add_observation(
+                                track.face.get("embedding"), quality=quality.score,
                             )
+                            if not accepted:
+                                # The fuser judged this face inconsistent with
+                                # the rest of the track — usually two people
+                                # sharing one track. Do not match on it.
+                                logger.info(
+                                    "FUSION camera=%s track=%d observation rejected "
+                                    "as outlier (accepted=%d rejected=%d) — likely "
+                                    "a track switch",
+                                    w.camera_id, track.track_id,
+                                    track.fuser.accepted, track.fuser.rejected,
+                                )
+                                continue
                             fused = track.fused_embedding()
                             if fused is not None:
                                 match_face = dict(track.face)
@@ -1869,11 +2053,12 @@ class _RecognitionThread(threading.Thread):
                         _t_match0 = time.time()
                         result = recognize_face(
                             match_face,
-                            threshold=w.threshold,
+                            threshold=profile.threshold,
                             source="cctv",
                             camera_id=str(w.camera_id),
                             camera_purpose=w.camera_purpose,
                             mark_attendance=False,
+                            min_margin=profile.margin,
                         )
                         _match_ms += (time.time() - _t_match0) * 1000
                         faces_data = result.get("faces", [])
@@ -1898,54 +2083,57 @@ class _RecognitionThread(threading.Thread):
                                 emp_id, w.camera_id,
                             )
 
-                        # Stable confirmation → mark attendance exactly once.
-                        # (A MONITOR camera in face-mode fallback never marks.)
-                        should_mark = track.register_identification(
-                            emp_id, matched, _CONFIRM_FRAMES
+                        # ── Attendance decision ─────────────────────────────
+                        decision = attendance_gate.evaluate(
+                            track,
+                            employee_id=emp_id,
+                            matched=matched,
+                            score=float(face_data.get("score") or 0.0),
+                            margin=float(face_data.get("margin") or 0.0),
+                            profile=profile,
                         )
-                        if should_mark and not w.is_monitor:
-                            # Per-camera cooldown: covers "lingering in view" and
-                            # "left and came back quickly" (Issue 5). IN and OUT
-                            # are separate workers so they never block each other.
-                            if not w.can_mark_attendance(int(emp_id)):
-                                logger.info(
-                                    "Camera %s [%s]: track=%d %s within cooldown "
-                                    "(%.0fs) -> attendance NOT re-marked",
-                                    w.camera_id, w.camera_purpose, track.track_id,
-                                    track.employee_name, _ATTENDANCE_COOLDOWN,
-                                )
-                            else:
-                                logger.info(
-                                    "Camera %s [%s]: track=%d CONFIRMED %s (id=%s, conf=%.1f%%) "
-                                    "after %d frames -> marking attendance",
-                                    w.camera_id, w.camera_purpose, track.track_id,
-                                    track.employee_name, emp_id,
-                                    track.confidence * 100, track.confirm_count,
-                                )
-                                w.note_attendance_marked(int(emp_id))
-                                w.state.recognition_status = "recognized"
-                                # Off-thread: never block recognition of the next
-                                # person on this employee's DB write.
-                                _submit_attendance(
-                                    int(emp_id),
+                        _log_decision(
+                            w, track.track_id, face_data, quality, decision,
+                            emp_id, matched,
+                        )
+
+                        if decision.allowed and profile.marks_attendance:
+                            _mark_from_track(
+                                w, track, int(emp_id), decision,
+                                event_time=_frame_capture_time(frame_ts),
+                            )
+                        elif (
+                            not matched
+                            and decision.reason == "no_match"
+                            and profile.marks_attendance
+                        ):
+                            # A usable face that nobody in the gallery claims.
+                            # Queued for review instead of discarded — this is
+                            # the only signal that tells us WHICH employees the
+                            # cameras keep failing on. See unknown_faces.
+                            unknown_id = unknown_faces.capture(
+                                camera_id=str(w.camera_id),
+                                embedding=match_face.get("embedding"),
+                                quality=quality,
+                                frame_bgr=frame,
+                                box=track.box,
+                                best_score=face_data.get("score"),
+                                best_margin=face_data.get("margin"),
+                                best_employee_id=face_data.get("employee_id"),
+                            )
+                            if unknown_id is not None and not track.unknown_event_marked:
+                                unknown_attendance.record(
                                     camera_id=str(w.camera_id),
-                                    camera_purpose=w.camera_purpose,
-                                    evidence=track.last_evidence,
+                                    purpose=w.camera_purpose,
                                     event_time=_frame_capture_time(frame_ts),
+                                    track_id=track.track_id,
+                                    unknown_face_id=unknown_id,
+                                    crop_path=None,
+                                    quality_score=getattr(quality, "score", None),
+                                    match_score=face_data.get("score"),
+                                    match_margin=face_data.get("margin"),
                                 )
-                        elif matched:
-                            logger.debug(
-                                "Camera %s: track=%d identified %s confirm=%d/%d",
-                                w.camera_id, track.track_id, track.employee_name,
-                                track.confirm_count, _CONFIRM_FRAMES,
-                            )
-                        else:
-                            logger.debug(
-                                "Camera %s: track=%d REJECTED score=%.4f reason=%s",
-                                w.camera_id, track.track_id,
-                                face_data.get("score", 0.0),
-                                face_data.get("state", "no_match_or_below_threshold"),
-                            )
+                                track.unknown_event_marked = True
 
                     # Multi-face summary — proves EVERY detected face was
                     # evaluated independently this frame (not just the first).
@@ -2112,15 +2300,12 @@ class CameraWorker:
         self.stream_url = source_url  # Keep as stream_url internally for consistency
         self.source_url = source_url  # Database field
         self.source_type = source_type
-        self.camera_purpose = camera_purpose.upper()   # "IN" | "OUT"
-        # Clamp to the safety floor so a stale/misconfigured DB row (e.g. the
-        # legacy 0.05) can never make this camera accept near-random matches.
-        self.threshold = max(float(threshold), _MIN_THRESHOLD)
-        if float(threshold) < _MIN_THRESHOLD:
-            logger.warning(
-                "Camera %s: configured threshold %.3f below floor %.3f — using %.3f",
-                camera_id, float(threshold), _MIN_THRESHOLD, self.threshold,
-            )
+        self.camera_purpose = camera_purpose.upper()   # "IN" | "OUT" | "MONITOR"
+        # `threshold` is retained only for the status payload. The value that
+        # actually gates a match comes from the live profile (with its own floor
+        # and per-camera overrides) so a change takes effect without a restart —
+        # see CameraWorker.profile().
+        self.threshold = float(threshold)
         self.interval_sec = interval_sec
         self.frame_skip = frame_skip
 
@@ -2146,7 +2331,13 @@ class CameraWorker:
         # Attendance cameras (IN/OUT) analyse fast; display-only MONITOR cameras
         # analyse slowly so they don't starve the shared inference lock.
         self.is_monitor = self.camera_purpose == "MONITOR"
-        self.analysis_interval = _MONITOR_ANALYSIS_INTERVAL if self.is_monitor else _ANALYSIS_INTERVAL
+        # From the profile: MONITOR cameras analyse far more slowly so they do
+        # not monopolise the shared inference gate and starve the attendance
+        # cameras. Read once here because track-expiry frame counts below are
+        # derived from it; the recognition loop re-reads the live value each tick.
+        _profile = camera_profile.get_profile(camera_id, self.camera_purpose)
+        self.analysis_interval = _profile.analysis_interval
+        logger.info("Camera %s: profile %s", camera_id, _profile.describe())
         # When True the AI analysis is skipped but the video keeps streaming.
         # Lets an operator drop CPU load without deleting or stopping a camera.
         self.analysis_paused: bool = False
@@ -2268,18 +2459,34 @@ class CameraWorker:
             return 1.0
         return 1.0 / needed
 
+    # ── recognition profile ─────────────────────────────────────────────────
+    def profile(self):
+        """This camera's live recognition profile (thresholds, quality limits,
+        evidence requirements).
+
+        Read every analysis tick rather than cached on the worker, so an
+        administrator changing a threshold in the UI takes effect within seconds
+        without restarting the process — which previously meant dropping every
+        camera's stream to change one number. camera_profile does the caching.
+        """
+        return camera_profile.get_profile(self.camera_id, self.camera_purpose)
+
+    @property
+    def attendance_cooldown(self) -> float:
+        return self.profile().attendance_cooldown
+
     # ── attendance cooldown ─────────────────────────────────────────────────
     def can_mark_attendance(self, employee_id: int) -> bool:
         """True if this employee is outside the per-camera cooldown window."""
         last = self._last_marked.get(employee_id)
-        return last is None or (time.time() - last) >= _ATTENDANCE_COOLDOWN
+        return last is None or (time.time() - last) >= self.attendance_cooldown
 
     def note_attendance_marked(self, employee_id: int) -> None:
         now = time.time()
         self._last_marked[employee_id] = now
         # Bound the dict. It only ever grew, for the process lifetime.
         if len(self._last_marked) > 256:
-            cutoff = now - _ATTENDANCE_COOLDOWN * 4
+            cutoff = now - max(self.attendance_cooldown, _COOLDOWN_HINT) * 4
             self._last_marked = {
                 emp: ts for emp, ts in self._last_marked.items() if ts > cutoff
             }
@@ -2303,7 +2510,7 @@ class CameraWorker:
             from app.services.attendance_event_service import business_date, to_naive_ist
 
             now_ist = get_ist_now()
-            since = now_ist - timedelta(seconds=_ATTENDANCE_COOLDOWN)
+            since = now_ist - timedelta(seconds=self.attendance_cooldown)
             with SessionLocal() as db:
                 rows = (
                     db.query(AttendanceEvent.employee_id, AttendanceEvent.event_time)
@@ -2330,7 +2537,7 @@ class CameraWorker:
             logger.exception(
                 "Camera %s: cooldown warm-up failed (starting with an empty "
                 "cooldown — a duplicate mark is possible in the next %.0fs)",
-                self.camera_id, _ATTENDANCE_COOLDOWN,
+                self.camera_id, _COOLDOWN_HINT,
             )
 
     # ── lifecycle ───────────────────────────────────────────────────────────
@@ -2401,6 +2608,12 @@ class CameraWorker:
 
     def serialize_state(self) -> dict:
         s = self.state
+        # Report what the camera is ACTUALLY running, not the value it was
+        # constructed with. They diverge as soon as an operator edits the
+        # profile, and a status page showing a threshold the camera is not using
+        # is worse than showing none — it is what lets a mis-set camera look
+        # correct on the dashboard.
+        profile = self.profile()
         return {
             "camera_id": self.camera_id,
             "name": self.name,
@@ -2411,7 +2624,12 @@ class CameraWorker:
             "stream_url": _redact_url(self.stream_url),
             "source_type": self.source_type,
             "camera_purpose": self.camera_purpose,
-            "threshold": self.threshold,
+            "threshold": profile.threshold,
+            "match_margin": profile.margin,
+            "min_face_px": profile.limits.min_face_px,
+            "min_observations": profile.min_observations,
+            "marks_attendance": profile.marks_attendance,
+            "profile_summary": profile.describe(),
             "interval_sec": self.interval_sec,
             "status": s.status,
             "last_error": s.last_error,

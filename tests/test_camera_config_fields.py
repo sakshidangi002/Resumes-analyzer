@@ -13,14 +13,23 @@ Pure schema/model comparison: no database, no HTTP client.
 """
 import pytest
 from app.api.routes.cameras import CameraCreateRequest, CameraUpdateRequest
+from app.api.routes.face_review import CameraProfileUpdate
 from app.models.camera import CameraConfig
 
 # Columns the API deliberately does not expose: surrogate key, server-managed
 # timestamps, and the legacy duplicate of camera_purpose.
 NOT_API_WRITABLE = {"id", "created_at", "updated_at", "camera_type"}
 
+# Recognition-profile columns. Settable, but through PUT /cameras/{id}/profile
+# rather than the camera create/update form, and gated to Admin rather than
+# Admin+HR: these decide when a payroll row gets written, and loosening one on
+# an IN/OUT camera is the fastest way to manufacture false attendance. Keeping
+# them off the general camera form is deliberate, so they are checked against
+# their own schema below rather than being exempted from the drift check.
+PROFILE_COLUMNS = set(CameraProfileUpdate.model_fields) - {"threshold"}
+
 MODEL_COLUMNS = {c.name for c in CameraConfig.__table__.columns}
-CONFIGURABLE_COLUMNS = MODEL_COLUMNS - NOT_API_WRITABLE
+CONFIGURABLE_COLUMNS = MODEL_COLUMNS - NOT_API_WRITABLE - PROFILE_COLUMNS
 
 # Tuning knobs that exist to be set per camera. Named explicitly so that
 # deleting one from the schema fails loudly rather than shrinking the test.
@@ -52,6 +61,45 @@ def test_create_schema_covers_every_configurable_column():
     """The whole point: schema and columns must not drift apart."""
     missing = CONFIGURABLE_COLUMNS - set(CameraCreateRequest.model_fields)
     assert not missing, f"columns with no way to set them via the API: {sorted(missing)}"
+
+
+def test_profile_schema_covers_every_recognition_column():
+    """Same drift check for the recognition profile, against its own endpoint.
+
+    A tuning column with no way to set it is exactly as unreachable as the
+    line-crossing fields were before this test existed.
+    """
+    recognition_columns = {
+        name for name in MODEL_COLUMNS
+        if name in set(CameraProfileUpdate.model_fields) or name in PROFILE_COLUMNS
+    }
+    missing = recognition_columns - set(CameraProfileUpdate.model_fields)
+    assert not missing, f"profile columns with no way to set them: {sorted(missing)}"
+
+
+def test_profile_schema_has_no_field_without_a_column():
+    """update_camera_profile setattr()s each provided field onto the model."""
+    extra = set(CameraProfileUpdate.model_fields) - MODEL_COLUMNS
+    assert not extra, f"profile fields with no column: {sorted(extra)}"
+
+
+def test_every_new_profile_column_is_reachable():
+    """Guards the migration-034 columns specifically.
+
+    Named explicitly so that dropping one from the schema fails loudly rather
+    than silently shrinking what an operator can tune.
+    """
+    for field in (
+        "match_margin", "min_face_px", "min_det_score", "max_yaw_deg",
+        "max_pitch_deg", "max_landmark_asym", "min_blur_var",
+        "min_observations", "min_quality", "min_consensus",
+        "analysis_interval", "face_crop_scale", "attendance_cooldown",
+    ):
+        assert field in MODEL_COLUMNS, f"{field} is missing from the cameras table"
+        assert field in CameraProfileUpdate.model_fields, (
+            f"{field} exists as a column and is honoured by the worker, so "
+            f"leaving it out of CameraProfileUpdate makes it unreachable."
+        )
 
 
 def test_create_schema_has_no_field_without_a_column():

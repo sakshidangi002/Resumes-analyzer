@@ -49,6 +49,7 @@ class FaceTrack:
     # snapshot path). Captured at match time — that is the only moment the frame
     # and the match result coexist, since attendance is written asynchronously.
     last_evidence: Optional[dict] = None
+    unknown_event_marked: bool = False
 
     # ── Embedding fusion ────────────────────────────────────────────────────
     # Shared with PersonTrack — see services/embedding_fusion.py.
@@ -113,12 +114,14 @@ class FaceTrack:
         """Check if recognition can be performed (respecting cooldown)."""
         return time.time() - self.last_recognition_time >= self.recognition_cooldown
     
-    def add_observation(self, embedding, quality: float) -> None:
+    def add_observation(self, embedding, quality: float) -> bool:
         """Fold one frame's embedding into this track's fused template.
 
-        `quality` should be the face width in pixels — see EmbeddingFuser.
+        `quality` is the FaceQuality soft score in (0, 1] — NOT a pixel count.
+        Returns False when the fuser rejected it as an outlier (which is how a
+        tracker ID-switch onto a different person is caught).
         """
-        self.fuser.add(embedding, quality)
+        return self.fuser.add(embedding, quality)
 
     def fused_embedding(self) -> Optional[np.ndarray]:
         """Quality-weighted mean embedding for this track, or None."""
@@ -129,7 +132,18 @@ class FaceTrack:
         return self.fuser.observations
 
     @property
+    def consensus(self) -> float:
+        """How much this track's observations agree with each other, in [-1, 1]."""
+        return self.fuser.consensus()
+
+    @property
+    def best_quality(self) -> float:
+        return self.fuser.best_quality
+
+    @property
     def best_face_px(self) -> float:
+        # Retained for backwards compatibility with existing callers/tests. The
+        # underlying value is now a quality score, not a pixel width.
         return self.fuser.best_quality
 
     def update_recognition(
@@ -148,31 +162,25 @@ class FaceTrack:
         self.confidence = confidence
         self.last_recognition_time = time.time()
 
-    def register_identification(
-        self, employee_id: Optional[int], matched: bool, confirm_frames: int
-    ) -> bool:
-        """Track consecutive identifications and decide when to mark attendance.
+    # NOTE: the old `register_identification(emp_id, matched, confirm_frames)`
+    # lived here and returned True as soon as the same employee had been matched
+    # `confirm_frames` times in a row — a value that shipped as 1, so a single
+    # frame wrote attendance. The decision now lives in services/attendance_gate,
+    # which weighs the whole track (observations, quality, self-consensus,
+    # identity agreement) instead of a consecutive-frame counter. See that
+    # module for why the consecutive-frame axis was the wrong one.
 
-        Returns True EXACTLY ONCE per track lifetime — on the frame where the
-        same employee has been confirmed `confirm_frames` times in a row and
-        attendance has not yet been recorded. Any mismatch/unknown frame resets
-        the counter, so a transient wrong match never reaches the threshold.
+    def needs_reverify(self, interval_sec: float) -> bool:
+        """Whether this track should be re-matched.
+
+        A recognised track used to be skipped forever once attendance was
+        recorded (``if track.attendance_marked and track.matched: continue``).
+        That permanently welded an identity onto a track, so a single wrong
+        match owned the box for its entire life and a tracker ID-switch handed
+        that name to whoever inherited the track. Re-verifying periodically lets
+        the fused template keep improving and lets a wrong label correct itself.
         """
-        if not matched or employee_id is None:
-            self.pending_employee_id = None
-            self.confirm_count = 0
-            return False
-
-        if self.pending_employee_id == employee_id:
-            self.confirm_count += 1
-        else:
-            self.pending_employee_id = employee_id
-            self.confirm_count = 1
-
-        if self.confirm_count >= confirm_frames and not self.attendance_marked:
-            self.attendance_marked = True
-            return True
-        return False
+        return (time.time() - self.last_recognition_time) >= interval_sec
 
     def get_display_info(self) -> dict:
         """Get display information for overlay rendering."""
