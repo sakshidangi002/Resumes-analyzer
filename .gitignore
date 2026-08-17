@@ -64,3 +64,6 @@ deploy/
 **/data/policy_attachments/
 **/data/resumes_data.xlsx
 **/chromadb_backup_*/
+
+# graph_engine run artifacts (per-run file backups, not source)
+.graph_engine_runs/
