@@ -2908,6 +2908,43 @@ class CameraManager:
         # pipeline is falling behind the streams (see CameraRuntimeState).
         worst_age = max((w.state.frame_age_ms for w in workers), default=0.0)
 
+        # ── People currently tracked, per camera ────────────────────────────
+        #
+        # This is BODY tracks, not faces: a person with their back to the lens
+        # is counted. That is the whole point -- the face pipeline reports zero
+        # for someone walking away, which is indistinguishable from an empty
+        # room unless the body count is surfaced separately.
+        #
+        # `people_detected` is deliberately NOT called occupancy. These cameras
+        # overlap (the DVR channels cover the same floor), so somebody standing
+        # where two views meet is counted twice. Deduplicating across cameras
+        # needs cross-camera Re-ID, which this does not attempt. It answers
+        # "what is each camera seeing right now", which is the question a single
+        # number burned into one video overlay could never answer across four
+        # feeds.
+        #
+        # `analysis_age_sec` is the honest part: a count is only as current as
+        # the last completed analysis pass. On this hardware a pass costs
+        # seconds, so a stale count must be visibly stale rather than silently
+        # wrong -- that is exactly how a plainly visible person came to read as
+        # "People: 0".
+        now_ts = time.time()
+        by_camera = []
+        for w in workers:
+            updated = float(getattr(w.state, "updated_at", 0.0) or 0.0)
+            by_camera.append({
+                "camera_id": w.camera_id,
+                "name": w.name,
+                "purpose": w.camera_purpose,
+                "people": int(w.state.active_tracks or 0),
+                "body_tracking": bool(w.use_person_tracking),
+                "status": w.state.status,
+                "analysis_age_sec": round(now_ts - updated, 1) if updated else None,
+            })
+        by_camera.sort(key=lambda c: str(c["camera_id"]))
+
+        tracking = [c for c in by_camera if c["body_tracking"]]
+
         stats = {
             "ffmpeg_ok": self._ffmpeg_ok,
             "total_cameras": total,
@@ -2916,6 +2953,11 @@ class CameraManager:
             "total_frames_processed": frames,
             "total_reconnects": reconnects,
             "worst_frame_age_ms": round(worst_age, 1),
+            # Sum over body-tracking cameras only. A face-only camera reporting
+            # 0 would otherwise drag the total down while meaning "not measured".
+            "people_detected": sum(c["people"] for c in tracking),
+            "cameras_body_tracking": len(tracking),
+            "people_by_camera": by_camera,
         }
         try:
             from app.services.inference_gate import get_gate

@@ -820,3 +820,34 @@ export const faceEnrolment = {
   // role check accepts that cookie, so no media token is needed here.
   photoUrl: (employeeId: number) => `/api/employees/${employeeId}/face/photo`,
 };
+
+// ---------------------------------------------------------------------------
+// Live people count
+// ---------------------------------------------------------------------------
+// BODY tracks, not faces: someone with their back to the lens is counted. The
+// face pipeline reports zero for them, which is indistinguishable from an empty
+// room unless the body count is surfaced on its own.
+export type CameraPeopleRow = {
+  camera_id: number | string;
+  name: string;
+  purpose: string;
+  people: number;
+  body_tracking: boolean;
+  status: string;
+  // Seconds since this camera last COMPLETED an analysis pass. A pass costs
+  // seconds on this hardware, so a count can be badly out of date; the UI must
+  // show that rather than present a stale number as current.
+  analysis_age_sec: number | null;
+};
+
+export type PeopleCountReport = {
+  people_detected: number;
+  cameras_body_tracking: number;
+  total_cameras: number;
+  running_cameras: number;
+  people_by_camera: CameraPeopleRow[];
+};
+
+export const peopleCount = {
+  get: () => api.get<PeopleCountReport>("/cameras/stats"),
+};
