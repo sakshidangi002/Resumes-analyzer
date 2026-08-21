@@ -23,7 +23,7 @@ tracker_type: bytetrack
 # 0.36 - 0.67 (they were 0.21 - 0.42 at the old steep angle), so the bar can be
 # raised well above where empty chairs and furniture score. This is what stops the
 # phantom "person" box appearing on an empty chair and being given a name.
-track_high_thresh: 0.30
+track_high_thresh: 0.20
 
 # Stage-2 association: low-score boxes are matched to EXISTING tracks only. This
 # keeps a seated person alive through a frame where their score dips, without
@@ -32,7 +32,44 @@ track_low_thresh: 0.10
 
 # A NEW track needs a stage-1-grade detection. The weakest real person measures
 # 0.36, so 0.30 admits every real person while excluding chairs.
-new_track_thresh: 0.30
+# --- new_track_thresh / track_high_thresh: 0.30 -> 0.20 ---------------------
+#
+# This one number was the difference between "it sees everybody" and "it sees
+# one or two", and it is why detection looked intermittent rather than broken.
+#
+# ByteTrack needs a HIGHER score to CREATE a track than to continue one. A
+# person YOLO has plainly detected is discarded outright if their score is under
+# new_track_thresh - never counted, never boxed, and never available for a face
+# to bind to.
+#
+# MEASURED on .video_samples with yolo11m@640. Real people on this camera score
+# across a wide band, because distance, body angle and occlusion move the score
+# far more than identity does:
+#
+#     sample_0  0.623      sample_2  0.478      sample_3  0.223
+#
+# At 0.30 that band straddles the cutoff, so whether a given person becomes a
+# track is close to a coin flip:
+#
+#     thresh   real people found   false positives on 2 empty frames
+#     0.30     2 / 3               0
+#     0.20     3 / 3               0
+#     0.15     3 / 3               0
+#     0.08     3 / 3               0
+#
+# 0.20 is the STRICTEST value that still catches everyone here; lowering further
+# bought nothing. Kept well above the monitor profile's 0.10 so this stays the
+# tighter of the two.
+#
+# Why loosening this is safe on an attendance camera: a body track cannot mark
+# attendance. Attendance requires a face match that clears services/
+# attendance_gate. A spurious body box costs a wrong number on an overlay; a
+# missed person costs a missed check-in.
+#
+# CAVEAT: five frames, three of them containing people. If false tracks start
+# appearing on empty chairs or bags, raise this back toward 0.30 and re-measure
+# rather than guessing.
+new_track_thresh: 0.20
 
 # Frames a lost track is kept alive. Each "frame" here is one ANALYSIS TICK, not a
 # video frame — at a 2s interval, 60 ticks would coast a stale box (with someone's
