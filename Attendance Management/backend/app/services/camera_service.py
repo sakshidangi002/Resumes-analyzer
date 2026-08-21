@@ -789,7 +789,7 @@ def open_capture_with_timeout(
                 if late is not None:
                     late.release()
             except Exception:
-                pass
+                logger.warning("future.result failed", exc_info=True)
 
         future.add_done_callback(_release_late)
         pool.shutdown(wait=False)
@@ -1200,7 +1200,7 @@ class _StreamThread(threading.Thread):
                     try:
                         cap.release()
                     except Exception:
-                        pass
+                        logger.debug("ignored, non-critical", exc_info=True)
                 cap = None
                 w.state.status = "reconnecting"
                 w.state.reconnect_count += 1
@@ -1237,7 +1237,7 @@ class _StreamThread(threading.Thread):
                     try:
                         cap.release()
                     except Exception:
-                        pass
+                        logger.debug("ignored, non-critical", exc_info=True)
                 cap = None
                 w.state.status = "reconnecting"
                 if consecutive_failures > 3:
@@ -1300,7 +1300,7 @@ class _StreamThread(threading.Thread):
                         try:
                             cap.release()
                         except Exception:
-                            pass
+                            logger.debug("ignored, non-critical", exc_info=True)
                     cap = None
                     w.state.status = "reconnecting"
                     self._stop_evt.wait(reconnect_delay)
@@ -1334,7 +1334,7 @@ class _StreamThread(threading.Thread):
             try:
                 cap.release()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
         logger.info(
             "Camera %s: Stream thread stopped. frames=%d reconnects=%d",
             w.camera_id, w.state.total_frames, w.state.reconnect_count,

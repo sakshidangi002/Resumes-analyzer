@@ -1,5 +1,4 @@
 """HR-managed onboarding checklist per employee."""
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db

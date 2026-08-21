@@ -1,10 +1,9 @@
 """In-app notifications (inbox)."""
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, AppNotification
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.schemas.activity import AppNotificationResponse
 
 router = APIRouter()

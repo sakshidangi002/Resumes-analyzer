@@ -84,9 +84,12 @@ def build_graph() -> StateGraph:
         "test", edges.route_after_test,
         {"pass": "verify", "fail": "failure_analysis"},
     )
+    # `stop` goes to verify, not straight to report: the run is ending either
+    # way, but the report must show criteria computed against the final state.
+    # Verify sees `stop_requested` and routes on to report without looping.
     g.add_conditional_edges(
         "failure_analysis", edges.route_after_failure_analysis,
-        {"fix": "fix", "verify": "verify", "stop": "report"},
+        {"fix": "fix", "verify": "verify", "stop": "verify"},
     )
     g.add_conditional_edges(
         "verify", edges.route_after_verify,

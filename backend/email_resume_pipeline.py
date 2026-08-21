@@ -224,7 +224,7 @@ def _resolve_since_date() -> Optional[str]:
         d = datetime.date.fromisoformat(raw)
         return d.strftime("%d-%b-%Y")
     except ValueError:
-        pass
+        logger.debug("ignored, non-critical", exc_info=True)
     # Assume it is already an IMAP date like 15-Mar-2026.
     return raw
 
@@ -728,7 +728,7 @@ async def import_resumes_from_email(
                     entry_base={"uid": uid, "message_id": msg_id, "subject": subject, "from": sender,
                                 "priority": priority, "confidence": None, "decision": None, "reason": None},
                 )
-            except Exception as exc:
+            except Exception:
                 logger.exception("Email import: Indeed handling failed for %s", msg_id)
                 ind = None
             if ind:
@@ -771,7 +771,7 @@ def _safe_remove(path: str) -> None:
     try:
         os.remove(path)
     except Exception:
-        pass
+        logger.debug("ignored, non-critical", exc_info=True)
 
 
 def make_shim_request(executor: Any = None) -> Any:

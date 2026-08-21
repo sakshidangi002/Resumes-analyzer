@@ -37,6 +37,9 @@ class FakeRepo:
             return [f for f in self._files if f.startswith("tests/")]
         return [f for f in self._files if not f.startswith("tests/")]
 
+    def list_source_files(self, scope=None, suffixes=None):
+        return self.list_python_files(scope)
+
     def read(self, rel):
         return self._contents.get(rel, "")
 
@@ -101,6 +104,25 @@ def test_review_sorts_high_severity_first(monkeypatch):
     assert [f["severity"] for f in out["review_findings"]][:2] == ["high", "medium"]
 
 
+def test_review_counts_ast_findings_without_going_negative(monkeypatch):
+    """Deriving the AST count from `len(findings) - ruff_count` went negative
+    once dedupe removed more overlaps than the AST checks contributed."""
+    duplicate = {"file": "pkg/a.py", "line": 1, "code": "GE001", "severity": "low",
+                 "problem": "dup", "source": "ruff", "ruff_fixable": False}
+    monkeypatch.setattr(
+        "graph_engine.nodes.review.linters.run_ruff",
+        lambda *a, **k: [duplicate, {**duplicate, "line": 2}, {**duplicate, "line": 3}],
+    )
+    # The AST check reports the same (file, line, code) as the first ruff finding.
+    repo = FakeRepo(files=["pkg/a.py"], contents={"pkg/a.py": "if x == None:\n    pass\n"})
+    out = review({}, _ctx(repo))
+
+    assert out["_trace"]["ast_findings"] >= 0
+    assert out["_trace"]["ruff_findings"] == 3
+    assert out["_trace"]["deduped"] >= 0
+    assert len(out["review_findings"]) == 3 + out["_trace"]["ast_findings"] - out["_trace"]["deduped"]
+
+
 def test_review_handles_an_empty_scope(monkeypatch):
     monkeypatch.setattr("graph_engine.nodes.review.linters.run_ruff", lambda *a, **k: [])
     out = review({}, _ctx(FakeRepo(files=[])))
@@ -140,6 +162,60 @@ def test_plain_none_comparison_is_a_real_auto_fixable_bug():
     assert out["bugs"][0]["fix_strategy"] == "none_comparison"
 
 
+_B008_MSG = ("Do not perform function call `{}` in argument defaults; instead, "
+             "perform the call within the function, or read the default from a "
+             "module-level singleton variable")
+
+
+@pytest.mark.parametrize("callable_name", ["Depends", "Query", "Path", "Body", "Security"])
+def test_fastapi_argument_default_calls_are_dismissed(callable_name):
+    """B008 fires on every FastAPI route. Rewriting those would break the app."""
+    out = bug_analysis(
+        {"review_findings": [_finding(code="B008", problem=_B008_MSG.format(callable_name))]},
+        _ctx(),
+    )
+    assert out["bugs"] == []
+    assert "FastAPI" in out["dismissed"][0]["dismiss_reason"]
+
+
+@pytest.mark.parametrize("code", ["B033", "F541", "B007", "B905", "F401"])
+def test_codes_with_a_verified_ruff_fix_are_auto_fixable(code):
+    out = bug_analysis({"review_findings": [_finding(code=code)]}, _ctx())
+    assert out["bugs"][0]["auto_fixable"] is True
+    assert out["bugs"][0]["fix_strategy"] == "ruff_fix"
+
+
+def test_b904_is_fixable_only_as_from_e_never_as_from_none():
+    """`from e` preserves the cause and is mechanical. `from None` deliberately
+    hides it, so that spelling is never inferred -- the strategy has no branch
+    that can produce it."""
+    out = bug_analysis({"review_findings": [_finding(code="B904")]}, _ctx())
+    assert out["bugs"][0]["fix_strategy"] == "raise_from"
+
+    # Behavioural proof: the only cause it can emit is the handler's bound name.
+    plan = ast_checks.raise_from_plan(_RAISE_BOUND, 4)
+    assert plan["provable"] is True and plan["name"] == "exc"
+
+
+def test_this_apps_own_dependency_factory_is_dismissed():
+    """require_roles() is used exactly like Depends() in every HRM route."""
+    out = bug_analysis(
+        {"review_findings": [_finding(code="B008", problem=_B008_MSG.format("require_roles"))]},
+        _ctx(),
+    )
+    assert out["bugs"] == []
+
+
+def test_a_genuine_mutable_default_call_is_not_dismissed():
+    """B008 on a real offender must survive triage."""
+    out = bug_analysis(
+        {"review_findings": [_finding(code="B008", problem=_B008_MSG.format("time.time"))]},
+        _ctx(),
+    )
+    assert len(out["bugs"]) == 1
+    assert out["dismissed"] == []
+
+
 def test_unused_import_in_package_init_is_dismissed_as_a_reexport():
     out = bug_analysis({"review_findings": [_finding(file="pkg/__init__.py")]}, _ctx())
     assert out["bugs"] == []
@@ -151,11 +227,27 @@ def test_unused_import_in_package_init_is_dismissed_as_a_reexport():
     ["app/services/payroll_service.py", "app/core/security.py",
      "app/api/deps.py", "app/services/attendance_service.py"],
 )
-def test_findings_in_sensitive_areas_are_never_auto_fixable(path):
-    out = bug_analysis({"review_findings": [_finding(file=path)]}, _ctx())
+def test_behaviour_changing_fixes_in_sensitive_areas_are_refused(path):
+    """A fix that could alter runtime behaviour never runs in payroll/auth code."""
+    out = bug_analysis(
+        {"review_findings": [_finding(file=path, code=ast_checks.CMP_NONE,
+                                      in_query_context=False)]},
+        _ctx(),
+    )
     bug = out["bugs"][0]
     assert bug["auto_fixable"] is False
     assert "sensitive" in bug["not_fixable_reason"]
+
+
+@pytest.mark.parametrize("code", ["F401", "F541", "B033"])
+def test_import_hygiene_is_allowed_even_in_sensitive_areas(code):
+    """Removing an unused import cannot change behaviour, so the sensitive-area
+    guard would only leave dead code lying around in the files that matter most."""
+    out = bug_analysis(
+        {"review_findings": [_finding(file="app/services/payroll_service.py", code=code)]},
+        _ctx(),
+    )
+    assert out["bugs"][0]["auto_fixable"] is True
 
 
 def test_findings_without_a_strategy_are_reported_but_not_fixable():
@@ -238,6 +330,42 @@ def test_fix_rejects_a_patch_that_does_not_parse(monkeypatch):
 
     assert repo.written == {}
     assert "invalid syntax" in out["fixes"][0]["reason"]
+
+
+def test_a_whole_file_ruff_fix_resolves_its_siblings(monkeypatch):
+    """`ruff --fix` rewrites the whole file, removing every instance of the rule.
+    The other findings in that file are fixed, not failed."""
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    monkeypatch.setattr(
+        "graph_engine.nodes.fix._STRATEGIES",
+        {"ruff_fix": lambda source, bug, ctx: "import sys\n"},
+    )
+    bugs = [
+        _bug(line=2, code="F401", fix_strategy="ruff_fix"),
+        _bug(line=7, code="F401", fix_strategy="ruff_fix"),   # same file, same rule
+    ]
+    repo = FakeRepo(contents={"pkg/a.py": "import os\nimport sys\n"})
+    out = fix({"bugs": bugs, "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    assert all(f["applied"] for f in out["fixes"]), "the sibling was fixed too"
+    assert not any(f["outcome"] == "error" for f in out["fixes"])
+    assert "whole-file" in out["fixes"][1]["reason"]
+    assert out["fix_budget"] == 2, "one write, one unit of budget"
+
+
+def test_no_available_fix_is_a_decline_not_an_engine_error(monkeypatch):
+    from graph_engine.nodes.fix import FixUnavailable
+
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    def _none_available(source, bug, ctx):
+        raise FixUnavailable("ruff has no remaining F401 fix for this file")
+    monkeypatch.setattr("graph_engine.nodes.fix._STRATEGIES", {"ruff_fix": _none_available})
+
+    out = fix(
+        {"bugs": [_bug(code="F401", fix_strategy="ruff_fix")], "fix_budget": 3},
+        _ctx(FakeRepo(contents={"pkg/a.py": "x = 1\n"}), apply_fixes=True),
+    )
+    assert out["fixes"][0]["outcome"] == "declined"
 
 
 def test_fix_increments_the_iteration_counter(monkeypatch):
@@ -333,6 +461,33 @@ def test_a_timeout_is_classified_as_a_timeout():
     assert failure_analysis(state, _ctx())["failure_analysis"]["failure_type"] == TIMEOUT
 
 
+def test_a_repeated_pre_existing_failure_is_still_ignored():
+    """A pre-existing failure fails on EVERY test run, so its signature always
+    repeats. Letting the repetition check win meant a benign, correctly
+    diagnosed failure killed the run on the second pass."""
+    failures = [("tests/test_seat.py::test_default", "assert False is True")]
+    sig = signature([{"nodeid": n, "message": m} for n, m in failures])
+    state = {
+        "test_results": _result(ok=False, failures=failures),
+        "baseline_failures": ["tests/test_seat.py::test_default"],
+        "changed_files": ["pkg/a.py"],
+        "failure_history": [sig],          # already seen this run
+    }
+    out = failure_analysis(state, _ctx())
+    assert out["failure_analysis"]["failure_type"] == PRE_EXISTING
+    assert out["failure_analysis"]["next_action"] == "ignore"
+    assert out["stop_requested"] is False
+
+
+def test_stop_requested_is_set_only_when_the_run_ends():
+    state = {
+        "test_results": _result(ok=False, failures=[("tests/t.py::x", "")],
+                                tail="ModuleNotFoundError: No module named 'x'"),
+        "baseline_failures": [], "changed_files": [],
+    }
+    assert failure_analysis(state, _ctx())["stop_requested"] is True
+
+
 def test_a_repeated_failure_signature_stops_the_loop():
     failures = [("pkg/a.py::test_thing", "AssertionError")]
     sig = signature([{"nodeid": n, "message": m} for n, m in failures])
@@ -364,6 +519,30 @@ def test_verification_requires_that_something_was_actually_reviewed():
     assert out["verification"]["goal_achieved"] is False
     assert any(c["name"] == "scope_reviewed" and not c["ok"]
                for c in out["verification"]["criteria"])
+
+
+def test_findings_already_fixed_still_count_as_accounted_for():
+    """bug_analysis drops fixed bugs so it does not re-propose them, so they sit
+    in neither `bugs` nor `dismissed`. They are still accounted for."""
+    finding = _finding(file="pkg/a.py", line=3, code="F401")
+    state = _verifiable(
+        review_findings=[finding],
+        bugs=[], dismissed=[],
+        fixes=[{"file": "pkg/a.py", "line": 3, "code": "F401",
+                "applied": True, "outcome": "applied", "reason": "applied ruff_fix"}],
+        changed_files=["pkg/a.py"],
+        test_results={**_result(ok=True), "stage": "regression"},
+    )
+    out = verify(state, _ctx())
+    criterion = next(c for c in out["verification"]["criteria"] if c["name"] == "findings_triaged")
+    assert criterion["ok"] is True
+
+
+def test_a_finding_that_vanished_without_explanation_fails_verification():
+    state = _verifiable(review_findings=[_finding(line=99)], bugs=[], dismissed=[], fixes=[])
+    out = verify(state, _ctx())
+    criterion = next(c for c in out["verification"]["criteria"] if c["name"] == "findings_triaged")
+    assert criterion["ok"] is False
 
 
 def test_green_tests_alone_do_not_verify_the_goal():
@@ -429,3 +608,220 @@ def test_report_records_a_repeated_failure_stop():
 def test_report_records_an_unfixable_stop():
     out = report({"failure_analysis": {"repeated": False, "next_action": "stop"}}, _ctx())
     assert out["stop_reason"] == "failure_not_auto_fixable"
+
+
+def test_a_closure_called_in_place_is_dismissed_not_flagged():
+    """B023 only matters when the closure outlives its iteration."""
+    source = (
+        "for item in items:\n"
+        "    def build():\n"
+        "        return item\n"
+        "    record = build()\n"
+    )
+    ctx = _ctx(FakeRepo(contents={"pkg/a.py": source}))
+    out = bug_analysis({"review_findings": [_finding(code="B023", line=3)]}, ctx)
+
+    assert out["bugs"] == []
+    assert "late binding never occurs" in out["dismissed"][0]["dismiss_reason"]
+
+
+def test_a_closure_that_escapes_the_loop_stays_a_bug():
+    source = (
+        "handlers = []\n"
+        "for item in items:\n"
+        "    def build():\n"
+        "        return item\n"
+        "    handlers.append(build)\n"
+    )
+    ctx = _ctx(FakeRepo(contents={"pkg/a.py": source}))
+    out = bug_analysis({"review_findings": [_finding(code="B023", line=4)]}, ctx)
+
+    assert len(out["bugs"]) == 1
+    assert out["dismissed"] == []
+
+
+_BEST_EFFORT_SRC = (
+    "import logging\n"
+    "logger = logging.getLogger(__name__)\n"
+    "def f(h):\n"
+    "    try:\n"
+    "        h.close()\n"
+    "    except OSError:\n"
+    "        pass\n"
+)
+_UNPROVEN_SRC = (
+    "import logging\n"
+    "logger = logging.getLogger(__name__)\n"
+    "def g():\n"
+    "    try:\n"
+    "        compute_salary()\n"
+    "    except ValueError:\n"
+    "        pass\n"
+)
+_NO_LOGGER_SRC = "def f(h):\n    try:\n        h.close()\n    except OSError:\n        pass\n"
+
+
+def test_provable_best_effort_handler_is_auto_fixable():
+    ctx = _ctx(FakeRepo(contents={"pkg/a.py": _BEST_EFFORT_SRC}))
+    out = bug_analysis({"review_findings": [_finding(code=ast_checks.EXCEPT_PASS, line=6)]}, ctx)
+    assert out["bugs"][0]["auto_fixable"] is True
+    assert out["bugs"][0]["fix_strategy"] == "except_pass_logging"
+
+
+def test_except_pass_fix_only_adds_logging_and_keeps_control_flow(monkeypatch):
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    repo = FakeRepo(contents={"pkg/a.py": _BEST_EFFORT_SRC})
+    bug = _bug(line=6, code=ast_checks.EXCEPT_PASS, fix_strategy="except_pass_logging")
+    out = fix({"bugs": [bug], "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    written = repo.written["pkg/a.py"]
+    assert out["fixes"][0]["applied"] is True
+    assert "logger.debug(" in written and "exc_info=True" in written
+    assert "        pass\n" not in written
+    # The handler still swallows the exception: no raise, no re-raise introduced.
+    assert "raise" not in written
+    assert written.count("except OSError:") == 1
+
+
+_PARSE_FALLBACK_SRC = (
+    "import logging\n"
+    "logger = logging.getLogger(__name__)\n"
+    "def f(s):\n"
+    "    try:\n"
+    "        dt = datetime.fromisoformat(s)\n"
+    "    except ValueError:\n"
+    "        pass\n"
+)
+_SESSION_TEARDOWN_SRC = (
+    "import logging\n"
+    "logger = logging.getLogger(__name__)\n"
+    "def f(c):\n"
+    "    try:\n"
+    "        c.logout()\n"
+    "    except Exception:\n"
+    "        pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "source,label",
+    [(_PARSE_FALLBACK_SRC, "parse fallback"), (_SESSION_TEARDOWN_SRC, "session teardown")],
+)
+def test_provable_best_effort_shapes_are_auto_fixable(source, label):
+    ctx = _ctx(FakeRepo(contents={"pkg/a.py": source}))
+    out = bug_analysis({"review_findings": [_finding(code=ast_checks.EXCEPT_PASS, line=6)]}, ctx)
+    assert out["bugs"][0]["auto_fixable"] is True, label
+
+
+def test_unproven_handler_gets_an_honest_warning_not_a_debug_lie(monkeypatch):
+    """Calling a swallowed worker-thread crash "non-critical" would be false."""
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    source = (
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def f(fut):\n"
+        "    try:\n"
+        "        late = fut.result()\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    repo = FakeRepo(contents={"pkg/a.py": source})
+    bug = _bug(line=6, code=ast_checks.EXCEPT_PASS, fix_strategy="except_pass_logging")
+    out = fix({"bugs": [bug], "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    written = repo.written["pkg/a.py"]
+    assert out["fixes"][0]["applied"] is True
+    assert 'logger.warning("fut.result failed", exc_info=True)' in written
+    assert "non-critical" not in written
+    assert "raise" not in written and "return" not in written
+
+
+def test_a_module_without_a_logger_gets_one_injected(monkeypatch):
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    source = (
+        '"""Doc."""\n'
+        "import os\n"
+        "def f(p):\n"
+        "    try:\n"
+        "        os.unlink(p)\n"
+        "    except OSError:\n"
+        "        pass\n"
+    )
+    repo = FakeRepo(contents={"pkg/a.py": source})
+    bug = _bug(line=6, code=ast_checks.EXCEPT_PASS, fix_strategy="except_pass_logging")
+    out = fix({"bugs": [bug], "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    written = repo.written["pkg/a.py"]
+    assert out["fixes"][0]["applied"] is True
+    assert "import logging" in written
+    assert "logger = logging.getLogger(__name__)" in written
+    assert written.index("import logging") > written.index('"""Doc."""')
+    assert "        pass\n" not in written
+
+
+def test_float_parse_is_a_proven_fallback_but_round_is_not():
+    """float() as validation means "not a number"; round() failing means something
+    else, so it must not inherit the parse-fallback exemption."""
+    base = ("import logging\n"
+            "logger = logging.getLogger(__name__)\n"
+            "def f(x):\n"
+            "    try:\n"
+            "        return {call}\n"
+            "    except ValueError:\n"
+            "        pass\n")
+    ctx_float = _ctx(FakeRepo(contents={"pkg/a.py": base.format(call="float(x)")}))
+    ctx_round = _ctx(FakeRepo(contents={"pkg/a.py": base.format(call="round(x, 2)")}))
+    finding = _finding(code=ast_checks.EXCEPT_PASS, line=6)
+
+    assert ast_checks.except_pass_intent(
+        ctx_float.repo.read("pkg/a.py"), 6)["provable"] is True
+    assert ast_checks.except_pass_intent(
+        ctx_round.repo.read("pkg/a.py"), 6)["provable"] is False
+    # Both are still fixable -- round just gets the honest warning, not debug.
+    assert bug_analysis({"review_findings": [finding]}, ctx_round)["bugs"][0]["auto_fixable"]
+
+
+def test_a_missing_logger_does_not_mask_a_best_effort_proof():
+    """Regression: the no-logger check used to return before the proof ran, so
+    `sftp.close()` in a logger-less module was labelled an unproven fault."""
+    source = ("import os\n"
+              "def f(c):\n"
+              "    try:\n"
+              "        c.close()\n"
+              "    except Exception:\n"
+              "        pass\n")
+    intent = ast_checks.except_pass_intent(source, 5)
+    assert intent["provable"] is True
+    assert intent["logger_name"] is None, "still reports that a logger must be injected"
+
+
+_RAISE_BOUND = ("def f():\n    try:\n        g()\n"
+                "    except ValueError as exc:\n        raise RuntimeError('bad')\n")
+_RAISE_UNBOUND = ("def f():\n    try:\n        g()\n"
+                  "    except ValueError:\n        raise RuntimeError('bad')\n")
+
+
+def test_raise_from_chains_to_the_bound_exception(monkeypatch):
+    """Sets __cause__ only: same exception, same control flow, better traceback."""
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    repo = FakeRepo(contents={"pkg/a.py": _RAISE_BOUND})
+    bug = _bug(line=4, code="B904", fix_strategy="raise_from")
+    out = fix({"bugs": [bug], "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    written = repo.written["pkg/a.py"]
+    assert out["fixes"][0]["applied"] is True
+    assert "raise RuntimeError('bad') from exc" in written
+    assert "from None" not in written, "suppressing the cause is never inferred"
+    assert written.count("raise") == 1
+
+
+def test_raise_from_declines_when_the_handler_binds_no_name(monkeypatch):
+    """Without `as e` there is nothing to chain, so the site stays manual."""
+    monkeypatch.setattr("graph_engine.nodes.fix.git_tools.dirty_files", lambda root: {})
+    repo = FakeRepo(contents={"pkg/a.py": _RAISE_UNBOUND})
+    bug = _bug(line=4, code="B904", fix_strategy="raise_from")
+    out = fix({"bugs": [bug], "fix_budget": 3}, _ctx(repo, apply_fixes=True))
+
+    assert repo.written == {}
+    assert out["fixes"][0]["outcome"] == "declined"
+    assert "does not bind" in out["fixes"][0]["reason"]

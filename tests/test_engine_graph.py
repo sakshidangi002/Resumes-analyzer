@@ -13,7 +13,6 @@ from graph_engine.state import (
     STOP_REPEATED_FAILURE,
     STOP_UNSAFE,
 )
-from graph_engine.tools import ast_checks
 
 CLEAN = "value = 1\n"
 ONE_BUG = "value = 1\nif value == None:\n    pass\n"
@@ -29,6 +28,9 @@ class FakeRepo:
             # `test_widget` matches a change to `widget.py`; `test_other` does not.
             return ["tests/test_widget.py", "tests/test_other.py"]
         return [p for p in self._contents if not p.startswith("tests/")]
+
+    def list_source_files(self, scope=None, suffixes=None):
+        return self.list_python_files(scope)
 
     def read(self, rel):
         return self._contents[rel]
@@ -172,6 +174,44 @@ def test_a_pre_existing_failure_is_ignored_and_the_run_still_succeeds():
     assert result["failure_analysis"]["next_action"] == "ignore"
     assert result["status"] == "done"
     assert any("pre-existing" in c for c in result["verification"]["caveats"])
+
+
+def test_a_pre_existing_failure_surviving_two_test_runs_does_not_stop_the_run():
+    """Regression: a pre-existing failure repeats by definition, and used to end
+    the run with stop_reason=repeated_failure on the second pass."""
+    failing = [("tests/test_seat.py::test_default", "assert False is True")]
+    tests = FakeTests(
+        _tests(ok=False, failures=failing),   # baseline
+        _tests(ok=False, failures=failing),   # first pass
+        _tests(ok=False, failures=failing),   # second pass, identical
+    )
+    many = "\n".join(f"if v{i} == None:\n    pass" for i in range(8))
+    result, _ = _run({"graph_engine/mod.py": many}, tests=tests,
+                     apply_fixes=True, fix_budget=8)
+
+    assert result["stop_reason"] != STOP_REPEATED_FAILURE
+    assert result["failure_analysis"]["failure_type"] == "pre_existing"
+    assert result["failure_analysis"]["next_action"] == "ignore"
+
+
+def test_a_stopping_run_still_verifies_against_final_state():
+    """The stop path routes through verify, so the reported criteria are not
+    stale figures from an earlier pass."""
+    tests = FakeTests(
+        _tests(ok=True),
+        _tests(ok=False, failures=[("tests/t.py::x", "")],
+               tail="ModuleNotFoundError: No module named 'onnxruntime'"),
+    )
+    result, _ = _run({"graph_engine/mod.py": ONE_BUG}, tests=tests, apply_fixes=True)
+
+    visited = _nodes(result)
+    assert visited.index("verify") > visited.index("failure_analysis")
+    assert visited[-1] == "report"
+    # The criteria were computed after the fix, so they see the changed file.
+    changed_criterion = next(
+        c for c in result["verification"]["criteria"] if c["name"] == "no_collateral_damage"
+    )
+    assert str(len(result["changed_files"])) in changed_criterion["evidence"]
 
 
 def test_an_environment_failure_stops_instead_of_looping():

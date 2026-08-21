@@ -18,7 +18,7 @@ from app.schemas.attendance import (
     AttendanceDetailsResponse,
     DailyAttendanceReportRow,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.attendance_service import (
     sign_in,
     sign_out,
@@ -33,7 +33,6 @@ from app.services.attendance_event_service import (
     recalculate_attendance_summary,
     calculate_intervals_from_events,
     count_attendance_events,
-    format_duration,
     sync_manual_boundary_event,
 )
 
@@ -136,8 +135,15 @@ def auto_mark_attendance(
     if sign_in_time is not None:
         rec.sign_in_time = sign_in_time
         rec.is_late = False
+        # Publish the manual boundary to the event timeline. Without this the
+        # camera state machine sees no events, reads the employee as ABSENT and
+        # records the next recognition as another CHECK_IN instead of the
+        # BREAK_OUT/BREAK_IN it actually is -- which is why break counts stayed
+        # at 0 for a manually checked-in employee.
+        sync_manual_boundary_event(db, data.employee_id, data.date, "IN", sign_in_time)
     if sign_out_time is not None:
         rec.sign_out_time = sign_out_time
+        sync_manual_boundary_event(db, data.employee_id, data.date, "OUT", sign_out_time)
 
     if sign_in_time is not None and sign_out_time is None:
         rec.total_work_hours = None
@@ -775,7 +781,6 @@ def get_monthly_attendance_summary(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     from calendar import monthrange
-    from datetime import timedelta
 
     first_day = date(year, month, 1)
     last_day = date(year, month, monthrange(year, month)[1])
@@ -885,8 +890,14 @@ def approve_correction_request(
         rec = get_or_create_attendance(db, req.employee_id, req.attendance_date)
         if req.requested_sign_in_time:
             rec.sign_in_time = req.requested_sign_in_time
+            sync_manual_boundary_event(
+                db, req.employee_id, req.attendance_date, "IN", req.requested_sign_in_time,
+            )
         if req.requested_sign_out_time:
             rec.sign_out_time = req.requested_sign_out_time
+            sync_manual_boundary_event(
+                db, req.employee_id, req.attendance_date, "OUT", req.requested_sign_out_time,
+            )
         rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
         if req.requested_status:
             rec.status = req.requested_status

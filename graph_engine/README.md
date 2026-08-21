@@ -11,7 +11,24 @@ review -> bug analysis -> fix -> test -> verify
                     failure analysis <- (tests failed)
 ```
 
-## Quick start
+## Using it from Claude Code
+
+`/graph <goal> [--scope PATH ...] [--all] [--apply] [--budget N]`
+
+Defined in [.claude/commands/graph.md](../.claude/commands/graph.md). The command
+exists to enforce a rule: **the graph does the work, Claude orchestrates and
+reports it.** It forbids hand-editing application code to satisfy the goal, and
+requires the reported numbers to be the engine's own.
+
+```
+/graph find correctness defects --all
+/graph clean up unused imports in the HRM routes --scope "Attendance Management/backend/app/api/routes" --apply
+/graph fix everything mechanically safe across the app --all --apply --budget 80
+```
+
+Read-only unless `--apply` is given.
+
+## Quick start (plain CLI)
 
 ```bash
 # Whole application, read-only. 203 files in ~2s.

@@ -6,7 +6,7 @@ Visibility:
 - A SUBMITTED DSR cannot be edited or deleted by its owner (only Admin/HR).
 """
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import extract
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import require_roles
 from app.db.session import get_db
-from app.models import DailyStatusReport, Employee, User
+from app.models import DailyStatusReport, User
 from app.schemas.dsr import DSRCreate, DSRResponse, DSRSummary, DSRUpdate
 from app.services.notification_service import (
     create_notification,

@@ -1,7 +1,6 @@
-﻿"""
+"""
 Application configuration. Database is PostgreSQL; email uses simple SMTP.
 """
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv

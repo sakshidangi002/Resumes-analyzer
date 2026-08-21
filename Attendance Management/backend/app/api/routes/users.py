@@ -7,7 +7,7 @@ from app.core.security import get_password_hash
 from app.models import User
 from app.models.user import Role, user_roles
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, UserWithRoles
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.audit_service import log_audit
 
 router = APIRouter()

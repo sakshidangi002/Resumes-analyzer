@@ -13,7 +13,7 @@ from app.schemas.leave import (
     LeaveApprovalRow,
     PaidLeaveSummaryResponse,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.leave_service import (
     get_current_financial_year,
     get_leave_balance,
@@ -30,7 +30,7 @@ from app.services.notification_service import notify_user_for_employee, notify_u
 from app.services.email_service import send_notification
 from app.core.config import get_settings
 from decimal import Decimal
-from datetime import date as _date, timedelta
+from datetime import date as _date
 import logging
 
 logger = logging.getLogger(__name__)
@@ -433,7 +433,7 @@ def create_allocation(
     try:
         return allocate_leave_for_fy(db, employee_id, fy.id, leave_type_id, allocated_days)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/requests", response_model=LeaveRequestResponse)
@@ -500,7 +500,7 @@ def create_leave_request(
         )
         return req
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/requests", response_model=list[LeaveRequestResponse])
@@ -688,7 +688,7 @@ def approve_reject_leave(
         )
         return req
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/requests/{request_id}")
@@ -717,7 +717,6 @@ def delete_leave_request(
 
     if req.status == "APPROVED":
         from app.models.attendance import AttendanceRecord
-        from datetime import timedelta
         
         # 1. Revert allocation
         lt = db.query(LeaveType).filter(LeaveType.id == req.leave_type_id).first()

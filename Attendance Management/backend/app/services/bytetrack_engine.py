@@ -117,7 +117,7 @@ def _cap_threads() -> None:
         import torch  # noqa
         torch.set_num_threads(per)
     except Exception:
-        pass
+        logger.warning("torch.set_num_threads failed", exc_info=True)
     logger.info(
         "Person inference: max_concurrent=%d threads_per_session=%d (cores=%s)",
         _MAX_CONCURRENT, per, os.cpu_count(),

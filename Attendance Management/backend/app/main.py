@@ -92,7 +92,7 @@ def _configure_logging() -> None:
         handlers.append(file_handler)
     except Exception:  # pragma: no cover - read-only FS, permissions, etc.
         # Never let logging setup stop the app from booting; console still works.
-        pass
+        logger.debug("ignored, non-critical", exc_info=True)
 
     handlers.append(logging.StreamHandler())
     for handler in handlers:
@@ -166,7 +166,7 @@ class Utf8StaticFiles(StaticFiles):
             ):
                 response.headers["content-type"] = f"{base}; charset=utf-8"
         except Exception:
-            pass
+            logger.warning("get failed", exc_info=True)
         return response
 
 def _warn_on_weak_secret_key() -> None:
@@ -266,7 +266,7 @@ def _dsr_reminder_tick():
         try:
             db.close()
         except Exception:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
 
 
 async def _attendance_closeout_tick() -> None:

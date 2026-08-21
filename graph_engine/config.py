@@ -49,6 +49,7 @@ PROTECTED_PATH_PARTS = frozenset({
 ALL_SCOPES: tuple[str, ...] = (
     "Attendance Management/backend/app",   # HRM backend  (~121 files)
     "backend",                             # Resume Analyzer (~14 files)
+    "Attendance Management/frontend/src",  # React/TypeScript UI (~59 files)
     "graph_engine",                        # this engine  (~24 files)
     "services",
     "scripts",
@@ -82,6 +83,11 @@ class EngineConfig:
 
     max_iterations: int = MAX_ITERATIONS
     fix_budget: int = DEFAULT_FIX_BUDGET
+    #: Fixes attempted per pass before running the tests. Small values make a
+    #: failing test attributable to a specific change; large values trade that
+    #: attribution for far fewer test cycles, which is the right call for a
+    #: whole-application sweep of mechanical fixes.
+    fixes_per_pass: int = 4
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     test_timeout_seconds: float = DEFAULT_TEST_TIMEOUT_SECONDS
 

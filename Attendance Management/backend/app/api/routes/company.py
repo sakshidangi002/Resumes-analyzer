@@ -2,8 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models import User, CompanyConfig, FinancialYear, Holiday
-from app.api.deps import get_current_user, require_roles
+from app.models import CompanyConfig, FinancialYear, Holiday
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date

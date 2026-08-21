@@ -364,7 +364,7 @@ def fetch_new_emails(
                     if names:
                         available.append(names[-1])
             except Exception:
-                pass
+                logger.warning("client.list failed", exc_info=True)
             raise RuntimeError(
                 f"Mailbox/label {cfg.mailbox!r} does not exist on the server. "
                 f"Create it in Gmail (or set IMAP_MAILBOX to an existing one). "
@@ -448,7 +448,7 @@ def fetch_new_emails(
                 try:
                     client.uid("STORE", uid, "+FLAGS", r"(\Seen)")
                 except Exception:
-                    pass
+                    logger.warning("client.uid failed", exc_info=True)
 
         return {
             "mailbox": cfg.mailbox,
@@ -463,7 +463,7 @@ def fetch_new_emails(
             if client is not None:
                 client.logout()
         except Exception:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
 
 
 def fetch_resumes_via_imap(
@@ -595,5 +595,5 @@ def fetch_resumes_via_imap(
             if client is not None:
                 client.logout()
         except Exception:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
 

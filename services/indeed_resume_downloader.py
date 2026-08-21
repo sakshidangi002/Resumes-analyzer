@@ -92,7 +92,7 @@ def normalize_indeed_resume_url(url: str) -> Optional[str]:
         # Ensure correct endpoint
         final = re.sub(r"/candidates/view(\b|/|\?)", r"/candidates/resume\1", final, flags=re.I)
     except Exception:
-        pass
+        logger.warning("re.sub failed", exc_info=True)
 
     logger.info("Indeed URL normalize: original_url=%r", (original[:500] if original else ""))
     logger.info("Indeed URL normalize: decoded_url=%r", (decoded[:500] if decoded else ""))
@@ -393,7 +393,7 @@ async def download_resume_with_playwright(
                 try:
                     await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
                 except Exception:
-                    pass
+                    logger.debug("ignored, non-critical", exc_info=True)
 
                 logger.info(
                     "Playwright: goto url=%r headless=%s storage_state=%s",
@@ -405,7 +405,7 @@ async def download_resume_with_playwright(
                 try:
                     await page.wait_for_load_state("networkidle", timeout=20_000)
                 except Exception:
-                    pass
+                    logger.debug("ignored, non-critical", exc_info=True)
 
                 # Small human-ish interaction: scroll to trigger lazy UI.
                 try:
@@ -413,7 +413,7 @@ async def download_resume_with_playwright(
                     await page.mouse.wheel(0, 600)
                     await page.wait_for_timeout(350)
                 except Exception:
-                    pass
+                    logger.warning("move failed", exc_info=True)
 
                 # BONUS fast-path: if the page already streamed the resume file
                 # directly (no click needed), save it and return immediately.
@@ -453,7 +453,7 @@ async def download_resume_with_playwright(
                             await menu.first.click(timeout=5_000)
                             await page.wait_for_timeout(250)
                         except Exception:
-                            pass
+                            logger.warning("click failed", exc_info=True)
                     download_btn = page.locator("text=/\\bDownload\\b/i")
 
                 if await download_btn.count() == 0:
@@ -461,7 +461,7 @@ async def download_resume_with_playwright(
                     try:
                         title = await page.title()
                     except Exception:
-                        pass
+                        logger.warning("page.title failed", exc_info=True)
                     html_path = await _save_html_debug(page=page, save_dir=save_dir, prefix=prefix)
                     png_path = await _save_screenshot_debug(page=page, save_dir=save_dir, prefix=prefix)
                     err = f"Download button not found. url={page.url!r} title={title!r}"
@@ -504,11 +504,11 @@ async def download_resume_with_playwright(
                 try:
                     html_path = await _save_html_debug(page=page, save_dir=save_dir, prefix=prefix)
                 except Exception:
-                    pass
+                    logger.warning("page.add_init_script failed", exc_info=True)
                 try:
                     png_path = await _save_screenshot_debug(page=page, save_dir=save_dir, prefix=prefix)
                 except Exception:
-                    pass
+                    logger.warning("page.add_init_script failed", exc_info=True)
                 return PlaywrightDownloadResult(
                     ok=False,
                     file_path="",
@@ -522,11 +522,11 @@ async def download_resume_with_playwright(
                 try:
                     await context.close()
                 except Exception:
-                    pass
+                    logger.debug("ignored, non-critical", exc_info=True)
                 try:
                     await browser.close()
                 except Exception:
-                    pass
+                    logger.debug("ignored, non-critical", exc_info=True)
 
     # Retry strategy, best shot first. Cloudflare + Indeed's employer login are
     # both far more permissive to a HEADED browser carrying the logged-in session

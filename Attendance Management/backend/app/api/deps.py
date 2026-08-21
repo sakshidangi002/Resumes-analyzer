@@ -1,15 +1,12 @@
 """Dependencies: get_db, get_current_user, role-based access."""
 from typing import Generator, List
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyCookie
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
 
-from app.db.session import SessionLocal, get_db
-from app.core.config import get_settings
+from app.db.session import get_db
 from app.core.security import decode_access_token, decode_media_token
 from app.models import User
-from app.models.user import Role
 from app.models.employee import Employee, EmploymentStatus
 
 security = HTTPBearer(auto_error=False)

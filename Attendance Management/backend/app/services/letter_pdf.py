@@ -13,7 +13,6 @@ Notes:
 """
 from __future__ import annotations
 
-from io import BytesIO
 import html as _html
 import logging
 import re
@@ -72,7 +71,7 @@ def html_to_pdf_bytes(body_html: str, subject: str | None = None) -> bytes:
             pdf.set_font("Helvetica", size=11)
             pdf.ln(2)
         except Exception:
-            pass
+            logger.warning("pdf.set_font failed", exc_info=True)
 
     rendered = False
     try:

@@ -67,7 +67,7 @@ def _fetch_rfc822_bytes(cfg, uid: str) -> bytes:
         try:
             client.logout()
         except Exception:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
 
 
 def shape_candidate_record(resume_dict: dict) -> dict[str, Any]:

@@ -21,7 +21,6 @@ import numpy as np
 
 from app.services.hcnetsdk_wrapper import (
     _sdk_wrapper,
-    NET_DVR_PREVIEWINFO,
     REALDATA_CALLBACK,
 )
 from app.services.face_tracker import FaceTracker
@@ -34,7 +33,6 @@ logger = logging.getLogger(__name__)
 _RECONNECT_INIT_DELAY = 2.0
 _RECONNECT_MAX_DELAY = 30.0
 _STALE_TIMEOUT = 15.0
-import os
 
 _JPEG_QUALITY = 80
 _FPS_WINDOW = 30
@@ -873,6 +871,5 @@ class HCNetSDKCameraWorker:
             "last_result_faces": len(s.latest_result.get("faces", [])),
         }
 
-
-# Import ctypes for callback
-import ctypes
+# `ctypes` is already imported at the top of this module; the second import here
+# was a no-op shadowing it.

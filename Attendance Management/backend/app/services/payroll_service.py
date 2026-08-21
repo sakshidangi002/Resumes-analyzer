@@ -17,7 +17,6 @@ from app.models import (
 )
 from app.core.datetime_utils import get_ist_now
 from app.core.staff_policy import is_fixed_salary_staff as _is_fixed_salary_staff
-from app.services.leave_service import get_current_financial_year
 
 
 def _get_company_config(db: Session) -> CompanyConfig | None:
@@ -154,7 +153,6 @@ def run_payroll_for_period(
 
         # Range of days we are actually evaluating (1st of month up to today or month end)
         actual_days = (end - start).days + 1
-        days_in_range = Decimal(str(actual_days))
 
         # Approved leave requests (paid and unpaid) for the period.
         # We need this to determine if an ABSENT or ON_LEAVE status is payable.

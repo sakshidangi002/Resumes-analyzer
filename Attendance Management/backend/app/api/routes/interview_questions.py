@@ -20,6 +20,9 @@ from app.schemas.interview_question import (
     InterviewQuestionUpdate,
 )
 from app.api.deps import require_roles
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -222,7 +225,7 @@ def delete_interview_question(
         try:
             Path(record.pdf_path).unlink(missing_ok=True)
         except OSError:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
     db.delete(record)
     db.commit()
     return {"message": "Deleted"}

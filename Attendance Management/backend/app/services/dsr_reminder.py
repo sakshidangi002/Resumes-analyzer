@@ -299,7 +299,7 @@ def send_dsr_reminders(db: Session | None = None) -> dict:
             try:
                 db.rollback()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
         logger.exception("DSR 5 PM reminder run failed")
         raise
     finally:
@@ -307,4 +307,4 @@ def send_dsr_reminders(db: Session | None = None) -> dict:
             try:
                 db.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)

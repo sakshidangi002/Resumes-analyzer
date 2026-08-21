@@ -19,7 +19,7 @@ from typing import Any, Mapping
 from graph_engine.config import REVIEW_RULE_SELECT
 from graph_engine.context import EngineContext
 from graph_engine.skills import skill_for_node
-from graph_engine.tools import ast_checks, linters
+from graph_engine.tools import ast_checks, linters, typescript
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,9 @@ def _dedupe(findings: list[dict]) -> list[dict]:
 
 def review(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
     skill_name, _skill_text = skill_for_node("review")
-    files = ctx.repo.list_python_files()
+    files = ctx.repo.list_source_files()
+    python_files = [f for f in files if f.endswith('.py')]
+    ts_files = [f for f in files if f.endswith(('.ts', '.tsx'))]
 
     if not files:
         return {
@@ -66,11 +68,14 @@ def review(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
         }
 
     findings: list[dict] = list(
-        linters.run_ruff(ctx.config.repo_root, files, REVIEW_RULE_SELECT)
+        linters.run_ruff(ctx.config.repo_root, python_files, REVIEW_RULE_SELECT)
     )
     ruff_count = len(findings)
+    ast_count = 0
+    tsc_findings = typescript.run_tsc(ctx.config.repo_root) if ts_files else []
+    findings.extend(tsc_findings)
 
-    for rel_path in files:
+    for rel_path in python_files:
         try:
             source = ctx.repo.read(rel_path)
         except OSError as exc:
@@ -81,9 +86,16 @@ def review(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
             })
             continue
         ctx.counters["files_read"] += 1
-        findings.extend(ast_checks.analyze_file(rel_path, source))
+        ast_findings = ast_checks.analyze_file(rel_path, source)
+        ast_count += len(ast_findings)
+        findings.extend(ast_findings)
 
+    # Counted before dedupe. Deriving the AST count as `len(findings) - ruff_count`
+    # went negative as soon as dedupe removed more overlaps than the AST checks
+    # contributed, which it does on a whole-application run.
+    before_dedupe = len(findings)
     findings = _dedupe(findings)
+    duplicates = before_dedupe - len(findings)
     for finding in findings:
         finding.setdefault("reason", finding.get("problem", ""))
         finding["recommended_action"] = _ACTIONS.get(
@@ -97,8 +109,9 @@ def review(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
         by_severity[finding["severity"]] = by_severity.get(finding["severity"], 0) + 1
 
     logger.info(
-        "graph_engine.review files=%d findings=%d ruff=%d ast=%d",
-        len(files), len(findings), ruff_count, len(findings) - ruff_count,
+        "graph_engine.review files=%d (py=%d ts=%d) findings=%d ruff=%d ast=%d tsc=%d deduped=%d",
+        len(files), len(python_files), len(ts_files), len(findings),
+        ruff_count, ast_count, len(tsc_findings), duplicates,
     )
     return {
         "files": files,
@@ -106,8 +119,13 @@ def review(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
         "_trace": {
             "skill": skill_name,
             "files": len(files),
+            "python_files": len(python_files),
+            "ts_files": len(ts_files),
+            "tsc_findings": len(tsc_findings),
             "findings": len(findings),
             "by_severity": by_severity,
             "ruff_findings": ruff_count,
+            "ast_findings": ast_count,
+            "deduped": duplicates,
         },
     }

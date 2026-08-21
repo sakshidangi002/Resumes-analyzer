@@ -15,11 +15,9 @@ from app.models import (
     Department,
     LeaveAllocation,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from calendar import month_abbr, monthrange
-from sqlalchemy.orm import joinedload
 from datetime import date, timedelta
 
 router = APIRouter()

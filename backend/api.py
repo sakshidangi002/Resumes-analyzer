@@ -10,9 +10,8 @@ from datetime import datetime as _dt
 from datetime import timezone
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, time
-from collections import Counter
-from io import BytesIO, StringIO
+from datetime import datetime, time
+from io import BytesIO
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -24,25 +23,22 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse
 
 from .main import (
     analyze_fit,
     calculate_experience_years,
     chatbot_answer,
     extract_resume,
-    extract_skills_from_text,
     extract_skills_with_langchain,
     estimate_experience_years_from_text,
     extract_text_from_docx,
     extract_text_from_pdf,
-    format_experience_duration,
     normalize_resume_text,
     validate_and_repair_extraction,
     get_embedding_model,
     preload_chat_model,
     preload_extract_model,
-    rank_candidates,
 )
 from .config import get_settings
 from .services.resume_utils import (
@@ -552,7 +548,7 @@ def _run_migrations():
                     try:
                         conn.rollback()
                     except Exception:
-                        pass
+                        logger.debug("ignored, non-critical", exc_info=True)
                     logger.debug("Migration skipped (%s): %s", col_err, sql[:60])
         logger.info("Database migrations complete.")
     except Exception as exc:
@@ -652,7 +648,7 @@ async def lifespan(app: FastAPI):
         try:
             email_scheduler.shutdown(wait=False)
         except Exception:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
     executor.shutdown(wait=False)
 
 
@@ -772,7 +768,7 @@ try:
                 conn.execute(text(_sql))
                 conn.commit()
             except Exception:
-                pass
+                logger.warning("conn.execute failed", exc_info=True)
 except Exception as e:
     logger.error(f"Schema auto-migration failed: {e}")
 
@@ -1214,7 +1210,7 @@ def _extract_text_from_bytes(file_bytes: bytes, ext: str, base_dir: str) -> str:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
         except Exception:
-            pass
+            logger.warning("exists failed", exc_info=True)
 
 
 def _slice_skills_section(text: str) -> str:
@@ -1569,7 +1565,7 @@ async def upload_resume(
             cleaned = ResumeSchema(**extracted)
 
             # STAGE 6: DATABASE SAVE DEBUG LOGS
-            logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG ===")
+            logger.info("=== STAGE 6: DATABASE SAVE DEBUG ===")
             logger.info(f"Before database save - Name: {cleaned.name}")
             logger.info(f"Before database save - Skills: {cleaned.skills}")
             logger.info(f"Before database save - Number of skills: {len(cleaned.skills) if cleaned.skills else 0}")
@@ -1577,7 +1573,7 @@ async def upload_resume(
             logger.info(f"Before database save - Primary skills: {cleaned.primary_skills}")
             logger.info(f"Before database save - Other skills: {cleaned.other_skills}")
             logger.info(f"Before database save - Key skills: {cleaned.key_skills}")
-            logger.info(f"=== END STAGE 6 (BEFORE SAVE) ===")
+            logger.info("=== END STAGE 6 (BEFORE SAVE) ===")
 
             if cleaned.experience_years == 0.0:
                 cleaned.experience_years = calculate_experience_years(cleaned.experience_summary or "")
@@ -1682,7 +1678,7 @@ async def upload_resume(
                 db.refresh(db_record)
                 
                 # STAGE 6: DATABASE SAVE DEBUG LOGS (after save)
-                logger.info(f"=== STAGE 6: DATABASE SAVE DEBUG (AFTER SAVE) ===")
+                logger.info("=== STAGE 6: DATABASE SAVE DEBUG (AFTER SAVE) ===")
                 logger.info(f"After database save - Record ID: {db_record.id}")
                 logger.info(f"After database save - Name: {db_record.name}")
                 logger.info(f"After database save - Skills: {db_record.skills}")
@@ -1691,7 +1687,7 @@ async def upload_resume(
                 logger.info(f"After database save - Primary skills: {db_record.primary_skills}")
                 logger.info(f"After database save - Other skills: {db_record.other_skills}")
                 logger.info(f"After database save - Key skills: {db_record.key_skills}")
-                logger.info(f"=== END STAGE 6 (AFTER SAVE) ===")
+                logger.info("=== END STAGE 6 (AFTER SAVE) ===")
                 
                 if db_record.email:
                     try:
@@ -1902,14 +1898,14 @@ def list_resumes(
             dt = datetime.fromisoformat(added_after.replace("Z", "+00:00"))
             q = q.filter(ResumeDB.created_at >= dt)
         except Exception:
-            pass
+            logger.warning("datetime.fromisoformat failed", exc_info=True)
     if added_before:
         try:
             dt = datetime.fromisoformat(added_before.replace("Z", "+00:00"))
             end_of_day = datetime.combine(dt.date(), time(23, 59, 59, 999999))
             q = q.filter(ResumeDB.created_at <= end_of_day)
         except Exception:
-            pass
+            logger.warning("datetime.fromisoformat failed", exc_info=True)
     if company:
         q = q.filter(ResumeDB.companies_worked_at.ilike(f"%{company}%"))
     if education:
@@ -2121,14 +2117,14 @@ def search_resumes(
             dt = datetime.fromisoformat(added_after.replace("Z", "+00:00"))
             fq = fq.filter(ResumeDB.created_at >= dt)
         except Exception:
-            pass
+            logger.warning("datetime.fromisoformat failed", exc_info=True)
     if added_before:
         try:
             dt = datetime.fromisoformat(added_before.replace("Z", "+00:00"))
             end_of_day = datetime.combine(dt.date(), time(23, 59, 59, 999999))
             fq = fq.filter(ResumeDB.created_at <= end_of_day)
         except Exception:
-            pass
+            logger.warning("datetime.fromisoformat failed", exc_info=True)
 
     filtered_count = fq.count()
 
@@ -2429,10 +2425,15 @@ def reextract_key_skills(resume_id: str, db: Session = Depends(get_db)):
 
 
 
-def _rebuild_resume_from_source(resume: ResumeDB) -> dict:
+def _rebuild_resume_from_source(db: Session, resume: ResumeDB) -> dict:
     """
     Re-run extraction against the stored source file and update the row in place.
     Returns a small status payload for batch repair operations.
+
+    `db` is a parameter, not a global: the body has always called db.add/commit/
+    refresh, but nothing bound the name, so every call raised NameError. The sole
+    caller wraps it in `except Exception` and counts the row as skipped, so
+    POST /resumes/backfill-extractions reported success while updating nothing.
     """
     file_path = _resolve_resume_file_path(resume.source_file or "", trusted=True)
     if not file_path:
@@ -2534,7 +2535,7 @@ def _rebuild_resume_from_source(resume: ResumeDB) -> dict:
             try:
                 _get_embedding_manager().collection.delete(ids=[old_vector_id])
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
         _chroma_add(vector_id, embedding, embedding_text, resume.source_file or "", resume.name or "")
         resume.vector_id = vector_id
     except Exception as exc:
@@ -2577,13 +2578,13 @@ def backfill_extractions(
     skipped_count = 0
     for resume in rows:
         try:
-            payload = _rebuild_resume_from_source(resume)
+            payload = _rebuild_resume_from_source(db, resume)
             results.append({"resume_id": str(resume.id), **payload})
             if payload.get("updated"):
                 updated_count += 1
             else:
                 skipped_count += 1
-        except Exception as exc:
+        except Exception:
             skipped_count += 1
             results.append(
                 {
@@ -2619,7 +2620,7 @@ def compare_resumes(
             uuid.UUID(x)
             is_uuid = True
         except ValueError:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
             
         if is_uuid:
             r = db.query(ResumeDB).filter(ResumeDB.id == x, ResumeDB.deleted_at == None).first()
@@ -2824,7 +2825,7 @@ def bulk_delete(body: BulkDeleteRequest, db: Session = Depends(get_db)):
             try:
                 _get_embedding_manager().collection.delete(ids=[r.vector_id])
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
         # Hard delete candidate row so it is fully removed from the database
         db.delete(r)
     db.commit()
@@ -3483,7 +3484,7 @@ async def upload_bulk_zip(
                         "status": first.get("status", "unknown"),
                         "message": first.get("message", ""),
                     })
-                except Exception as exc:
+                except Exception:
                     results.append({"file": name, "status": "error", "message": "Could not process this file."})
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
@@ -3511,7 +3512,7 @@ def export_sheets(req: ExportSheetsRequest, request: Request, db: Session = Depe
     try:
         import gspread
         from oauth2client.service_account import ServiceAccountCredentials
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail="Google Sheets export dependencies are missing. Install gspread and oauth2client."
@@ -3557,7 +3558,7 @@ def export_sheets(req: ExportSheetsRequest, request: Request, db: Session = Depe
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="The pasted credentials are not valid JSON.")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}") from e
 
     try:
         sh = client.open(req.sheet_name.strip())
@@ -3624,7 +3625,7 @@ def _resolve_shared_secret_key() -> str:
         if key:
             return key
     except Exception:
-        pass
+        logger.warning("strip failed", exc_info=True)
 
     hrms_env = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -3637,7 +3638,7 @@ def _resolve_shared_secret_key() -> str:
                 if line.startswith("SECRET_KEY="):
                     return line.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
-        pass
+        logger.warning("open failed", exc_info=True)
 
     raise RuntimeError(
         "SECRET_KEY is not set. The Resume Analyzer validates the JWTs the HRMS "

@@ -40,10 +40,13 @@ def _resolve_stop(state: Mapping[str, Any], ctx: EngineContext) -> tuple[str, st
         return "failed", error["kind"]
 
     analysis = state.get("failure_analysis") or {}
-    if analysis.get("repeated"):
-        return "stopped", STOP_REPEATED_FAILURE
+    # Only a failure that actually ended the run counts as the stop reason; a
+    # repeated *pre-existing* failure is ignored and must not be reported as
+    # the cause of a run that otherwise succeeded.
     if analysis.get("next_action") == ACTION_STOP:
-        return "stopped", STOP_UNFIXABLE
+        return "stopped", (
+            STOP_REPEATED_FAILURE if analysis.get("repeated") else STOP_UNFIXABLE
+        )
 
     exhausted_iterations = int(state.get("iteration", 0) or 0) >= ctx.config.max_iterations
     exhausted_budget = int(state.get("fix_budget", 0) or 0) <= 0

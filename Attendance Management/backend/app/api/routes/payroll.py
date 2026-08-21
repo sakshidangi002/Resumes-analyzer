@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User, SalaryStructure, PayrollPeriod, Payslip, Employee, SalaryAdvance
 from app.models.user import Role, user_roles
-from datetime import datetime
 
 from app.schemas.payroll import (
     SalaryStructureCreate,
@@ -19,7 +18,7 @@ from app.schemas.payroll import (
     SalaryAdvanceCreate,
     SalaryAdvanceResponse,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.payroll_service import run_payroll_for_period
 
 router = APIRouter()

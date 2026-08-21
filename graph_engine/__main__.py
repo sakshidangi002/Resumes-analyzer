@@ -19,6 +19,8 @@ from graph_engine.config import (
 )
 from graph_engine.graph import run_engine
 
+logger = logging.getLogger(__name__)
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -37,6 +39,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Permit edits to files with uncommitted modifications.")
     parser.add_argument("--max-iterations", type=int, default=MAX_ITERATIONS)
     parser.add_argument("--fix-budget", type=int, default=DEFAULT_FIX_BUDGET)
+    parser.add_argument("--fixes-per-pass", type=int, default=4,
+                        help="Fixes attempted before each test cycle. Higher means "
+                             "fewer test runs but weaker attribution of a failure "
+                             "to one specific change.")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--skip-regression", action="store_true",
                         help="Targeted tests only. Faster, and weaker evidence.")
@@ -103,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):  # not a real TTY / already wrapped
-            pass
+            logger.warning("stream.reconfigure failed", exc_info=True)
 
     args = _parse_args(argv)
     logging.basicConfig(
@@ -125,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_dirty_files=args.allow_dirty,
         max_iterations=args.max_iterations,
         fix_budget=args.fix_budget,
+        fixes_per_pass=args.fixes_per_pass,
         timeout_seconds=args.timeout,
         skip_regression=args.skip_regression,
     )

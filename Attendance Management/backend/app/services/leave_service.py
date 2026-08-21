@@ -1,5 +1,5 @@
 """Leave: FY April–March, no carry-forward; allocation and request workflow."""
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from sqlalchemy.orm import Session
 from app.models import LeaveType, LeaveAllocation, LeaveRequest, FinancialYear, Employee

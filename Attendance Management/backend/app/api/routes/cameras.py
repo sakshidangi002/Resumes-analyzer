@@ -19,7 +19,6 @@ GET    /api/cameras/stats            – overall system stats
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import socket
 from urllib.parse import urlparse

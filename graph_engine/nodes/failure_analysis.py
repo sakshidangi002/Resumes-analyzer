@@ -110,10 +110,15 @@ def failure_analysis(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[st
     repeated = sig in history
     failure_type, root_cause, affected = _classify(result, baseline, changed)
 
-    if repeated:
-        next_action, decision_reason = ACTION_STOP, "identical failure already seen this run"
-    elif failure_type == PRE_EXISTING:
+    # PRE_EXISTING is checked BEFORE `repeated`, and that order matters: a
+    # pre-existing failure fails on every single test run by definition, so its
+    # signature always repeats. Checking repetition first meant a benign,
+    # correctly-identified pre-existing failure killed the run on the second
+    # test pass with stop_reason=repeated_failure.
+    if failure_type == PRE_EXISTING:
         next_action, decision_reason = ACTION_IGNORE, "not caused by this run"
+    elif repeated:
+        next_action, decision_reason = ACTION_STOP, "identical failure already seen this run"
     elif failure_type in (IMPLEMENTATION_BUG, COLLECTION_ERROR) and (set(affected) & changed):
         # The overlap with `changed` is the point: a collection error in a file
         # this run never touched is someone else's problem, and handing it to the
@@ -139,6 +144,10 @@ def failure_analysis(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[st
     return {
         "failure_analysis": analysis,
         "failure_history": history + [sig],
+        # Consumed by route_after_verify: a stopping run still passes through
+        # `verify` first, so the reported criteria reflect the final state
+        # rather than whatever they were on an earlier pass.
+        "stop_requested": next_action == ACTION_STOP,
         "_trace": {
             "skill": skill_name,
             "failure_type": failure_type,

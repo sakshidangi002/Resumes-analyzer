@@ -14,7 +14,7 @@ from app.schemas.letter import (
     LetterReplyResponse,
     LetterReplyCreate,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.letter_service import render_letter, create_letter_instance
 from app.services.email_service import send_notification
 from app.services.letter_pdf import html_to_pdf_bytes, safe_pdf_filename
@@ -175,7 +175,7 @@ def preview_letter(
             extra_context=data.extra_context or {},
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return LetterPreviewResponse(subject=subject, body=body)
 
 
@@ -203,7 +203,7 @@ def generate_letter(
         try:
             subject, body = render_letter(db, template_code, employee_id)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
     t = db.query(LetterTemplate).filter(LetterTemplate.code == template_code).first()
     inst = create_letter_instance(
         db, employee_id, t.id, current_user.id, subject, body, sent_via_email=False,

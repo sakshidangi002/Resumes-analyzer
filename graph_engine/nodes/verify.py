@@ -45,12 +45,23 @@ def verify(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
         f"{len(files)} Python file(s) inspected in {state.get('scope')!r}",
     ))
 
-    # 2. Every finding was accounted for — triaged or explicitly dismissed.
-    triaged = len(bugs) + len(dismissed)
+    # 2. Every finding was accounted for — triaged, dismissed, or already fixed.
+    #
+    # The "already fixed" arm matters on the drain loop: bug_analysis drops bugs
+    # whose fix has landed so it does not re-propose them, which means they
+    # appear in neither `bugs` nor `dismissed`. Counting only those two made a
+    # successful multi-pass run look like it had lost track of its findings.
+    def _key(item: dict) -> tuple:
+        return (item.get("file"), item.get("line"), item.get("code"))
+
+    accounted = {_key(b) for b in bugs} | {_key(d) for d in dismissed} | {_key(f) for f in fixes}
+    unaccounted = [f for f in findings if _key(f) not in accounted]
+    resolved = len(findings) - len(unaccounted)
     criteria.append(_criterion(
-        "findings_triaged", triaged == len(findings),
-        f"{triaged} of {len(findings)} finding(s) triaged "
-        f"({len(bugs)} bug(s), {len(dismissed)} dismissed with reasons)",
+        "findings_triaged", not unaccounted,
+        f"{resolved} of {len(findings)} finding(s) accounted for "
+        f"({len(bugs)} open bug(s), {len(dismissed)} dismissed, "
+        f"{sum(1 for f in fixes if f.get('applied'))} fixed)",
     ))
 
     # 3. Actionable bugs were addressed, or have a recorded reason they were not.
@@ -61,6 +72,15 @@ def verify(state: Mapping[str, Any], ctx: EngineContext) -> Mapping[str, Any]:
         "actionable_bugs_addressed", not unaddressed,
         f"{len(actionable)} actionable bug(s); {len(unaddressed)} with no recorded outcome",
     ))
+    if unaddressed:
+        # Say what was dropped and why. A bounded run that stays silent about
+        # its bound reads as "we covered everything" when it did not.
+        reason = ("the fix budget was spent" if int(state.get("fix_budget", 0) or 0) <= 0
+                  else "the run stopped before reaching them")
+        caveats.append(
+            f"{len(unaddressed)} actionable bug(s) were never attempted because "
+            f"{reason} — rerun with a larger --fix-budget to continue"
+        )
     not_fixable = [b for b in bugs if not b.get("auto_fixable")]
     if not_fixable:
         caveats.append(

@@ -28,7 +28,6 @@ IN/OUT camera may do that (enforced in camera_service / recognition).
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from datetime import date
 from typing import Optional

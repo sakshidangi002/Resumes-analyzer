@@ -71,6 +71,11 @@ def route_after_verify(state: Mapping[str, Any]) -> str:
     if verification.get("goal_achieved"):
         return "done"
 
+    # failure_analysis already decided to stop; verify only ran so the report
+    # would show current figures.
+    if state.get("stop_requested"):
+        return "done"
+
     # A dry run has nothing left to attempt: the fix node already recorded a
     # decline for every actionable bug, so looping would burn iterations
     # re-declining the same work.

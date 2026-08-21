@@ -134,6 +134,6 @@ async def notifications_socket(
                 except Exception:
                     break
     except WebSocketDisconnect:
-        pass
+        logger.warning("websocket.send_json failed", exc_info=True)
     finally:
         connection_manager.disconnect(user_id, websocket)

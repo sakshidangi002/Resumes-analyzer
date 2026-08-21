@@ -84,7 +84,16 @@ class Repository:
         return path.resolve().relative_to(self.config.repo_root.resolve()).as_posix()
 
     # -- read ---------------------------------------------------------------
+    #: Reviewed extensions. Writes stay .py-only -- the fixer has no
+    #: TypeScript strategies, and `_resolve_for_write` enforces that.
+    SOURCE_SUFFIXES = (".py", ".ts", ".tsx")
+
     def list_python_files(self, scope: str | None = None) -> list[str]:
+        return self.list_source_files(scope, suffixes=(".py",))
+
+    def list_source_files(
+        self, scope: str | None = None, suffixes: tuple[str, ...] | None = None
+    ) -> list[str]:
         """Python files in the given scope, or across every configured scope.
 
         De-duplicated: whole-application runs can declare overlapping roots, and
@@ -98,9 +107,11 @@ class Repository:
             target = self._resolve(entry)
             if not target.exists():
                 continue
-            candidates = [target] if target.is_file() else sorted(target.rglob("*.py"))
+            wanted = suffixes or self.SOURCE_SUFFIXES
+            candidates = ([target] if target.is_file()
+                          else sorted(q for q in target.rglob("*") if q.is_file()))
             for path in candidates:
-                if path.suffix != ".py":
+                if path.suffix not in wanted:
                     continue
                 rel_parts = path.resolve().relative_to(self.config.repo_root.resolve()).parts
                 if EXCLUDED_DIRS.intersection(rel_parts):

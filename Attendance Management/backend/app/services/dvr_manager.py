@@ -8,7 +8,7 @@ import logging
 
 from app.services.hcnetsdk_wrapper import _sdk_wrapper
 from app.services.hcnetsdk_camera import HCNetSDKCameraWorker
-from app.services.hikvision_discovery import discover_cameras, DiscoveredDevice, DiscoveredChannel
+from app.services.hikvision_discovery import discover_cameras, DiscoveredDevice
 from app.services.camera_service import CameraWorker
 
 logger = logging.getLogger(__name__)

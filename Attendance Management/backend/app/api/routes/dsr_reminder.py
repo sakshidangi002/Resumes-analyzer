@@ -30,6 +30,9 @@ from app.services.reminder_settings import (
     normalize_time,
     normalize_weekdays,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -221,7 +224,7 @@ def notify_me(
         )
     except Exception:
         # Push failure must never break the inbox flow.
-        pass
+        logger.warning("send_push_to_user failed", exc_info=True)
 
     return NotifyMeResponse(
         created=True, reason="created", today_ist=today.isoformat()
@@ -443,7 +446,7 @@ def remind_pending_dsr_today(
 
             _safe_send_email(db, u, today)
         except Exception:
-            pass
+            logger.debug("DSR reminder email failed (best-effort)", exc_info=True)
         notified += 1
 
     return ManualRemindResponse(

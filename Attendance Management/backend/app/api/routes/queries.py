@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
-from app.models import User, Employee, HRQuery, HRQueryReply
+from app.models import User, HRQuery, HRQueryReply
 from app.schemas.hr_query import (
     HRQueryCreate,
     HRQueryResponse,

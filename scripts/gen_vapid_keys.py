@@ -58,7 +58,7 @@ def main() -> int:
     print("=" * 72)
     print(f'VAPID_PUBLIC_KEY={public_b64}')
     print(f'VAPID_PRIVATE_KEY={private_b64}')
-    print(f'VAPID_CLAIM_EMAIL=mailto:your-admin@your-company.com')
+    print('VAPID_CLAIM_EMAIL=mailto:your-admin@your-company.com')
     print("=" * 72)
     print()
     print("Restart the FastAPI app so the new keys take effect.")

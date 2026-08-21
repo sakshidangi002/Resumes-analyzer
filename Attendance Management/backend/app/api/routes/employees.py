@@ -1,9 +1,7 @@
-﻿"""Employee master CRUD and bank details."""
+"""Employee master CRUD and bank details."""
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
-import numpy as np
 from app.db.session import get_db
 from app.api.deps import is_employment_status_blocked
 from app.models import (
@@ -41,11 +39,11 @@ from app.schemas.employee import (
     CareerHistoryBundle,
     CareerCurrentSnapshot,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.core.pii import is_masked, mask_secret
 from app.services.audit_service import log_audit
 from app.services.payroll_service import get_salary_structure_for_date
-from app.services.embedding_cache import embedding_to_blob, invalidate_embedding_cache
+from app.services.embedding_cache import invalidate_embedding_cache
 from app.services.employee_face_service import (
     process_face_uploads,
     save_employee_photo,
