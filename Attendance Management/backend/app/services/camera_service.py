@@ -659,7 +659,7 @@ def _draw_enhanced_overlay(
             )
 
 
-    # Camera info panel (top-left).
+    # Camera info panel (top-right).
     #
     # On a small feed the panel is compacted: labels are dropped to their
     # initials and the date is dropped from the timestamp. The date is the
@@ -700,17 +700,18 @@ def _draw_enhanced_overlay(
         max(_text_w(t) for t in overlay_lines) + pad * 2,
         max(80, int(w * 0.34)),
     )
-    px2 = min(w - 1, margin + panel_w)
+    px1 = max(0, w - margin - panel_w)
+    px2 = min(w - 1, px1 + panel_w)
     py2 = min(h - 1, margin + panel_h)
 
     # Translucent backing rather than solid black, so the panel obscures as
     # little of the scene as possible.
-    roi = annotated[margin:py2, margin:px2]
+    roi = annotated[margin:py2, px1:px2]
     if roi.size:
-        annotated[margin:py2, margin:px2] = cv2.addWeighted(
+        annotated[margin:py2, px1:px2] = cv2.addWeighted(
             roi, 0.35, np.zeros_like(roi), 0.65, 0,
         )
-    cv2.rectangle(annotated, (margin, margin), (px2, py2), (255, 255, 255), 1)
+    cv2.rectangle(annotated, (px1, margin), (px2, py2), (255, 255, 255), 1)
 
     for i, text in enumerate(overlay_lines):
         baseline_y = margin + pad + line_h * (i + 1) - max(2, int(round(6 * scale)))
@@ -719,7 +720,7 @@ def _draw_enhanced_overlay(
         cv2.putText(
             annotated,
             text,
-            (margin + pad, baseline_y),
+            (px1 + pad, baseline_y),
             font,
             font_scale,
             (255, 255, 255),
@@ -1553,7 +1554,23 @@ class _RecognitionThread(threading.Thread):
         if w.bytetrack_engine is not None:
             ptracks = w.bytetrack_engine.update(frame)
         else:
-            persons = person_detector.detect_persons(frame)
+            # OpenCV can execute the configured YOLO ONNX model even when the
+            # optional Ultralytics package is unavailable. Monitor cameras use
+            # their permissive model/confidence so seated and partly occluded
+            # employees are boxed instead of falling back to face-only tracks.
+            # NOTE: the ONNX fallback runs at the model's fixed 960x960 export
+            # size, so there is no size to pass -- yolo_monitor_imgsz applies to
+            # the Ultralytics/ByteTrack path above, not here.
+            from app.core.config import get_settings as _get_settings
+            _s = _get_settings()
+            _monitor_model = (
+                getattr(_s, "yolo_monitor_model_path", "") or ""
+            ) if w.is_monitor else ""
+            persons = person_detector.detect_persons(
+                frame,
+                conf_threshold=(_STEEP_CONF if w.is_monitor else _PERSON_CONF),
+                model_path=(_monitor_model or None),
+            )
             ptracks = w.person_tracker.update(persons)
 
         # 2. Detect faces (with embeddings) once on the full frame. Skipped when the
@@ -1869,7 +1886,17 @@ class _RecognitionThread(threading.Thread):
 
             # Grayscale is computed ONCE here and reused by both the blur check
             # and the motion gate below (previously two full-frame conversions).
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Keep frame validation inside the loop's recovery boundary: a
+            # malformed/partially decoded frame must be skipped, not terminate
+            # recognition for this camera permanently.
+            try:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            except Exception as exc:
+                w.state.last_error = f"invalid frame: {exc}"
+                logger.warning(
+                    "Camera %s: skipping invalid frame: %s", w.camera_id, exc
+                )
+                continue
 
             # Blur gate. A blurry frame is useless for FACE recognition, but a
             # person's BODY is still perfectly detectable — so when body tracking

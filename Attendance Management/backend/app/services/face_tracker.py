@@ -7,6 +7,7 @@ Each track maintains recognition state with cooldown to prevent flickering.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Tuple
@@ -15,6 +16,23 @@ import numpy as np
 from app.services.embedding_fusion import EmbeddingFuser
 
 logger = logging.getLogger(__name__)
+
+# Association bounds for _find_best_match.
+#
+# A fixed centroid radius loses a WALKING person: face inference on this
+# hardware runs seconds apart, and someone crossing a doorway moves far more
+# than 100px between cycles, so they were handed a brand-new track (and a fresh,
+# empty fused template) every cycle. Predicting from track velocity fixes that.
+#
+# The bounds exist because looser association cuts the other way: merging two
+# people into one track is how a fused template ends up representing neither of
+# them. The fuser's outlier rejection is the primary defence (see
+# attendance_gate), but it works best when association does not hand it obvious
+# mismatches. These are the knobs to tighten if ID switches are ever observed on
+# an IN/OUT camera, where a merged track feeds payroll.
+_MAX_PREDICTED_DISTANCE = float(os.getenv("CCTV_TRACK_MAX_PREDICTED_PX", "280"))
+_MIN_ASSOC_OVERLAP = float(os.getenv("CCTV_TRACK_MIN_ASSOC_IOU", "0.10"))
+_SPEED_RADIUS_GAIN = float(os.getenv("CCTV_TRACK_SPEED_GAIN", "1.5"))
 
 
 @dataclass
@@ -259,7 +277,7 @@ class FaceTracker:
             if track.is_expired():
                 continue
 
-            best_idx = self._find_best_match(track.centroid, detection_centroids, used_detection_indices)
+            best_idx = self._find_best_match(track, detection_centroids, detection_boxes, used_detection_indices)
             if best_idx is not None:
                 # Update track with new detection
                 track.update(detection_centroids[best_idx], detection_boxes[best_idx])
@@ -297,27 +315,54 @@ class FaceTracker:
     
     def _find_best_match(
         self,
-        centroid: Tuple[float, float],
+        track: FaceTrack,
         detection_centroids: List[Tuple[float, float]],
+        detection_boxes: List[Tuple[int, int, int, int]],
         used_indices: set
     ) -> Optional[int]:
-        """Find the best matching detection for a track centroid."""
+        """Find the next detection for a moving face track.
+
+        A fixed centroid radius caused a walking person to receive a new track
+        whenever they moved more than 100 px between slow face-inference
+        cycles. Predict from the track velocity and allow a bounded, speed-aware
+        radius; IoU remains the strongest signal when boxes overlap.
+        """
         best_idx = None
-        best_distance = float('inf')
-        
+        best_score = float("inf")
+        vx, vy = track.velocity
+        predicted = (track.centroid[0] + vx, track.centroid[1] + vy)
+        speed = float(np.sqrt(vx * vx + vy * vy))
+        # speed is a magnitude (>= 0), so this is monotonically >= max_distance;
+        # the previous max() against max_distance could never bind.
+        allowed = min(
+            _MAX_PREDICTED_DISTANCE, self.max_distance + speed * _SPEED_RADIUS_GAIN
+        )
+
+        tx1, ty1, tx2, ty2 = track.box
+
         for idx, det_centroid in enumerate(detection_centroids):
             if idx in used_indices:
                 continue
-            
+
             distance = np.sqrt(
-                (centroid[0] - det_centroid[0]) ** 2 +
-                (centroid[1] - det_centroid[1]) ** 2
+                (predicted[0] - det_centroid[0]) ** 2 +
+                (predicted[1] - det_centroid[1]) ** 2
             )
-            
-            if distance < self.max_distance and distance < best_distance:
-                best_distance = distance
-                best_idx = idx
-        
+            dx1, dy1, dx2, dy2 = detection_boxes[idx]
+            ix1, iy1 = max(tx1, dx1), max(ty1, dy1)
+            ix2, iy2 = min(tx2, dx2), min(ty2, dy2)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            area_a = max(1, (tx2 - tx1) * (ty2 - ty1))
+            area_b = max(1, (dx2 - dx1) * (dy2 - dy1))
+            overlap = inter / float(area_a + area_b - inter) if inter else 0.0
+
+            if distance <= allowed or overlap >= _MIN_ASSOC_OVERLAP:
+                # Prefer overlap, then the closest predicted position.
+                score = distance - overlap * allowed
+                if score < best_score:
+                    best_score = score
+                    best_idx = idx
+
         return best_idx
     
     def get_track(self, track_id: int) -> Optional[FaceTrack]:

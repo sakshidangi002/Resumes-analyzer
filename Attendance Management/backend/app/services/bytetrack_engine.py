@@ -94,6 +94,27 @@ _EDGE_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_EDGE_HOLD_CYCLES", "2"))
 _INTERIOR_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_CYCLES", "6"))
 # Floors, so a fast camera still holds a track for a usable length of time.
 _EDGE_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_EDGE_HOLD_MIN_SEC", "2.0"))
+
+
+# Cameras that ALSO run a close overlapping crop through YOLO, on top of the
+# full-frame pass.
+#
+# MEASURED on this box (yolo11m @960, one Exit-camera frame, model warm):
+#
+#     full frame only          4131 ms   1 track
+#     full frame + crop pass   8581 ms   1 track
+#
+# The second pass doubled the per-frame cost and found nothing the full-frame
+# pass had not already tracked. Paying that on every feed is what put analysis
+# seconds behind the live picture, which is why a plainly visible person still
+# read "People: 0" on the dashboard.
+#
+# It can still earn its cost on a room camera where people sit behind desks and
+# monitors, so the capability stays -- but opt-in per camera, not billed to all.
+# Comma-separated ids, e.g. CCTV_CROP_ASSIST_CAMERAS=59,60
+_CROP_ASSIST_CAMERAS = {
+    c.strip() for c in os.getenv("CCTV_CROP_ASSIST_CAMERAS", "").split(",") if c.strip()
+}
 _INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
 
 # Two published boxes overlapping by at least this fraction of the SMALLER box
@@ -228,6 +249,107 @@ class ByteTrackEngine:
         self._last_sig: tuple | None = None   # for change-based logging (no spam)
         self._last_update_ts: float = 0.0
         self._cycle_sec: float = 0.0          # smoothed interval between update() calls
+        # Monitor-only supplemental detections use a closer overlapping crop for
+        # the far/right workstation. They are merged into the same body-track
+        # table after the normal full-frame ByteTrack pass.
+        self._next_aux_id: int = 1_000_000
+
+    @staticmethod
+    def _iou(a, b) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+        return inter / union if union > 0 else 0.0
+
+    def _add_crop_assist_tracks(self, model, frame_bgr, seen: set[int]) -> list[float]:
+        """Recover people too small/occluded for the full-frame pass.
+
+        Opt-in per camera (see _CROP_ASSIST_CAMERAS): this runs a SECOND full
+        YOLO inference, which on this hardware doubles the per-frame cost.
+
+        The Dev-room camera puts the lower-right workstation far from the
+        optical centre and behind monitors/chairs. A closer overlapping crop
+        gives YOLO more pixels for that region. This is body detection only;
+        face recognition still happens later in camera_service.
+        """
+        import cv2
+
+        height, width = frame_bgr.shape[:2]
+        # Use a broad overlapping crop for every body-tracking camera. The
+        # hallway/Exit view puts people at the far end of the frame, while the
+        # room view hides them behind desks; both benefit from giving YOLO more
+        # pixels without changing the full-frame detector's geometry.
+        crop_x1 = int(width * 0.15)
+        crop_y1 = int(height * 0.10)
+        crop = frame_bgr[crop_y1:height, crop_x1:width]
+        if crop.size == 0:
+            return []
+
+        try:
+            _slots.acquire()
+            try:
+                result = model.predict(
+                    crop,
+                    classes=[0],
+                    conf=max(0.02, self.conf * 0.5),
+                    iou=self.iou,
+                    imgsz=self.imgsz,
+                    verbose=False,
+                )[0]
+            finally:
+                _slots.release()
+        except Exception:
+            logger.exception("Camera %s: supplemental body crop failed", self.camera_id)
+            return []
+
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            return []
+
+        scores: list[float] = []
+        for score, local_box in zip(
+            boxes.conf.cpu().tolist(), boxes.xyxy.cpu().tolist()
+        ):
+            score = float(score)
+            x1, y1, x2, y2 = local_box
+            box = (
+                int(x1 + crop_x1), int(y1 + crop_y1),
+                int(x2 + crop_x1), int(y2 + crop_y1),
+            )
+            if box[2] <= box[0] or box[3] <= box[1]:
+                continue
+
+            # Associate with an existing full-frame track when possible.
+            matched_id = None
+            best_iou = 0.0
+            for tid, track in self.tracks.items():
+                overlap = self._iou(box, track.box)
+                if overlap > best_iou:
+                    best_iou, matched_id = overlap, tid
+            if matched_id is not None and best_iou >= 0.15:
+                self.tracks[matched_id].update_box(box)
+                seen.add(matched_id)
+                scores.append(round(score, 3))
+                continue
+
+            aux_id = self._next_aux_id
+            self._next_aux_id += 1
+            self.tracks[aux_id] = PersonTrack(
+                track_id=aux_id, box=box, max_misses=self.max_misses
+            )
+            seen.add(aux_id)
+            scores.append(round(score, 3))
+            logger.info(
+                "YOLO camera=%s supplemental body track=%d score=%.3f box=%s",
+                self.camera_id, aux_id, score, box,
+            )
+        return scores
 
     def _measured_cycle_sec(self) -> float:
         """Smoothed seconds between update() calls.
@@ -342,6 +464,18 @@ class ByteTrackEngine:
                             )
                         else:
                             pt.update_box(b)
+
+        # Full-frame inference is the primary detector and is enough for almost
+        # every view. A camera listed in CCTV_CROP_ASSIST_CAMERAS additionally
+        # gets one overlapping close crop, for rooms where people sit behind
+        # desks and monitors. It costs a SECOND full YOLO inference per frame --
+        # see _CROP_ASSIST_CAMERAS for the measurement -- so it is never paid by
+        # default, and never by an IN/OUT camera unless explicitly listed.
+        if str(self.camera_id) in _CROP_ASSIST_CAMERAS:
+            supplemental_scores = self._add_crop_assist_tracks(model, frame_bgr, seen)
+            if supplemental_scores:
+                detections += len(supplemental_scores)
+                det_scores.extend(supplemental_scores)
 
         # Drop "nested" duplicates: on this ceiling view YOLO often emits a tight
         # box on a seated person AND a second, bloated box running down over their
