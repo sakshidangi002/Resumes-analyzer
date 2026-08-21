@@ -22,6 +22,7 @@ const CctvAttendance = lazy(() => import("./pages/CctvAttendance"));
 const CctvCameraManager = lazy(() => import("./pages/CctvCameraManager"));
 const IdentifyPeople = lazy(() => import("./pages/IdentifyPeople"));
 const DvrCameraDashboard = lazy(() => import("./pages/DvrCameraDashboard"));
+const FaceEnrolment = lazy(() => import("./pages/FaceEnrolment"));
 const Leave = lazy(() => import("./pages/Leave"));
 const LeaveApprovals = lazy(() => import("./pages/LeaveApprovals"));
 const LeaveAllocations = lazy(() => import("./pages/LeaveAllocations"));
@@ -86,6 +87,7 @@ export default function App() {
         <Route path="cctv-cameras" element={<RoleRoute roles={["Admin", "HR"]}><CctvCameraManager /></RoleRoute>} />
         <Route path="identify-people" element={<RoleRoute roles={["Admin", "HR"]}><IdentifyPeople /></RoleRoute>} />
         <Route path="dvr-cameras" element={<RoleRoute roles={["Admin", "HR"]}><DvrCameraDashboard /></RoleRoute>} />
+        <Route path="face-enrolment" element={<RoleRoute roles={["Admin", "HR"]}><FaceEnrolment /></RoleRoute>} />
         <Route path="leave" element={<Leave />} />
         <Route path="leave-approvals" element={<LeaveApprovals />} />
         <Route path="leave-allocations" element={<LeaveAllocations />} />

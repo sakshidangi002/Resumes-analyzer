@@ -783,3 +783,40 @@ export const queries = {
 
 
 
+
+// ---------------------------------------------------------------------------
+// Face enrolment coverage
+// ---------------------------------------------------------------------------
+// Which employees the recognition matcher can actually identify, and the face
+// photo enrolled for each. Both were previously invisible: exclusions from the
+// gallery are silent (the query simply does not SELECT them) and the uploaded
+// enrolment photos had no endpoint serving them back.
+export type CoverageEntry = {
+  employee_id: number;
+  employee_code: string | null;
+  name: string;
+  active_embeddings: number;
+  model_matched: number;
+  has_photo: boolean;
+  reason?: string;
+  detail?: string;
+};
+
+export type CoverageReport = {
+  model_version: string;
+  active_employees: number;
+  in_gallery: number;
+  gallery_vectors: number;
+  coverage_pct: number;
+  reasons: Record<string, number>;
+  recognisable: CoverageEntry[];
+  excluded: CoverageEntry[];
+};
+
+export const faceEnrolment = {
+  coverage: () => api.get<CoverageReport>("/recognition/coverage"),
+  // Rendered by <img src>, which cannot send an Authorization header. This app
+  // authenticates with an HttpOnly cookie (withCredentials), and the endpoint's
+  // role check accepts that cookie, so no media token is needed here.
+  photoUrl: (employeeId: number) => `/api/employees/${employeeId}/face/photo`,
+};

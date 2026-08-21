@@ -369,6 +369,8 @@ def recognition_coverage() -> dict:
                 "name": emp.full_name,
                 "active_embeddings": len(rows),
                 "model_matched": len(matched),
+                # Lets the UI show a face without a request per employee.
+                "has_photo": resolve_employee_photo(emp.id) is not None,
             }
 
             # Same order as the filters in embedding_cache._load_from_db, so the
@@ -419,6 +421,50 @@ def recognition_coverage() -> dict:
 # ---------------------------------------------------------------------------
 # Photo files
 # ---------------------------------------------------------------------------
+def resolve_employee_photo(employee_id: int) -> Optional[Path]:
+    """Absolute path of an employee's stored enrolment photo, or None.
+
+    Resolved from FACE_UPLOAD_DIR and the employee id, deliberately NOT from
+    `employees.photo_path`. That column stores whatever absolute path the
+    machine that ran the enrolment happened to have -- every row in this
+    deployment reads
+    `C:\sakshi folder\application\Resume analyzer\...\data\face_uploads\<id>\photo.jpeg`,
+    a developer workstation path that does not exist on the server, where the
+    app lives under C:\SoftwizApp. Serving the column directly would work in
+    dev and 404 for every employee in production.
+
+    Containment is enforced the same way as `unknown_faces.resolve_crop`: the id
+    is coerced to an int and the resolved path must sit inside FACE_UPLOAD_DIR,
+    so nothing reachable from a request can escape the data directory.
+
+    NOTE on what is (and is not) here: enrolment stores ONE image per employee.
+    `register_employee_face` accepts up to 10 photos and keeps an embedding for
+    every one of them, but only calls `save_employee_photo` for
+    `prepared_images[0]`, and that writes a fixed `photo<ext>` filename. So an
+    employee with 5 gallery vectors still has a single viewable photo, and
+    re-enrolling overwrites it. Callers should present the photo as "the cover
+    image", never as "the gallery".
+    """
+    try:
+        employee_dir = (FACE_UPLOAD_DIR / str(int(employee_id))).resolve()
+        employee_dir.relative_to(FACE_UPLOAD_DIR.resolve())
+    except (ValueError, OSError, TypeError):
+        logger.warning("rejected face-photo path for employee %r", employee_id)
+        return None
+    if not employee_dir.is_dir():
+        return None
+    # `save_employee_photo` keeps the uploader's extension, so the file may be
+    # photo.jpg / .jpeg / .png. Newest wins: re-enrolment can leave an older
+    # extension behind (employee 5 has both photo.jpg and photo.jpeg), and the
+    # stale one is not what the current gallery was built from.
+    candidates = sorted(
+        (p for p in employee_dir.glob("photo.*") if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
 def save_employee_photo(employee_id: int, image_bytes: bytes, filename: str) -> str:
     employee_dir = FACE_UPLOAD_DIR / str(employee_id)
     employee_dir.mkdir(parents=True, exist_ok=True)

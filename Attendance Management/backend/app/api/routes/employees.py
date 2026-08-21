@@ -1,6 +1,7 @@
 """Employee master CRUD and bank details."""
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
 from app.api.deps import is_employment_status_blocked
@@ -50,6 +51,7 @@ from app.services.employee_face_service import (
     delete_employee_photos,
     enroll_embeddings,
     gallery_summary,
+    resolve_employee_photo,
 )
 
 router = APIRouter()
@@ -518,6 +520,40 @@ def get_face_status(
         "sample_count": int(emp.sample_count or 0),
         "gallery": gallery_summary(employee_id),
     }
+
+
+@router.get("/{employee_id}/face/photo")
+def get_face_photo(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Serve the enrolment photo stored for this employee.
+
+    Nothing served an enrolled face image before this. `GET /{id}/face` returns
+    only counts, so the photos an operator uploaded were write-only: they went
+    to disk, an embedding was derived, and no screen could ever show them back.
+    That is the gap behind "I cannot tell which employees have images".
+
+    Biometric data, so Admin/HR only, and the path is resolved from the employee
+    id rather than the stored `photo_path` column -- see resolve_employee_photo
+    for why that column is not usable off the machine that wrote it.
+
+    This is ONE image, the first of the batch that was enrolled. It is a cover
+    image, not the gallery; the other vectors have no stored picture.
+    """
+    if not db.query(Employee.id).filter(Employee.id == employee_id).first():
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    path = resolve_employee_photo(employee_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No enrolment photo stored")
+
+    media = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    # Private: this is a face. Never let a shared cache hold it.
+    return FileResponse(
+        str(path), media_type=media, headers={"Cache-Control": "private, max-age=60"}
+    )
 
 
 @router.delete("/{employee_id}/face")
