@@ -308,6 +308,115 @@ def gallery_summary(employee_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# System-wide recognition coverage
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS
+# ---------------
+# `gallery_summary` answers "how is THIS employee enrolled?". Nothing answered
+# the question that actually predicts whether the cameras work at all: *how many
+# people can the matcher recognise?*
+#
+# Measured on this deployment when the report was written: 50 employees, 5 of
+# them Active, and the matcher's gallery held THREE. The other 47 were
+# structurally unrecognisable — every one of them arrived at the entrance as an
+# "unknown face", scoring an average of 0.188 against a 0.45 threshold. That is
+# not a tuning problem and no threshold change can fix it, but from the outside
+# it is indistinguishable from "recognition is broken", which is exactly how it
+# was reported.
+#
+# The exclusions are individually silent by design: `embedding_cache._load_from_db`
+# just doesn't SELECT those employees. An employee enrolled entirely under a
+# previous recognition model (an ArcFace -> AdaFace switch leaves their rows
+# behind) simply stops being recognised, with no error anywhere. This function
+# reproduces that query's predicates and reports what each one dropped, so the
+# silence becomes a number somebody can act on.
+#
+# The reasons deliberately mirror `_load_from_db`'s filters one-for-one. If that
+# query changes, this must change with it — see test_recognition_coverage.
+def recognition_coverage() -> dict:
+    """Who the matcher can recognise, and why everyone else is excluded.
+
+    Pure read. Safe to call from an admin endpoint or a health check.
+    """
+    from app.db.session import SessionLocal
+    from app.models.employee import Employee, EmploymentStatus
+    from app.models.employee_face import EmployeeFaceEmbedding
+
+    excluded: list[dict] = []
+    in_gallery: list[dict] = []
+    vectors = 0
+
+    with SessionLocal() as db:
+        employees = (
+            db.query(Employee)
+            .filter(Employee.employment_status == EmploymentStatus.ACTIVE.value)
+            .order_by(Employee.id)
+            .all()
+        )
+        for emp in employees:
+            rows = (
+                db.query(EmployeeFaceEmbedding)
+                .filter(
+                    EmployeeFaceEmbedding.employee_id == emp.id,
+                    EmployeeFaceEmbedding.active.is_(True),
+                )
+                .all()
+            )
+            matched = [r for r in rows if r.model_version == EMBEDDING_MODEL_VERSION]
+            entry = {
+                "employee_id": emp.id,
+                "employee_code": emp.employee_code,
+                "name": emp.full_name,
+                "active_embeddings": len(rows),
+                "model_matched": len(matched),
+            }
+
+            # Same order as the filters in embedding_cache._load_from_db, so the
+            # reason names the FIRST predicate that dropped them.
+            if not rows:
+                entry["reason"] = "no_enrolment"
+                entry["detail"] = "No face has ever been enrolled for this employee."
+            elif not matched:
+                entry["reason"] = "stale_model"
+                entry["detail"] = (
+                    f"Enrolled under a previous recognition model "
+                    f"({', '.join(sorted({r.model_version for r in rows}))}); the system "
+                    f"now runs {EMBEDDING_MODEL_VERSION}. Vectors from different models "
+                    "are not comparable, so these are ignored. Re-enrol to restore."
+                )
+            elif emp.embedding is None:
+                # Matched rows exist but the aggregated stack was never rebuilt,
+                # so the JOIN finds them while `Employee.embedding IS NOT NULL`
+                # drops them. Recoverable without new photos.
+                entry["reason"] = "no_stack"
+                entry["detail"] = (
+                    "Model-matched embeddings exist but employees.embedding was "
+                    "never rebuilt from them. Re-run enrolment to rebuild the stack."
+                )
+            else:
+                vectors += len(matched)
+                in_gallery.append(entry)
+                continue
+            excluded.append(entry)
+
+    reasons: dict[str, int] = {}
+    for item in excluded:
+        reasons[item["reason"]] = reasons.get(item["reason"], 0) + 1
+
+    active = len(in_gallery) + len(excluded)
+    return {
+        "model_version": EMBEDDING_MODEL_VERSION,
+        "active_employees": active,
+        "in_gallery": len(in_gallery),
+        "gallery_vectors": vectors,
+        "coverage_pct": round(100.0 * len(in_gallery) / active, 1) if active else 0.0,
+        "reasons": reasons,
+        "recognisable": in_gallery,
+        "excluded": excluded,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Photo files
 # ---------------------------------------------------------------------------
 def save_employee_photo(employee_id: int, image_bytes: bytes, filename: str) -> str:

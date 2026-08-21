@@ -220,6 +220,25 @@ class CameraProfileUpdate(BaseModel):
 _PROFILE_FIELDS = tuple(CameraProfileUpdate.model_fields.keys())
 
 
+@router.get("/recognition/coverage")
+def recognition_coverage_report(
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """How many active employees the matcher can actually recognise, and why not.
+
+    The question this answers has no other home. Every exclusion is silent by
+    construction — `embedding_cache._load_from_db` simply does not SELECT an
+    employee whose enrolment predates a recognition-model change, so they stop
+    being recognised with no error anywhere and no way to tell from the UI.
+    From the outside that is indistinguishable from "the cameras are broken".
+
+    Read-only; returns no biometric data, only counts and reasons.
+    """
+    from app.services.employee_face_service import recognition_coverage
+
+    return recognition_coverage()
+
+
 @router.get("/cameras/{camera_id}/profile")
 def get_camera_profile(
     camera_id: int,
