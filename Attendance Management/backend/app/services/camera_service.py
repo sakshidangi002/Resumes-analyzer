@@ -1619,7 +1619,11 @@ class _RecognitionThread(threading.Thread):
 
             # (a) Bind identity: recognise a face inside this body when the track
             #     is still unknown or a periodic re-verify is due.
-            if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC):
+            # Pass the gate's requirement so a track that will be asked for
+            # N observations is allowed to collect them. Zero for MONITOR
+            # cameras, which never mark attendance and keep the cheap throttle.
+            _needed = profile.min_observations if profile.marks_attendance else 0
+            if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC, _needed):
                 face = face_by_track.get(pt.track_id)
                 face_scale = 1.0
                 face_image = rgb          # the image `face`'s box refers to

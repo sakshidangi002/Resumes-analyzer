@@ -165,10 +165,46 @@ class PersonTrack:
     def best_quality(self) -> float:
         return self.fuser.best_quality
 
-    def needs_recognition(self, reverify_sec: float) -> bool:
-        """Recognise when not yet identified, or periodically to re-verify."""
+    def needs_recognition(
+        self, reverify_sec: float, min_observations: int = 0
+    ) -> bool:
+        """Recognise when not yet identified, when still short of the evidence
+        the attendance gate will demand, or periodically to re-verify.
+
+        The middle clause exists because the throttle and the gate were set
+        against different timescales and together made attendance unreachable.
+
+        `attendance_gate` requires `observations >= profile.min_observations`
+        (3 on an IN/OUT camera), and observations are only accumulated on a pass
+        where this method returns True. Throttling to one attempt per
+        `reverify_sec` (5s) the moment a track has ANY match meant:
+
+            pass 1  t=0.0   unmatched -> obs=1, matched=True
+            pass 2  t=2.5   throttled -> no observation
+            pass 3  t=5.0   obs=2
+            pass 5  t=10.0  obs=3
+
+        i.e. ~10 seconds of continuous tracking to satisfy a gate that guards a
+        doorway people cross in about two. Measured consequence: 33 attendance
+        decisions all-time, exactly one allowed, the rest blocked on
+        `insufficient_observations` / `unstable_identity`.
+
+        The throttle is right for what it was written for -- an employee sitting
+        at a desk does not need re-identifying on every pass. It is only wrong
+        while the track still lacks the evidence that will be demanded of it,
+        which is precisely the window this clause covers. Nothing about the
+        quality, score, margin or agreement bars changes.
+
+        Callers pass 0 (the default) for cameras that never mark attendance, so
+        MONITOR cameras keep the cheap throttled behaviour.
+        """
         if not self.matched:
             return True
+        if min_observations:
+            fuser = getattr(self, "fuser", None)
+            accepted = int(getattr(fuser, "accepted", 0) or 0) if fuser is not None else 0
+            if accepted < min_observations:
+                return True
         return (time.time() - self.last_recognition_time) >= reverify_sec
 
     def bind_identity(
