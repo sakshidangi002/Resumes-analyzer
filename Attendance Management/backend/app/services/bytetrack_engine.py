@@ -115,6 +115,28 @@ _EDGE_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_EDGE_HOLD_MIN_SEC", "2.0"))
 _CROP_ASSIST_CAMERAS = {
     c.strip() for c in os.getenv("CCTV_CROP_ASSIST_CAMERAS", "").split(",") if c.strip()
 }
+
+# Adopt a confident detection that ByteTrack has NOT yet turned into a track.
+#
+# ByteTrack only assigns an id once a detection has been matched across TWO
+# passes; until then Ultralytics returns the box with id=None and this engine
+# used to drop it. That rule assumes passes are close together. They are not:
+# measured on the live Exit camera, consecutive passes were 5-42s apart, while
+# a person crosses the corridor in about 2s. So somebody walking through is
+# seen on exactly ONE pass, never gets an id, and the camera reports
+#
+#     detections=1 scores=[0.784] tracks=0 ids=[]
+#
+# - a plainly visible person, detected at 0.784, counted as nobody.
+#
+# Above this confidence the detection is adopted immediately as a provisional
+# track. The bar is deliberately well clear of noise: empty corridor frames
+# score 0.00-0.01, real people 0.43-0.78. Set to 0 to restore the old
+# id-only behaviour.
+#
+# Safe for attendance: a body track cannot mark attendance on its own. That
+# requires a face match clearing services/attendance_gate.
+_ADOPT_UNTRACKED_MIN_CONF = float(os.getenv("CCTV_ADOPT_UNTRACKED_MIN_CONF", "0.35"))
 _INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
 
 # Two published boxes overlapping by at least this fraction of the SMALLER box
@@ -496,12 +518,17 @@ class ByteTrackEngine:
                         det_scores = [round(float(c), 3) for c in boxes.conf.cpu().tolist()]
                 except Exception:
                     det_scores = []
+                xyxy = boxes.xyxy.cpu().numpy() if getattr(boxes, "xyxy", None) is not None else []
+                ids = None
                 if getattr(boxes, "id", None) is not None:
                     ids = boxes.id.int().cpu().tolist()
-                    xyxy = boxes.xyxy.cpu().numpy()
-                    for tid, box in zip(ids, xyxy):
+
+                for idx, box in enumerate(xyxy):
+                    b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                    tid = ids[idx] if (ids is not None and idx < len(ids)) else None
+
+                    if tid is not None:
                         seen.add(int(tid))
-                        b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
                         pt = self.tracks.get(int(tid))
                         if pt is None:
                             self.tracks[int(tid)] = PersonTrack(
@@ -509,6 +536,52 @@ class ByteTrackEngine:
                             )
                         else:
                             pt.update_box(b)
+                        continue
+
+                    # No id: ByteTrack has seen this detection once and is
+                    # waiting for a second pass to confirm it. At this cadence
+                    # that second pass may never see the person. Adopt it now if
+                    # it is confidently a person -- see _ADOPT_UNTRACKED_MIN_CONF.
+                    score = det_scores[idx] if idx < len(det_scores) else 0.0
+                    if _ADOPT_UNTRACKED_MIN_CONF <= 0 or score < _ADOPT_UNTRACKED_MIN_CONF:
+                        continue
+
+                    # Do not double-count: if it overlaps a track we already
+                    # hold, refresh that one instead of inventing a second.
+                    matched_id, best_iou = None, 0.0
+                    for known_id, known in self.tracks.items():
+                        overlap = self._iou(b, known.box)
+                        if overlap > best_iou:
+                            best_iou, matched_id = overlap, known_id
+                    if matched_id is not None and best_iou >= 0.30:
+                        self.tracks[matched_id].update_box(b)
+                        seen.add(matched_id)
+                        continue
+
+                    aux_id = self._next_aux_id
+                    self._next_aux_id += 1
+                    # NOTE max_misses is NOT what retires this track. Retention
+                    # in this engine is TIME based -- see the edge/interior hold
+                    # windows below -- so a provisional track lives for
+                    # max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+                    # like any other. It is passed for consistency only.
+                    #
+                    # Consequence worth knowing on a doorway: a walker who has
+                    # left keeps their box until that window elapses, so the
+                    # count decays rather than dropping instantly. That hold
+                    # exists for room cameras, where a seated person vanishes
+                    # behind a chair back and must not blink out. Shorten it with
+                    # CCTV_TRACK_INTERIOR_HOLD_CYCLES / _MIN_SEC if a lingering
+                    # doorway count matters more than steady room boxes.
+                    self.tracks[aux_id] = PersonTrack(
+                        track_id=aux_id, box=b, max_misses=self.max_misses
+                    )
+                    seen.add(aux_id)
+                    logger.info(
+                        "YOLO camera=%s adopted untracked detection score=%.3f as "
+                        "provisional track=%d (ByteTrack had not confirmed it yet)",
+                        self.camera_id, score, aux_id,
+                    )
 
         # Full-frame inference is the primary detector and is enough for almost
         # every view. A camera listed in CCTV_CROP_ASSIST_CAMERAS additionally
