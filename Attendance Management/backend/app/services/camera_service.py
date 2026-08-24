@@ -244,6 +244,11 @@ _IDENTITY_HOLD_SEC    = float(os.getenv("CCTV_IDENTITY_HOLD_SEC", "2.5"))
 # changed (empty doorway). Mean abs-diff below this = "no motion". This keeps
 # CPU free with many cameras and makes detection instant when someone appears.
 _MOTION_THRESHOLD     = float(os.getenv("CCTV_MOTION_THRESHOLD", "3.0"))
+
+# How long a MONITOR camera may coast on a static scene before it re-analyses
+# anyway, even with no motion. Bounds the staleness of a coasted count: a room
+# that somehow empties without registering motion is re-checked within this.
+_MONITOR_COAST_SEC = float(os.getenv("CCTV_MONITOR_COAST_SEC", "30"))
 # If nobody has viewed a camera's stream for this long, stop encoding preview
 # JPEGs (recognition/attendance keep running). Saves CPU for background work.
 _DISPLAY_IDLE_SEC     = float(os.getenv("CCTV_DISPLAY_IDLE_SEC", "8.0"))
@@ -1349,6 +1354,9 @@ class _RecognitionThread(threading.Thread):
     def __init__(self, worker: "CameraWorker") -> None:
         super().__init__(daemon=True, name=f"recog-{worker.camera_id}")
         self._w = worker
+        # When detection last actually ran. Bounds how long a MONITOR camera may
+        # coast its tracks on a static scene -- see the motion gate in run().
+        self._last_analysed_ts: float = 0.0
         self._stop_evt = threading.Event()
         self._prev_gray: Optional[np.ndarray] = None  # for motion gating
         # Edge-triggered log flags: log a skip ONCE when it starts, not every tick.
@@ -1915,12 +1923,34 @@ class _RecognitionThread(threading.Thread):
                 w.state.recognition_status = "analyzing"
 
                 # ── Motion gate ──────────────────────────────────────────────
-                # Skip expensive detection ONLY on a truly empty, static scene
-                # (an idle doorway with nobody tracked) to save CPU. It must NOT
-                # skip when people are present: MONITOR cameras watch people who
-                # sit still, and an entrance camera must keep tracking a person
-                # who has stopped moving. So: never skip on a monitor camera, and
-                # never skip while any track is active.
+                # This is the single biggest lever on whether a person walking
+                # past is seen at all, because inference_gate has ONE slot on
+                # this hardware: every camera's detection is serialised through
+                # it. Whatever holds that slot is denying it to everyone else.
+                #
+                # MEASURED: a room pass costs 2.18s and a doorway pass 1.73s, so
+                # two room cameras analysing CONTINUOUSLY made the round-robin
+                # 2x2.18 + 2x1.73 = 7.8s. A person crosses a doorway in about 2s,
+                # giving roughly a 26% chance of being sampled at all -- which is
+                # exactly the reported "sometimes it sees everyone, sometimes one
+                # or two".
+                #
+                # MONITOR cameras used to be exempt from this gate. The reason
+                # was sound: they watch people who sit still, and clearing their
+                # tracks would drop a seated person from the count. But the fix
+                # for that is to keep the tracks, not to keep burning the only
+                # inference slot on a room where nothing has moved.
+                #
+                # So now:
+                #   * static + IN/OUT + nothing tracked -> skip AND clear (an
+                #     empty doorway really has nobody in it)
+                #   * static + MONITOR                  -> skip but KEEP tracks,
+                #     so seated people stay counted while the slot goes to
+                #     whichever camera actually has movement
+                #   * any motion                        -> analyse
+                #
+                # Coasting is bounded by _MONITOR_COAST_SEC so a stale count
+                # cannot persist indefinitely.
                 static = False
                 if self._prev_gray is not None and self._prev_gray.shape == gray.shape:
                     motion = float(np.mean(cv2.absdiff(gray, self._prev_gray)))
@@ -1930,7 +1960,7 @@ class _RecognitionThread(threading.Thread):
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
                 if static and not w.is_monitor and w.state.active_tracks == 0:
-                    # Empty, static scene → nothing to do; skip detection.
+                    # Empty, static doorway → nothing to do; skip detection.
                     if not self._motion_logged:
                         self._motion_logged = True
                         logger.info("Camera %s: idle scene — detection paused (no motion)", w.camera_id)
@@ -1938,6 +1968,21 @@ class _RecognitionThread(threading.Thread):
                         w._latest_tracks = []
                     w.state.recognition_status = "idle"
                     continue
+
+                if static and w.is_monitor:
+                    coasted = time.time() - getattr(self, "_last_analysed_ts", 0.0)
+                    if coasted < _MONITOR_COAST_SEC:
+                        # Hold the previous tracks; do NOT clear them, and do not
+                        # spend the inference slot on a room where nothing moved.
+                        if not self._motion_logged:
+                            self._motion_logged = True
+                            logger.info(
+                                "Camera %s: static room — coasting %d track(s), "
+                                "inference slot released", w.camera_id,
+                                w.state.active_tracks,
+                            )
+                        w.state.recognition_status = "idle"
+                        continue
                 if self._motion_logged:
                     self._motion_logged = False
                     logger.info("Camera %s: motion resumed — detection active", w.camera_id)
@@ -1949,6 +1994,10 @@ class _RecognitionThread(threading.Thread):
                     self._analyze_person(
                         w, frame, rgb, skip_faces=blurry, frame_ts=frame_ts,
                     )
+                    # This path returns via `continue`, so the stamp cannot live
+                    # with the face path's publish block below. MONITOR cameras
+                    # always come through here.
+                    self._last_analysed_ts = time.time()
                     continue
 
                 # Import here to avoid circular imports at module load
@@ -2182,6 +2231,7 @@ class _RecognitionThread(threading.Thread):
                 # latest raw frame at a high FPS, so the video stays smooth and
                 # boxes never flicker even though analysis runs slower.
                 w.state.active_tracks = len(tracks)
+                self._last_analysed_ts = time.time()
                 with w._frame_lock:
                     w._latest_tracks = list(tracks)
                     w.state.updated_at = time.time()
