@@ -211,6 +211,38 @@ def is_available() -> bool:
     return _model_path() is not None
 
 
+def _static_onnx_size(path: str) -> int | None:
+    """The fixed square input size of an ONNX export, or None if it is dynamic.
+
+    Exists because a mismatch here does not degrade gracefully -- it kills the
+    camera outright. models/yolo11m.onnx is exported with a STATIC
+    [1,3,960,960] input, so running it at any other imgsz makes onnxruntime
+    reject EVERY frame with
+
+        INVALID_ARGUMENT : Got invalid dimensions for input: images
+        index: 2 Got: 480 Expected: 960
+
+    which surfaces only as a per-frame traceback while the camera detects
+    nothing at all, indefinitely. That happened on the Exit camera: a
+    YOLO_PERSON_IMGSZ tuned against the .pt build was applied to the .onnx one.
+    """
+    if not path.lower().endswith(".onnx"):
+        return None
+    try:
+        import onnx
+
+        model = onnx.load(path, load_external_data=False)
+        dims = model.graph.input[0].type.tensor_type.shape.dim
+        h = dims[2].dim_value if dims[2].HasField("dim_value") else 0
+        w = dims[3].dim_value if dims[3].HasField("dim_value") else 0
+        return int(h) if h and h == w else None
+    except Exception:
+        # Never let a probe stop a camera starting; the mismatch will simply
+        # surface as it did before.
+        logger.debug("could not read ONNX input shape for %s", path, exc_info=True)
+        return None
+
+
 class ByteTrackEngine:
     """Per-camera YOLO11+ByteTrack tracker keeping PersonTrack identity state."""
 
@@ -383,6 +415,19 @@ class ByteTrackEngine:
             except Exception:
                 logger.exception("Camera %s: failed to load YOLO11 model", self.camera_id)
                 return None
+            # A static-input ONNX model cannot run at any other size. Correct it
+            # loudly instead of letting every frame raise INVALID_ARGUMENT and
+            # the camera silently see nothing.
+            required = _static_onnx_size(path)
+            if required and required != self.imgsz:
+                logger.error(
+                    "Camera %s: %s has a STATIC %dx%d input but imgsz=%d was "
+                    "requested — forcing %d. Set imgsz to %d for this model, or "
+                    "point the camera at a .pt build, which accepts any size.",
+                    self.camera_id, os.path.basename(path), required, required,
+                    self.imgsz, required, required,
+                )
+                self.imgsz = required
             logger.info(
                 "Camera %s: YOLO11 loaded path=%s imgsz=%d conf=%.2f tracker=%s device=%s",
                 self.camera_id, path, self.imgsz, self.conf,
