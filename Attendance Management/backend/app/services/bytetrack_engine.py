@@ -139,6 +139,19 @@ _CROP_ASSIST_CAMERAS = {
 _ADOPT_UNTRACKED_MIN_CONF = float(os.getenv("CCTV_ADOPT_UNTRACKED_MIN_CONF", "0.35"))
 _INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
 
+# Absolute ceiling on how long a track may be published after it stopped being
+# detected.
+#
+# The hold windows below are expressed in CYCLES, which is right in principle --
+# a camera analysing every 0.12s and one analysing every 4s should not use the
+# same wall-clock grace. But cycles-only has no upper bound, and it scales the
+# WRONG way under load: the busier the box, the longer stale people linger.
+#
+# MEASURED on the running system, median analysis gaps of 5-10s turned a 6s
+# floor into a 30-60s hold, and 55% of passes published more tracks than the
+# detector found -- including an empty corridor reporting five people.
+_HOLD_MAX_SEC = float(os.getenv("CCTV_TRACK_HOLD_MAX_SEC", "10.0"))
+
 # Two published boxes overlapping by at least this fraction of the SMALLER box
 # are treated as the same person and merged. See _dedupe_overlapping.
 _DEDUPE_OVERLAP = float(os.getenv("CCTV_TRACK_DEDUPE_OVERLAP", "0.55"))
@@ -395,7 +408,8 @@ class ByteTrackEngine:
             aux_id = self._next_aux_id
             self._next_aux_id += 1
             self.tracks[aux_id] = PersonTrack(
-                track_id=aux_id, box=box, max_misses=self.max_misses
+                track_id=aux_id, box=box, max_misses=self.max_misses,
+                provisional=True,
             )
             seen.add(aux_id)
             scores.append(round(score, 3))
@@ -536,6 +550,9 @@ class ByteTrackEngine:
                             )
                         else:
                             pt.update_box(b)
+                            # The tracker has now confirmed it; it is no longer
+                            # provisional and may be coasted normally.
+                            pt.provisional = False
                         continue
 
                     # No id: ByteTrack has seen this detection once and is
@@ -574,7 +591,8 @@ class ByteTrackEngine:
                     # CCTV_TRACK_INTERIOR_HOLD_CYCLES / _MIN_SEC if a lingering
                     # doorway count matters more than steady room boxes.
                     self.tracks[aux_id] = PersonTrack(
-                        track_id=aux_id, box=b, max_misses=self.max_misses
+                        track_id=aux_id, box=b, max_misses=self.max_misses,
+                        provisional=True,
                     )
                     seen.add(aux_id)
                     logger.info(
@@ -630,14 +648,31 @@ class ByteTrackEngine:
         # Hold windows scale with how fast this engine is actually being called,
         # so an intermittent detection is never dropped after a single miss.
         cycle = self._measured_cycle_sec()
-        edge_limit = max(_EDGE_HOLD_MIN_SEC, _EDGE_HOLD_CYCLES * cycle)
-        interior_limit = max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+        edge_limit = min(
+            _HOLD_MAX_SEC, max(_EDGE_HOLD_MIN_SEC, _EDGE_HOLD_CYCLES * cycle)
+        )
+        interior_limit = min(
+            _HOLD_MAX_SEC, max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+        )
 
         for tid in list(self.tracks.keys()):
             if tid in seen:
                 continue
             track = self.tracks[tid]
             track.mark_missed()
+
+            # A provisional track was never confirmed by the tracker. One missed
+            # pass is the whole of its evidence expiring, so it goes now rather
+            # than being coasted.
+            #
+            # This is what stops a WALKER accumulating ids. They are somewhere
+            # else on every pass, so they can never be matched to their own held
+            # box by IoU; without this, each pass adopts another id and the count
+            # climbs 1,2,3,4,5 for a single person -- reproduced in
+            # test_track_lifecycle.test_a_walker_does_not_accumulate_ids.
+            if getattr(track, "provisional", False):
+                del self.tracks[tid]
+                continue
 
             cx, cy = track.centroid()
             at_edge = (

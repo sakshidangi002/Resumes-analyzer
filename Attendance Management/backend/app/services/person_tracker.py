@@ -82,6 +82,13 @@ class PersonTrack:
     # same failure mode as the mislabelling this system already suffered.
     identity_source: Optional[str] = None
 
+    # True when this track was ADOPTED from a detection ByteTrack had not yet
+    # confirmed, rather than created from a tracker-assigned id. It asserts only
+    # "something person-shaped was here on this pass" and carries no motion
+    # history, so it must not be coasted like a confirmed track -- see the
+    # retention loop in bytetrack_engine.
+    provisional: bool = False
+
     # Stable-confirmation + attendance state (mirrors FaceTrack).
     pending_employee_id: Optional[int] = None
     confirm_count: int = 0
