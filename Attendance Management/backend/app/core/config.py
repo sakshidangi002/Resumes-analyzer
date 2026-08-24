@@ -193,6 +193,27 @@ class Settings(BaseSettings):
     # tall (was 120-180), and 960 was measured to detect them just as well as 1600
     # (0.67/0.61/0.37 vs 0.65/0.60/0.36) at roughly HALF the cost. Smaller = faster
     # analysis = names appear on screen sooner.
+    #
+    # TUNING THIS: benchmark at the camera's REAL frame size (960x1080 here),
+    # never on a crop of a dashboard screenshot. A crop makes the subject fill
+    # far more of the frame, so it flatters small input sizes. Measured on the
+    # Exit hallway at true geometry, best person score per frame against a 0.20
+    # track threshold:
+    #
+    #     frame      imgsz=480       imgsz=640   imgsz=960
+    #     person A   0.254           0.493       0.458
+    #     person B   0.148 DROPPED   0.475       0.314
+    #     person C   0.742           0.320       0.260
+    #     empty x2   0.000           0.010       0.000
+    #
+    # 480 looked fine on a cropped pane and put a walking person UNDER the
+    # threshold in the live feed - the corridor reporting "People: 0" with
+    # somebody plainly in it. Bigger is not automatically better either: 640
+    # beat 960 on all three.
+    #
+    # Doorway and room cameras want DIFFERENT values (see yolo_monitor_imgsz);
+    # a wide room with distant seated people needs the pixels, a close walking
+    # subject does not. Do not collapse them into one number.
     yolo_person_imgsz: int = 960
     # NMS IoU. Ultralytics defaults to 0.7, which is too permissive for this
     # ceiling view: two overlapping boxes on ONE person (e.g. a tight box on the
