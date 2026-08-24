@@ -498,6 +498,18 @@ class CameraRuntimeState:
     display_fps: float = 0.0  # rendered (encoded) FPS shown to the viewer
     recognition_status: str = "idle"  # idle | analyzing | recognized
     crossing_count: int = 0  # people who crossed the doorway line (this camera)
+    # Cumulative CONFIRMED TRANSITS for this camera today, split by whether the
+    # person could be named. `active_tracks` answers "who is in frame now";
+    # these answer "how many have passed through", which is the number an
+    # operator actually wants and which no screen showed.
+    #
+    # Seeded from the database when the worker starts (see _warm_transit_totals)
+    # so a restart does not reset the day to zero, then incremented in-process
+    # as transits are recorded. Never queried per frame - the display thread
+    # runs at ~8fps and the database is remote.
+    transits_total: int = 0
+    transits_employee: int = 0
+    transits_unknown: int = 0
     # Age of the frame at the moment it was encoded for display, in ms — i.e.
     # how far behind real life the operator's picture is. THE number to watch:
     # a flat value means the pipeline keeps up, a steadily climbing one means
@@ -521,6 +533,7 @@ def _draw_enhanced_overlay(
     line: Optional[dict] = None,
     crossing_count: int = 0,
     track_label: str = "Faces",
+    totals: dict | None = None,
 ) -> np.ndarray:
     """Enhanced overlay with green/red boxes, labels, confidence, and metadata.
 
@@ -681,6 +694,8 @@ def _draw_enhanced_overlay(
             str(camera_name),
             f"{fps:.0f}fps  {track_label[0]}:{len(tracks)}",
         ]
+        if totals is not None and totals.get("total"):
+            overlay_lines.append(f"T:{totals['total']}")
         if line:
             overlay_lines.append(f"X:{crossing_count}")
     else:
@@ -691,6 +706,11 @@ def _draw_enhanced_overlay(
             # caller passes the correct label so the counter never misreports.
             f"{track_label}: {len(tracks)}",
         ]
+        if totals is not None and totals.get("total"):
+            overlay_lines.append(
+                f"Today: {totals['total']}  "
+                f"E:{totals['employee']} U:{totals['unknown']}"
+            )
         if line:
             overlay_lines.append(f"Crossings: {crossing_count}")
     overlay_lines.append(now_text)
@@ -1015,6 +1035,11 @@ def _mark_from_track(
     track.attendance_marked = True
     w.note_attendance_marked(employee_id)
     w.state.recognition_status = "recognized"
+    # A named transit. Counted here rather than at the DB write because that
+    # happens off-thread and may be retried; this is the moment the gate
+    # approved exactly one transit for this track.
+    w.state.transits_total += 1
+    w.state.transits_employee += 1
 
     # Carry the gate's evidence onto the stored row alongside the match score,
     # so a disputed record shows not just "0.61" but how many observations,
@@ -1790,6 +1815,8 @@ class _RecognitionThread(threading.Thread):
                                         match_margin=fd.get("margin"),
                                     )
                                     pt.unknown_event_marked = True
+                                    w.state.transits_total += 1
+                                    w.state.transits_unknown += 1
             if pt.matched:
                 any_match = True
 
@@ -1834,10 +1861,13 @@ class _RecognitionThread(threading.Thread):
                     match_margin=None,
                 ) is not None:
                     pt.unknown_event_marked = True
+                    w.state.transits_total += 1
+                    w.state.transits_unknown += 1
                     logger.info(
                         "TRANSIT camera=%s [%s] track=%d counted as UNKNOWN "
-                        "(no usable face)", w.camera_id, w.camera_purpose,
-                        pt.track_id,
+                        "(no usable face) today_total=%d",
+                        w.camera_id, w.camera_purpose, pt.track_id,
+                        w.state.transits_total,
                     )
 
             # (b) Attendance.
@@ -2377,6 +2407,14 @@ class _DisplayThread(threading.Thread):
                     frame, tracks, w.name, w.state.fps,
                     line=line_info, crossing_count=w.state.crossing_count,
                     track_label="People" if w.use_person_tracking else "Faces",
+                    # Doorway cameras only: a MONITOR camera watches desks and
+                    # never asserts a transit, so a running total there would be
+                    # meaningless.
+                    totals=None if w.is_monitor else {
+                        "total": w.state.transits_total,
+                        "employee": w.state.transits_employee,
+                        "unknown": w.state.transits_unknown,
+                    },
                 )
                 ok_enc, jpeg_buf = cv2.imencode(
                     ".jpg", annotated,
@@ -2664,9 +2702,53 @@ class CameraWorker:
             )
 
     # ── lifecycle ───────────────────────────────────────────────────────────
+    def _warm_transit_totals(self) -> None:
+        """Seed today's transit counters so a restart does not zero the day.
+
+        One query at worker start, never per frame: the display thread renders
+        at ~8fps and this database is remote. Best-effort - a camera must start
+        even when the database is unreachable, in which case the counters simply
+        begin at zero and climb from this session's transits.
+        """
+        try:
+            from app.db.session import SessionLocal
+            from app.models.attendance import AttendanceEvent
+            from app.models.unknown_attendance_event import UnknownAttendanceEvent
+            from app.core.datetime_utils import get_ist_now
+
+            today = get_ist_now().date()
+            cam = str(self.camera_id)
+            with SessionLocal() as db:
+                emp = (
+                    db.query(AttendanceEvent)
+                    .filter(AttendanceEvent.attendance_date == today,
+                            AttendanceEvent.camera_id == cam)
+                    .count()
+                )
+                unk = (
+                    db.query(UnknownAttendanceEvent)
+                    .filter(UnknownAttendanceEvent.attendance_date == today,
+                            UnknownAttendanceEvent.camera_id == cam)
+                    .count()
+                )
+            self.state.transits_employee = int(emp)
+            self.state.transits_unknown = int(unk)
+            self.state.transits_total = int(emp) + int(unk)
+            logger.info(
+                "Camera %s: today's transits seeded — total=%d employee=%d unknown=%d",
+                self.camera_id, self.state.transits_total, emp, unk,
+            )
+        except Exception:
+            logger.warning(
+                "Camera %s: could not seed today's transit totals; counting from 0",
+                self.camera_id, exc_info=True,
+            )
+
     def start(self) -> None:
         if self._stream_thread and self._stream_thread.is_alive():
             return
+        if not self.is_monitor:
+            self._warm_transit_totals()
         # Restore the cooldown before any frame can be analysed, so a restart
         # cannot re-mark someone who was just marked.
         if not self.is_monitor:
@@ -2767,6 +2849,12 @@ class CameraWorker:
             "active_tracks": s.active_tracks,
             "crossing_enabled": self.crossing_enabled,
             "crossing_count": s.crossing_count,
+            # Cumulative transits for TODAY on this camera (seeded from the DB
+            # at start, then incremented in-process). Distinct from
+            # active_tracks, which is only who is in frame right now.
+            "transits_total": s.transits_total,
+            "transits_employee": s.transits_employee,
+            "transits_unknown": s.transits_unknown,
             "person_tracking": self.use_person_tracking,
             "total_frames": s.total_frames,
             "reconnect_count": s.reconnect_count,
