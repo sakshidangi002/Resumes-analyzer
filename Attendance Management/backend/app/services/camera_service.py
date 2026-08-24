@@ -1798,6 +1798,48 @@ class _RecognitionThread(threading.Thread):
             if w.is_monitor:
                 continue
 
+            # ── Count the PERSON, even when nobody can name them ────────────
+            #
+            # "Did somebody pass through?" and "who was it?" are different
+            # questions and must not share a gate. They did: an UNKNOWN transit
+            # was only recorded from inside the `decision.reason == "no_match"`
+            # branch, which is reached only after a face has been FOUND, passed
+            # the quality gate and been matched against the gallery.
+            #
+            # So a person whose face was never visible - walking away from the
+            # lens, head down, or simply not sampled while their face was
+            # towards the camera - produced no event at all. Not an employee
+            # event, not an unknown event. They vanished from the corridor
+            # count entirely, which is the opposite of what an IN/OUT counter
+            # is for.
+            #
+            # Recognition still decides IDENTITY. It no longer decides whether
+            # the person existed. `unknown_event_marked` is set by the
+            # face-based branch above when it fires, so a track is counted once
+            # and only once, by whichever branch reaches it first.
+            if (
+                not pt.matched
+                and not pt.unknown_event_marked
+                and not getattr(pt, "attendance_marked", False)
+            ):
+                if unknown_attendance.record(
+                    camera_id=str(w.camera_id),
+                    purpose=w.camera_purpose,
+                    event_time=frame_ist_time,
+                    track_id=pt.track_id,
+                    unknown_face_id=None,     # no face was ever usable
+                    crop_path=None,
+                    quality_score=None,
+                    match_score=None,
+                    match_margin=None,
+                ) is not None:
+                    pt.unknown_event_marked = True
+                    logger.info(
+                        "TRANSIT camera=%s [%s] track=%d counted as UNKNOWN "
+                        "(no usable face)", w.camera_id, w.camera_purpose,
+                        pt.track_id,
+                    )
+
             # (b) Attendance.
             #
             # Line crossing used to be an ALTERNATIVE trigger:

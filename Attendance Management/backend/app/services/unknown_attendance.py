@@ -93,14 +93,34 @@ def _record(*, camera_id: str, direction: str, event_time: datetime,
         if unknown_face_id and not crop_path:
             face = db.query(UnknownFace).filter(UnknownFace.id == unknown_face_id).first()
             crop_path = face.crop_path if face else None
-        # Idempotency protects against a camera retry and tracker fragmentation.
-        recent = db.query(UnknownAttendanceEvent).filter(
+        # Idempotency protects against a camera retry and tracker fragmentation
+        # -- the SAME person being written twice. It must not collapse DIFFERENT
+        # people into one event.
+        #
+        # This previously matched on camera + event_type + a +/-20s window and
+        # nothing else, so two people walking in ten seconds apart produced ONE
+        # row: the second call found the first and returned its id. For a
+        # corridor counter that is not a small inaccuracy, it is the difference
+        # between "2 entered" and "1 entered".
+        #
+        # Scoped to the track instead. A track is one physical person for the
+        # length of their transit, so a repeat write for the same track inside
+        # the window is genuinely a duplicate, while a different track is
+        # genuinely a different person.
+        #
+        # When track_id is unknown we cannot distinguish the two cases, so the
+        # old camera-wide window still applies -- conservative, and it only
+        # affects callers that do not supply a track.
+        dedupe = db.query(UnknownAttendanceEvent).filter(
             UnknownAttendanceEvent.camera_id == str(camera_id),
             UnknownAttendanceEvent.event_type == event_type,
             UnknownAttendanceEvent.event_time >= when - timedelta(seconds=20),
             UnknownAttendanceEvent.event_time <= when + timedelta(seconds=20),
-        ).order_by(UnknownAttendanceEvent.event_time.desc()).first()
-        if recent is not None and (when - recent.event_time).total_seconds() <= 20:
+        )
+        if track_id is not None:
+            dedupe = dedupe.filter(UnknownAttendanceEvent.track_id == int(track_id))
+        recent = dedupe.order_by(UnknownAttendanceEvent.event_time.desc()).first()
+        if recent is not None and abs((when - recent.event_time).total_seconds()) <= 20:
             return int(recent.id)
         row = UnknownAttendanceEvent(
             camera_id=str(camera_id), event_time=when,

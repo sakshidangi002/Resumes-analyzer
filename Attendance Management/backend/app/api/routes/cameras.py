@@ -24,6 +24,7 @@ import socket
 from urllib.parse import urlparse
 from typing import Optional
 
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Response, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -231,6 +232,38 @@ def _validate_camera_source(source_url: str, source_type: str) -> str:
 def get_camera_stats(current_user=Depends(get_current_user)):
     """Return global camera system statistics."""
     return camera_manager.get_stats()
+
+
+@router.get("/corridor/summary", tags=["cameras"])
+def corridor_summary_endpoint(
+    day: Optional[date] = Query(default=None, description="IST date; defaults to today"),
+    current_user=Depends(get_current_user),
+):
+    """How many people passed through the corridor today, and how many were named.
+
+    in_count = employees_in + unknown_in. Counting depends on detection and
+    tracking only; recognition decides identity, never whether the person is
+    counted. A transit nobody could name is Unknown, not absent.
+    """
+    from app.services.corridor_counts import corridor_summary
+
+    return corridor_summary(day)
+
+
+@router.get("/corridor/events", tags=["cameras"])
+def corridor_events_endpoint(
+    day: Optional[date] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    current_user=Depends(get_current_user),
+):
+    """Individual corridor transits, newest first.
+
+    `identity` is null for an unknown transit and is never filled with a
+    best-guess employee.
+    """
+    from app.services.corridor_counts import corridor_events
+
+    return {"events": corridor_events(day, limit=limit)}
 
 
 @router.post("/cameras/test-connection", tags=["cameras"])
