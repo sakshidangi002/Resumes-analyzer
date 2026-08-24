@@ -137,6 +137,34 @@ _CROP_ASSIST_CAMERAS = {
 # Safe for attendance: a body track cannot mark attendance on its own. That
 # requires a face match clearing services/attendance_gate.
 _ADOPT_UNTRACKED_MIN_CONF = float(os.getenv("CCTV_ADOPT_UNTRACKED_MIN_CONF", "0.35"))
+
+# How far an adopted detection may be from an existing track and still be judged
+# the same person, as a multiple of that track's box size.
+#
+# IoU alone cannot associate a WALKER across passes. At ~2.5s per pass a person
+# crosses more than their own body width, so consecutive boxes do not overlap at
+# all and IoU is exactly 0. Each pass therefore adopted a NEW provisional id:
+#
+#     pass 0 id=1000000   pass 1 id=1000001   pass 2 id=1000002 ...
+#
+# The count looked right - one track per pass - but identity churned, and that
+# is what actually broke attendance. Evidence (the fused template and the
+# identity-agreement counter) lives ON the track, so a fresh id every pass means
+# observations reset to 1 every pass and min_observations can never be reached,
+# no matter how long the person is in view.
+#
+# Distance is scaled by the track's own box because a box 300px tall is a person
+# near the camera, who covers more ground per pass than a distant one.
+#
+# Safety: this associates BODIES, never identities. A wrong merge cannot mislabel
+# attendance - identity still comes from a face match, and attendance_gate still
+# demands agreeing employee ids, so a merged track reads as `unstable_identity`
+# and is refused rather than attributed to the wrong person.
+# Scaled by box WIDTH, not max(width, height): a standing person's box is ~3x
+# taller than wide, so using height gave a 600px reach for a 100px-wide person
+# and merged two people standing 600px apart into one track. Width is the right
+# scale for horizontal displacement, which is how people cross a doorway.
+_ADOPT_MATCH_DIST_FACTOR = float(os.getenv("CCTV_ADOPT_MATCH_DIST_FACTOR", "2.5"))
 _INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
 
 # Absolute ceiling on how long a track may be published after it stopped being
@@ -563,13 +591,43 @@ class ByteTrackEngine:
                     if _ADOPT_UNTRACKED_MIN_CONF <= 0 or score < _ADOPT_UNTRACKED_MIN_CONF:
                         continue
 
-                    # Do not double-count: if it overlaps a track we already
-                    # hold, refresh that one instead of inventing a second.
+                    # Do not double-count, and do not churn the id.
+                    #
+                    # First try IoU, which is the reliable signal when the person
+                    # has barely moved. Fall back to a size-scaled centroid
+                    # distance, because a walker's consecutive boxes do not
+                    # overlap at all at this cadence -- see
+                    # _ADOPT_MATCH_DIST_FACTOR for why that matters far more than
+                    # the count suggests.
+                    # A track already claimed by another detection THIS pass is
+                    # not a candidate. Without this, two people standing a couple
+                    # of body-widths apart both match the nearest track and
+                    # collapse into one - two people reported as one.
+                    bcx, bcy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
                     matched_id, best_iou = None, 0.0
                     for known_id, known in self.tracks.items():
+                        if known_id in seen:
+                            continue
                         overlap = self._iou(b, known.box)
                         if overlap > best_iou:
                             best_iou, matched_id = overlap, known_id
+
+                    if matched_id is None or best_iou < 0.30:
+                        nearest, nearest_d = None, None
+                        for known_id, known in self.tracks.items():
+                            if known_id in seen:
+                                continue
+                            kx1, ky1, kx2, ky2 = known.box
+                            kcx, kcy = (kx1 + kx2) / 2.0, (ky1 + ky2) / 2.0
+                            reach = _ADOPT_MATCH_DIST_FACTOR * max(
+                                1.0, float(kx2 - kx1)
+                            )
+                            d = ((bcx - kcx) ** 2 + (bcy - kcy) ** 2) ** 0.5
+                            if d <= reach and (nearest_d is None or d < nearest_d):
+                                nearest, nearest_d = known_id, d
+                        if nearest is not None:
+                            matched_id, best_iou = nearest, 1.0   # accept below
+
                     if matched_id is not None and best_iou >= 0.30:
                         self.tracks[matched_id].update_box(b)
                         seen.add(matched_id)

@@ -176,3 +176,60 @@ def test_published_count_never_exceeds_what_was_detected_on_an_empty_scene(engin
     eng.update(_frame()); eng.update(_frame())
     final = [len(eng.update(_frame())) for _ in range(10)][-1]
     assert final == 0
+
+
+# ---------------------------------------------------------------------------
+# Identity stability. A stable id matters far more than the count suggests:
+# attendance evidence (the fused template and the identity-agreement counter)
+# lives ON the track, so a fresh id every pass resets observations to 1 and
+# min_observations can never be reached however long the person is in view.
+# ---------------------------------------------------------------------------
+def _walking(steps, step_px=120, x0=100.0):
+    return [
+        ([[x0 + i * step_px, 100.0, x0 + 100.0 + i * step_px, 400.0]], [0.85], None)
+        for i in range(steps)
+    ]
+
+
+def _standing(xs):
+    return (
+        [[x, 100.0, x + 100.0, 400.0] for x in xs],
+        [0.85] * len(xs),
+        None,
+    )
+
+
+def test_a_walker_keeps_one_stable_id(engine):
+    """IoU is 0 between consecutive boxes at this cadence; distance must carry it."""
+    eng = engine()
+    eng._fake.script = _walking(4)
+    ids = []
+    for _ in range(4):
+        tracks = eng.update(_frame())
+        assert len(tracks) == 1
+        ids.append(tracks[0].track_id)
+    assert len(set(ids)) == 1, f"walker churned through ids {ids}"
+
+
+def test_two_people_standing_close_stay_two_tracks(engine):
+    """Regression: a size-scaled reach once merged people 200px apart into one."""
+    eng = engine()
+    eng._fake.script = [_standing([100.0, 300.0])] * 3
+    for _ in range(3):
+        assert len(eng.update(_frame())) == 2
+
+
+def test_three_people_close_together_stay_three(engine):
+    eng = engine()
+    eng._fake.script = [_standing([100.0, 260.0, 420.0])] * 3
+    for _ in range(3):
+        assert len(eng.update(_frame())) == 3
+
+
+def test_two_detections_cannot_claim_the_same_track(engine):
+    """The mechanism behind the merge: both matched the nearest track."""
+    eng = engine()
+    eng._fake.script = [_standing([100.0, 300.0])] * 2
+    eng.update(_frame())
+    tracks = eng.update(_frame())
+    assert len({t.track_id for t in tracks}) == 2
