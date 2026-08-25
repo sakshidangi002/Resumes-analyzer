@@ -351,3 +351,56 @@ def test_summary_reports_actual_not_requested_cadence():
         "actual cadence must be reported honestly, not as the target"
     )
     assert s["total_selections"] == 20
+
+
+# ---------------------------------------------------------------------------
+# Characterisation: what a DEAD camera currently costs.
+#
+# Found during live RTSP validation, not by reasoning. Camera 59's grabber was
+# killed mid-run; the other three carried on correctly (that part is the fault
+# isolation the design promises). But 59's slot still held its last frame, so
+# the scheduler kept selecting it and spent 7 inference passes on a picture that
+# reached 71 SECONDS old:
+#
+#     cam 59  frame age  mean 25.3s   p95 71.4s   max 71.4s
+#     others  frame age  mean 0.045s
+#
+# On a doorway that would be inference spent on a corridor that emptied a minute
+# ago. The scheduler has no upper bound on the age of a frame it is willing to
+# process.
+#
+# This test PINS THE CURRENT BEHAVIOUR rather than asserting it is correct. It
+# is deliberately not written as the fix, because the policy is a judgement
+# call: a hard cutoff is right for a doorway, but a room camera watching people
+# who barely move may still be worth processing at 30s. Decide the policy, then
+# change this test with it.
+# ---------------------------------------------------------------------------
+def test_a_dead_camera_is_still_selected_with_an_ancient_frame():
+    """Characterisation, not an endorsement -- see the note above."""
+    clock = Clock()
+    sched, grabbers, processed = build(clock, cameras=(57,))
+    grabbers[57].publish("last-frame-before-death", timestamp=clock.t)
+
+    clock.advance(120.0)                 # the camera has been dead two minutes
+    sel = sched.run_once()
+
+    assert sel is not None, "scheduler skipped it (behaviour changed -- update this test)"
+    assert sel.staleness_at_selection >= 120.0
+    assert processed == [(57, 1)], "a two-minute-old frame was processed"
+
+
+def test_a_dead_camera_does_not_prevent_the_others_being_served():
+    """The half that IS correct, and was confirmed live: killing camera 59 left
+    57/58/60 serving normally at unchanged throughput."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock)
+    publish_all(grabbers, clock)
+
+    for _ in range(30):
+        # 59 never publishes again; everybody else keeps producing.
+        for cid in (57, 58, 60):
+            grabbers[cid].publish("fresh", timestamp=clock.t)
+        sched.run_once()
+        clock.advance(0.5)
+
+    assert all(sched.stats[cid].selections > 0 for cid in (57, 58, 60))
