@@ -63,6 +63,9 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=240.0)
     ap.add_argument("--fault", type=int, default=None,
                     help="camera id to kill mid-run, to prove fault isolation")
+    ap.add_argument("--recover-after", type=float, default=45.0,
+                    help="seconds to leave the faulted camera down before "
+                         "reconnecting it, to prove recovery is automatic")
     args = ap.parse_args()
 
     import logging
@@ -70,7 +73,7 @@ def main() -> int:
 
     from app.cctv_v2.capture.grabber import CameraGrabber
     from app.cctv_v2.scheduler.loop import InferenceScheduler
-    from app.cctv_v2.config.cameras import CAMERA_ROLE, role_for
+    from app.cctv_v2.config.cameras import CAMERA_ROLE, profile_for, role_for
     from app.db.session import SessionLocal
     from app.models.camera import CameraConfig
 
@@ -91,8 +94,11 @@ def main() -> int:
     last_selected: dict[int, float] = {}
     consumed: dict[int, int] = defaultdict(int)
 
+    selection_log: list[tuple[float, int, float]] = []   # (t, camera, frame_age)
+
     def process(camera_id, snap):
         now = time.time()
+        selection_log.append((now, camera_id, now - snap.timestamp))
         frame_ages[camera_id].append(now - snap.timestamp)
         if camera_id in last_selected:
             service_gaps[camera_id].append(now - last_selected[camera_id])
@@ -111,14 +117,25 @@ def main() -> int:
     sched._started_at = time.time()
     sched.start()
 
-    faulted = False
+    faulted_at = None
+    recovered_at = None
     t0 = time.time()
     while time.time() - t0 < args.seconds:
-        time.sleep(2.0)
-        if args.fault and not faulted and time.time() - t0 > args.seconds * 0.4:
-            print(f"\n  >>> killing camera {args.fault} to test isolation\n")
+        time.sleep(1.0)
+        now = time.time()
+        if args.fault and faulted_at is None and now - t0 > args.seconds * 0.3:
+            print()
+            print(f"  >>> killing camera {args.fault}")
+            print()
             grabbers[args.fault].stop()
-            faulted = True
+            faulted_at = time.time()
+        elif (args.fault and faulted_at and recovered_at is None
+              and now - faulted_at > args.recover_after):
+            print()
+            print(f"  >>> reconnecting camera {args.fault}")
+            print()
+            grabbers[args.fault].start()
+            recovered_at = time.time()
 
     # Snapshot health BEFORE stopping: health() reports live connection state,
     # and reading it after stop() would always show connected=False.
@@ -159,7 +176,7 @@ def main() -> int:
     print("=" * 72)
     total = sum(consumed.values()) or 1
     print(f"{'cam':>4}{'role':>9}{'served':>8}{'share':>8}{'avg wait':>10}"
-          f"{'p95':>9}{'max':>9}{'starved':>9}")
+          f"{'p95':>9}{'max':>9}{'starved':>9}{'stale-skip':>12}")
     for cid in sorted(grabbers):
         v = service_gaps[cid]
         st = sched.stats[cid]
@@ -167,7 +184,7 @@ def main() -> int:
         print(f"{cid:>4}{role_for(cid):>9}{consumed[cid]:>8}"
               f"{100*consumed[cid]/total:>7.1f}%{avg:>10.2f}"
               f"{_pct(v,0.95):>9.2f}{(max(v) if v else 0):>9.2f}"
-              f"{st.starvation_selections:>9}")
+              f"{st.starvation_selections:>9}{st.stale_skips:>12}")
 
     print()
     print("=" * 72)
@@ -182,11 +199,43 @@ def main() -> int:
 
     print()
     print(f"throughput: {total/elapsed:.3f} selections/s over {elapsed:.0f}s")
-    if args.fault:
-        others = [c for c in grabbers if c != args.fault]
-        after = all(consumed[c] > 0 for c in others)
-        print(f"fault isolation: camera {args.fault} killed; "
-              f"others still served = {after}")
+    if args.fault and faulted_at:
+        cid = args.fault
+        cutoff = profile_for(cid).max_frame_age
+        after_death = [(ts, age) for ts, c, age in selection_log
+                       if c == cid and ts >= faulted_at]
+        while_down = [(ts, age) for ts, age in after_death
+                      if recovered_at is None or ts < recovered_at]
+
+        print()
+        print("=" * 72)
+        print(f"E. STALE-FRAME POLICY   camera {cid} ({role_for(cid)}, "
+              f"cutoff {cutoff:.1f}s)")
+        print("=" * 72)
+        print(f"  killed at              t+{faulted_at - t0:.1f}s")
+        if recovered_at:
+            print(f"  reconnected at         t+{recovered_at - t0:.1f}s "
+                  f"(down {recovered_at - faulted_at:.0f}s)")
+        print(f"  selections while down: {len(while_down)}")
+        if while_down:
+            last_ts, _ = while_down[-1]
+            worst = max(a for _, a in while_down)
+            print(f"    last one at          +{last_ts - faulted_at:.1f}s after death")
+            verdict = 'OK' if worst <= cutoff + 0.5 else 'EXCEEDS CUTOFF'
+            print(f"    oldest frame processed {worst:.2f}s  {verdict}")
+        print(f"  stale skips:           {sched.stats[cid].stale_skips}")
+        if recovered_at:
+            after_rec = [ts for ts, c, _ in selection_log
+                         if c == cid and ts >= recovered_at]
+            if after_rec:
+                print(f"  recovery:              resumed "
+                      f"{after_rec[0] - recovered_at:.1f}s after reconnect, "
+                      f"{len(after_rec)} selections since")
+            else:
+                print("  recovery:              NEVER RESUMED  <-- bug")
+        others = sorted(c for c in grabbers if c != cid)
+        print("  other cameras served:  "
+              + ", ".join(f"{c}={consumed[c]}" for c in others))
     return 0
 
 

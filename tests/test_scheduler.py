@@ -129,14 +129,27 @@ def test_a_doorway_that_has_waited_longer_still_wins():
     assert sched.select_next().camera_id in DOORWAYS
 
 
-def test_a_stale_doorway_beats_a_fresher_room():
-    """The second worked example: doorway 5s vs room 1s -> doorway."""
+def test_a_long_waiting_doorway_beats_a_recently_served_room():
+    """The second worked example: doorway waited 5s, room waited 1s -> doorway.
+
+    REWRITTEN when frame-age eligibility went in, because the original did not
+    test what its name claimed. It expressed the difference by publishing the
+    doorway frames four seconds before the room frames -- but publish time never
+    entered the score, so both cameras had identical service age and the doorway
+    won on priority alone, which the previous test already covers. It would have
+    passed with the scoring rule deleted.
+
+    The difference now lives in the quantity that actually drives the score, and
+    every camera holds a current frame as a real 12fps stream would.
+    """
     clock = Clock()
     sched, grabbers, _ = build(clock)
-    publish_all(grabbers, clock, DOORWAYS)
-    clock.advance(4.0)
-    publish_all(grabbers, clock, ROOMS)
-    clock.advance(1.0)
+
+    sched.stats[57].last_served = clock.t - 5.0      # doorways have waited
+    sched.stats[58].last_served = clock.t - 5.0
+    sched.stats[59].last_served = clock.t - 1.0      # rooms were just served
+    sched.stats[60].last_served = clock.t - 1.0
+    publish_all(grabbers, clock)
 
     assert sched.select_next().camera_id in DOORWAYS
 
@@ -169,9 +182,11 @@ def test_the_starvation_deadline_overrides_the_score():
 
     served = set()
     for _ in range(40):
-        # Doorways are refreshed constantly, rooms are not touched again.
-        grabbers[57].publish("fresh", timestamp=clock.t)
-        grabbers[58].publish("fresh", timestamp=clock.t)
+        # Every camera keeps streaming whether or not it is being served -- an
+        # RTSP feed does not stop because inference is busy elsewhere. The
+        # rooms are starved of SERVICE here, not of frames; those are different
+        # failures and only the first one is what this test is about.
+        publish_all(grabbers, clock)
         sel = sched.run_once()
         if sel:
             served.add(sel.camera_id)
@@ -210,9 +225,14 @@ def test_a_backlog_is_never_worked_through():
     """After a long stall, the scheduler resumes at the present, not the past."""
     clock = Clock()
     sched, grabbers, processed = build(clock, cameras=(57,))
+
+    # Nine seconds in which INFERENCE is stalled but the camera keeps streaming.
+    # The original advanced the clock after publishing, which stalled the camera
+    # too and is a different scenario -- one the frame-age cutoff now correctly
+    # refuses to process at all.
     for i in range(50):
+        clock.advance(0.18)
         grabbers[57].publish(f"f{i}", timestamp=clock.t)
-    clock.advance(9.0)                     # a nine-second inference stall
 
     sched.run_once()
     sched.run_once()
@@ -242,15 +262,14 @@ def test_a_camera_that_starts_late_is_picked_up():
     """Reconnect: a camera that begins producing mid-run joins normally."""
     clock = Clock()
     sched, grabbers, _ = build(clock)
-    publish_all(grabbers, clock, (57, 59, 60))
     for _ in range(6):
+        publish_all(grabbers, clock, (57, 59, 60))     # 58 is not up yet
         sched.run_once()
         clock.advance(0.5)
     assert sched.stats[58].selections == 0
 
-    grabbers[58].publish("late", timestamp=clock.t)
-    clock.advance(3.0)
     for _ in range(6):
+        publish_all(grabbers, clock)                   # 58 comes online
         sched.run_once()
         clock.advance(0.5)
 
@@ -354,53 +373,219 @@ def test_summary_reports_actual_not_requested_cadence():
 
 
 # ---------------------------------------------------------------------------
-# Characterisation: what a DEAD camera currently costs.
+# Frame-age eligibility
 #
-# Found during live RTSP validation, not by reasoning. Camera 59's grabber was
-# killed mid-run; the other three carried on correctly (that part is the fault
-# isolation the design promises). But 59's slot still held its last frame, so
-# the scheduler kept selecting it and spent 7 inference passes on a picture that
-# reached 71 SECONDS old:
+# Found live, not by reasoning. Camera 59's grabber was killed mid-run; the
+# other three carried on correctly, but 59's slot still held its last frame, so
+# the scheduler kept choosing it and spent 7 inference passes on a picture that
+# aged to 71 SECONDS:
 #
-#     cam 59  frame age  mean 25.3s   p95 71.4s   max 71.4s
+#     cam 59  frame age  mean 25.3s  max 71.4s
 #     others  frame age  mean 0.045s
 #
-# On a doorway that would be inference spent on a corridor that emptied a minute
-# ago. The scheduler has no upper bound on the age of a frame it is willing to
-# process.
+# Service age said "59 has waited longest" and it was true; the frame was still
+# worthless. So the two ages answer different questions and both are asked:
 #
-# This test PINS THE CURRENT BEHAVIOUR rather than asserting it is correct. It
-# is deliberately not written as the fix, because the policy is a judgement
-# call: a hard cutoff is right for a doorway, but a room camera watching people
-# who barely move may still be worth processing at 30s. Decide the policy, then
-# change this test with it.
+#     FRAME AGE    is this picture still true?      -> eligibility
+#     SERVICE AGE  how long has it been waiting?    -> score
+#
+# The cutoffs (doorway 1.0s, room 5.0s) live in the profiles, not here. A
+# doorway transit lasts ~2s, so a one-second-old doorway frame is already half a
+# crossing out of date; a seated person is still seated five seconds later.
 # ---------------------------------------------------------------------------
-def test_a_dead_camera_is_still_selected_with_an_ancient_frame():
-    """Characterisation, not an endorsement -- see the note above."""
+def _aged(grabbers, clock, camera_id, age):
+    """Give a camera a frame of exactly `age` seconds."""
+    grabbers[camera_id].publish(f"f{camera_id}", timestamp=clock.t - age)
+
+
+def test_a_doorway_frame_just_over_the_cutoff_is_refused():
     clock = Clock()
-    sched, grabbers, processed = build(clock, cameras=(57,))
-    grabbers[57].publish("last-frame-before-death", timestamp=clock.t)
+    sched, grabbers, _ = build(clock, cameras=(57,))
+    _aged(grabbers, clock, 57, 1.01)
 
-    clock.advance(120.0)                 # the camera has been dead two minutes
-    sel = sched.run_once()
-
-    assert sel is not None, "scheduler skipped it (behaviour changed -- update this test)"
-    assert sel.staleness_at_selection >= 120.0
-    assert processed == [(57, 1)], "a two-minute-old frame was processed"
+    assert sched.select_next() is None
+    assert sched.stats[57].stale_skips == 1
 
 
-def test_a_dead_camera_does_not_prevent_the_others_being_served():
-    """The half that IS correct, and was confirmed live: killing camera 59 left
-    57/58/60 serving normally at unchanged throughput."""
+def test_a_doorway_frame_just_under_the_cutoff_is_accepted():
     clock = Clock()
-    sched, grabbers, _ = build(clock)
-    publish_all(grabbers, clock)
+    sched, grabbers, _ = build(clock, cameras=(57,))
+    _aged(grabbers, clock, 57, 0.99)
 
-    for _ in range(30):
-        # 59 never publishes again; everybody else keeps producing.
+    sel = sched.select_next()
+    assert sel is not None and sel.camera_id == 57
+    assert sched.stats[57].stale_skips == 0
+
+
+def test_a_room_frame_just_over_the_cutoff_is_refused():
+    """Five seconds, not one. A room tolerates what a doorway cannot."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(59,))
+    _aged(grabbers, clock, 59, 5.01)
+
+    assert sched.select_next() is None
+    assert sched.stats[59].stale_skips == 1
+
+
+def test_a_room_frame_just_under_the_cutoff_is_accepted():
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(59,))
+    _aged(grabbers, clock, 59, 4.99)
+
+    sel = sched.select_next()
+    assert sel is not None and sel.camera_id == 59
+
+
+def test_the_cutoffs_differ_by_role():
+    """A 3s frame is dead on a doorway and perfectly usable in a room. The same
+    number must not be applied to both."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(57, 59))
+    _aged(grabbers, clock, 57, 3.0)
+    _aged(grabbers, clock, 59, 3.0)
+
+    assert sched.select_next().camera_id == 59, "doorway should have been refused"
+
+
+def _run_with_59_dark(sched, grabbers, clock, steps):
+    """Advance the scheduler while 57/58/60 stream and 59 sends nothing."""
+    for _ in range(steps):
         for cid in (57, 58, 60):
             grabbers[cid].publish("fresh", timestamp=clock.t)
         sched.run_once()
         clock.advance(0.5)
 
-    assert all(sched.stats[cid].selections > 0 for cid in (57, 58, 60))
+
+def test_a_stale_camera_stops_receiving_inference_and_blocks_nobody():
+    """The live failure, in miniature: 59 dies, everyone else carries on.
+
+    Note what is NOT asserted: that 59 receives zero selections outright. Its
+    last frame is legitimately usable for five seconds after the stream stops,
+    and processing it during that window is correct -- the cutoff is a
+    freshness rule, not a liveness probe. What must be true is that the
+    selections STOP and never resume while the camera stays dark.
+    """
+    clock = Clock()
+    sched, grabbers, _ = build(clock)
+    publish_all(grabbers, clock)
+
+    _run_with_59_dark(sched, grabbers, clock, 12)     # 6s: past the 5s cutoff
+    settled = sched.stats[59].selections
+
+    _run_with_59_dark(sched, grabbers, clock, 40)     # 20s more of nothing
+
+    assert sched.stats[59].selections == settled, "a dead camera kept getting inference"
+    assert sched.stats[59].stale_skips > 0
+    for cid in (57, 58, 60):
+        assert sched.stats[cid].selections > 0, f"camera {cid} was blocked by 59"
+
+
+def test_inference_stops_within_the_cutoff_of_a_stream_dying():
+    """How much is wasted on a dead camera, measured. Live, before this fix, it
+    was 7 passes and still counting at 71 seconds."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock)
+    publish_all(grabbers, clock)
+    died_at = clock.t
+
+    last_seen = died_at
+    for _ in range(60):                               # 30s of 59 being dead
+        for cid in (57, 58, 60):
+            grabbers[cid].publish("fresh", timestamp=clock.t)
+        sel = sched.run_once()
+        if sel and sel.camera_id == 59:
+            last_seen = clock.t
+        clock.advance(0.5)
+
+    wasted = last_seen - died_at
+    assert wasted <= 5.0, f"processed a {wasted:.1f}s-old frame; cutoff is 5.0s"
+
+
+def test_a_stale_camera_recovers_on_its_own_when_frames_return():
+    """No manual reset. A fresh frame is the whole recovery mechanism."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock)
+    publish_all(grabbers, clock)
+
+    _run_with_59_dark(sched, grabbers, clock, 12)          # 59 goes dark
+    settled = sched.stats[59].selections
+    _run_with_59_dark(sched, grabbers, clock, 20)          # stays dark
+    assert sched.stats[59].selections == settled           # and stays skipped
+
+    for _ in range(20):                                    # 59 reconnects
+        publish_all(grabbers, clock)
+        sched.run_once()
+        clock.advance(0.5)
+
+    assert sched.stats[59].selections > settled, "camera never re-entered scheduling"
+
+
+def test_recovery_is_prompt_because_time_spent_stale_still_counts_as_waiting():
+    """A recovered camera must not have to earn its turn again from zero.
+
+    `last_served` is deliberately left untouched while a camera is stale, so the
+    seconds it spent dark count towards its score. Resetting it on recovery
+    would push a just-returned camera to the back of the queue -- the moment it
+    most needs a look.
+    """
+    clock = Clock()
+    sched, grabbers, _ = build(clock)
+    publish_all(grabbers, clock)
+
+    for _ in range(30):
+        for cid in (57, 58, 60):
+            grabbers[cid].publish("fresh", timestamp=clock.t)
+        sched.run_once()
+        clock.advance(0.5)
+
+    publish_all(grabbers, clock)                 # 59 comes back
+    assert sched.select_next().camera_id == 59, "recovered camera was not prioritised"
+
+
+def test_the_starvation_deadline_does_not_override_staleness():
+    """Waiting a long time earns a turn, not the right to process a dead frame.
+
+    This is the ordering that matters most: if the deadline were checked first,
+    a camera that died would eventually breach it and be selected anyway --
+    reintroducing the exact bug, on the camera least likely to recover.
+    """
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(59,), max_starvation=5.0)
+    _aged(grabbers, clock, 59, 60.0)
+    clock.advance(30.0)                          # far past the deadline
+
+    assert sched.select_next() is None
+    assert sched.stats[59].starvation_selections == 0
+
+
+def test_when_every_camera_is_stale_the_scheduler_waits():
+    """It must idle, not spin. `run_once` returning None is what makes `_run`
+    sleep instead of re-examining four dead cameras as fast as the CPU allows."""
+    clock = Clock()
+    sched, grabbers, processed = build(clock)
+    for cid in ALL:
+        _aged(grabbers, clock, cid, 90.0)
+
+    for _ in range(50):
+        assert sched.run_once() is None
+
+    assert processed == []
+    assert all(s.selections == 0 for s in sched.stats.values())
+    assert all(sched.stats[cid].stale_skips == 50 for cid in ALL)
+
+
+def test_frame_age_gates_but_does_not_rank():
+    """The two ages must stay in their own lanes.
+
+    Both cameras are eligible and camera 60 holds the OLDER frame. If frame age
+    leaked into the score, 60 would win. It must not: 59 has waited longer, and
+    waiting is what the score measures.
+    """
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(59, 60))
+    _aged(grabbers, clock, 59, 0.1)              # fresher picture...
+    _aged(grabbers, clock, 60, 4.0)              # ...older, but still eligible
+    sched.stats[59].last_served = clock.t - 10.0  # ...and has waited far longer
+    sched.stats[60].last_served = clock.t - 1.0
+
+    assert sched.select_next().camera_id == 59

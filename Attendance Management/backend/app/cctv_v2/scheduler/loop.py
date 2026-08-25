@@ -66,6 +66,30 @@ Ties break on camera id so a given set of inputs always yields the same choice.
 A scheduler that reorders between runs cannot be tested, and cannot be trusted
 when its behaviour is later questioned.
 
+TWO AGES, TWO JOBS
+------------------
+Two different clocks are read here and conflating them has already caused one
+bug each way:
+
+    SERVICE AGE  time since this camera was last SERVED.
+                 Answers "how long has it been waiting?"  -> drives the score.
+
+    FRAME AGE    time since the frame in the slot was CAPTURED.
+                 Answers "is this picture still true?"    -> drives eligibility.
+
+Frame age must never become the score: all four cameras run at 12fps, so every
+newest frame is ~0.08s old at every instant, which leaves the cameras
+permanently tied and hands the decision to the tie-break -- measured, 134
+selections to camera 57 against 22 for camera 58 at equal priority.
+
+Service age must never become the eligibility test either: a camera that has
+waited a long time is not thereby showing a valid picture. Camera 59 was killed
+mid-run and kept getting selected on service age alone while the frame it was
+offering aged to 71 seconds.
+
+So a camera is first asked whether its picture is still true, and only the ones
+that pass are ranked on how long they have waited.
+
 SCOPE
 -----
 Selection and measurement only. `process` is a callback: detection, tracking,
@@ -87,6 +111,9 @@ logger = logging.getLogger(__name__)
 # Any camera unserved for this long is selected regardless of score. Turns the
 # self-correcting-score argument into a bounded guarantee.
 DEFAULT_MAX_STARVATION_SEC = 20.0
+
+# How often to repeat the "still stale" line for a camera that stays dead.
+_STALE_LOG_EVERY_SEC = 30.0
 
 # Sleep when no camera has a frame. Short enough to pick one up promptly,
 # long enough not to spin a core doing nothing.
@@ -119,6 +146,7 @@ class CameraStats:
     role: str
     selections: int = 0
     starvation_selections: int = 0
+    stale_skips: int = 0           # times passed over for offering a dead picture
     total_staleness: float = 0.0
     max_staleness: float = 0.0
     total_inference: float = 0.0
@@ -153,6 +181,14 @@ class InferenceScheduler:
             role = role_for(cid)
             self.stats[cid] = CameraStats(camera_id=cid, role=role, last_served=clock())
 
+        # Per-camera stale-logging state. A dead camera is re-examined every
+        # _IDLE_SLEEP, so logging each skip would write ~20 lines/second and
+        # bury the event that matters. Instead: one line when it goes stale, one
+        # every _STALE_LOG_EVERY_SEC while it stays that way, one when it comes
+        # back.
+        self._stale_since: dict[int, float] = {}
+        self._stale_logged_at: dict[int, float] = {}
+
         self.history: list[Selection] = []
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -160,10 +196,16 @@ class InferenceScheduler:
 
     # ── selection ────────────────────────────────────────────────────────────
     def select_next(self) -> Optional[Selection]:
-        """Choose the next camera. Pure: no inference, no side effects.
+        """Choose the next camera. Runs no inference.
 
         Separated from the run loop so fairness can be tested deterministically
         with an injected clock and no threads.
+
+        Not pure: it records stale skips and their log state, because "camera 59
+        was passed over 40 times for offering a dead frame" is the only evidence
+        that would explain an otherwise silent gap in that camera's coverage.
+        Returning None leaves the caller to idle -- see `_run` -- so a fleet
+        where every camera is stale waits rather than spinning.
         """
         now = self._clock()
         candidates: list[tuple[float, int, FrameSnapshot, str]] = []
@@ -177,6 +219,19 @@ class InferenceScheduler:
 
             frame_age = max(0.0, now - snap.timestamp)
             since_served = max(0.0, now - self.stats[cid].last_served)
+
+            # Is the picture still true? Asked BEFORE anything else, including
+            # the starvation deadline: a camera that has waited a long time has
+            # earned a turn, but not the right to have a dead frame processed.
+            # Letting starvation override this would reintroduce exactly the
+            # behaviour being fixed, and on the camera least likely to recover.
+            max_age = profile_for(cid).max_frame_age
+            if frame_age > max_age:
+                self.stats[cid].stale_skips += 1
+                self._log_stale(cid, frame_age, max_age)
+                continue
+
+            self._clear_stale(cid)
 
             if since_served >= self._max_starvation:
                 # Hard deadline. Ranked above every scored candidate by using a
@@ -205,6 +260,37 @@ class InferenceScheduler:
             score=score,
             reason=reason,
         )
+
+    def _log_stale(self, camera_id: int, frame_age: float, max_age: float) -> None:
+        """Record that a camera was passed over, without flooding the log."""
+        now = self._clock()
+        first = camera_id not in self._stale_since
+        if first:
+            self._stale_since[camera_id] = now
+        last = self._stale_logged_at.get(camera_id, 0.0)
+        if first or (now - last) >= _STALE_LOG_EVERY_SEC:
+            self._stale_logged_at[camera_id] = now
+            logger.warning(
+                "SCHED-STALE camera=%s role=%s frame_age=%.1fs > max %.1fs — "
+                "skipped, stale for %.0fs (stream stopped?)",
+                camera_id, self.stats[camera_id].role, frame_age, max_age,
+                now - self._stale_since[camera_id],
+            )
+
+    def _clear_stale(self, camera_id: int) -> None:
+        """A fresh frame arrived. Recovery is automatic and needs no reset.
+
+        The camera re-enters normal scheduling with its existing `last_served`
+        untouched, so the time it spent stale counts as waiting and it is picked
+        up promptly rather than having to earn its turn again from zero.
+        """
+        if camera_id in self._stale_since:
+            logger.info(
+                "SCHED-FRESH camera=%s recovered after %.0fs stale; "
+                "eligible again", camera_id, self._clock() - self._stale_since[camera_id],
+            )
+            self._stale_since.pop(camera_id, None)
+            self._stale_logged_at.pop(camera_id, None)
 
     def run_once(self) -> Optional[Selection]:
         """Select one camera, process its newest frame, record what it cost."""
@@ -300,6 +386,8 @@ class InferenceScheduler:
                 "role": s.role,
                 "selections": s.selections,
                 "starvation_selections": s.starvation_selections,
+                "stale_skips": s.stale_skips,
+                "max_frame_age": profile_for(cid).max_frame_age,
                 "avg_staleness": round(s.avg_staleness, 3),
                 "max_staleness": round(s.max_staleness, 3),
                 "avg_inference": round(s.avg_inference, 3),

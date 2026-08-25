@@ -80,6 +80,28 @@ class Profile:
     # cycle and hid the fact. V2 records requested vs actual separately.
     analysis_interval_target: float
 
+    # The oldest frame this camera is willing to have processed. A VALIDITY
+    # check, not a scheduling weight -- see the scheduler's docstring for why
+    # those must stay separate.
+    #
+    # Measured, like everything else here. Live, a healthy camera's frame is
+    # 0.03-0.04s old when the scheduler picks it up, with a worst case of 0.111s
+    # across 100 selections. So both cutoffs sit far above normal operation and
+    # only trigger on a stream that has actually stopped.
+    #
+    # They differ because a stale frame costs the two roles differently. A
+    # doorway answers "is somebody crossing right now", and a person crosses in
+    # about two seconds -- a one-second-old frame is already half a crossing out
+    # of date, and inference on it can only produce a false answer about the
+    # present. A room answers "who is sitting here", and a seated person is
+    # still there five seconds later, so the same picture retains most of its
+    # value. Hence 1.0s and 5.0s.
+    #
+    # Found by killing camera 59 mid-run: its slot kept the last frame, the
+    # scheduler kept choosing it, and seven inference passes went to a picture
+    # that aged to 71 seconds.
+    max_frame_age: float
+
     # ── Recognition ──────────────────────────────────────────────────────────
     match_threshold: float
     match_margin: float
@@ -112,6 +134,7 @@ DOORWAY = Profile(
     tracker_cfg="models/bytetrack_person.yaml",
     new_track_thresh=0.20,
     analysis_interval_target=0.12,
+    max_frame_age=1.0,
     match_threshold=0.45,
     match_margin=0.18,
     min_face_px=28.0,
@@ -134,6 +157,7 @@ ROOM = Profile(
     tracker_cfg="models/bytetrack_person_lowconf.yaml",
     new_track_thresh=0.03,
     analysis_interval_target=1.5,
+    max_frame_age=5.0,
     match_threshold=0.42,
     match_margin=0.10,
     min_face_px=16.0,
