@@ -188,6 +188,20 @@ class Settings(BaseSettings):
     # faster way to execute the same network.
     # Re-export after swapping models:
     #   YOLO('models/yolo11m.pt').export(format='onnx', imgsz=960, simplify=True)
+    # Which CCTV pipeline runs: "v1" (the existing camera_service) or "v2"
+    # (app/cctv_v2). Defaults to v1 and MUST stay there until V2 has been
+    # compared against V1 on the same footage.
+    #
+    # V2 is an architecture and scheduling change, not a CV change: four camera
+    # grabbers with latest-frame slots feeding ONE fair scheduler and ONE
+    # inference worker, replacing four workers contending on an unfair
+    # semaphore. The CV parameters are identical in both, deliberately, so a
+    # measured difference can be attributed to scheduling rather than to
+    # somebody having moved a threshold at the same time.
+    #
+    # This is the rollback switch. If V2 misbehaves, set it back to v1 and
+    # restart - no code change, no revert.
+    cctv_pipeline: str = "v1"
     yolo_person_model_path: str = "models/yolo11m.onnx"
     # Inference size. After the dev-room camera was re-aimed, people are ~250px
     # tall (was 120-180), and 960 was measured to detect them just as well as 1600
