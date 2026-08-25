@@ -424,6 +424,40 @@ async def _unified_lifespan(parent_app: FastAPI):
     and run our background scheduler (5 PM IST DSR reminder) alongside it.
     Also starts persistent CCTV camera workers on boot.
     """
+    # ── Bound concurrent sync request handlers ─────────────────────────────
+    #
+    # Starlette runs every `def` (non-async) route handler in anyio's thread
+    # pool, which defaults to 40 threads. Nearly all of this app's handlers are
+    # sync and each takes a pooled DB connection, so 40 concurrent requests can
+    # claim the ENTIRE pool (pool_size 20 + max_overflow 20) and leave nothing
+    # for the work that does not arrive over HTTP: four camera workers, the
+    # attendance writer pool, the WebSocket manager and the APScheduler jobs.
+    #
+    # That is how this database reached "FATAL: sorry, too many clients
+    # already" and dropped CCTV transit events.
+    #
+    # Capped below the connection pool so background work always has headroom.
+    # Requests beyond the cap queue for a thread instead of failing on a
+    # connection checkout, which is a far better failure mode: a slightly
+    # slower response rather than a 500 and a lost attendance event.
+    #
+    # NOT a substitute for the real fix -- see app/api/deps.get_db_session,
+    # which was opening two connections per authenticated request. This is the
+    # backstop that keeps a traffic spike from starving the cameras.
+    try:
+        import anyio.to_thread
+
+        _req_threads = int(os.getenv("REQUEST_THREAD_LIMIT", "24"))
+        anyio.to_thread.current_default_thread_limiter().total_tokens = _req_threads
+        logger.info(
+            "Sync request handlers capped at %d concurrent threads "
+            "(DB pool is %s+%s, remainder reserved for camera/scheduler work)",
+            _req_threads, os.getenv("DB_POOL_SIZE", "20"),
+            os.getenv("DB_MAX_OVERFLOW", "20"),
+        )
+    except Exception:
+        logger.warning("Could not cap the request thread pool", exc_info=True)
+
     _warn_on_weak_secret_key()
     _sync_blocked_employee_users()
     _initialize_database_defaults()

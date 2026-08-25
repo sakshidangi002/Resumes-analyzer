@@ -24,8 +24,29 @@ def is_employment_status_blocked(value: str | None) -> bool:
     return bool(value) and value in BLOCKED_EMPLOYMENT_STATUSES
 
 
-def get_db_session() -> Generator[Session, None, None]:
-    yield from get_db()
+# The SAME callable object as app.db.session.get_db, deliberately -- not a
+# wrapper around it.
+#
+# FastAPI caches resolved dependencies per request KEYED ON THE CALLABLE. A
+# wrapper is a different object, so `Depends(get_db)` in a route handler and
+# `Depends(get_db_session)` in the auth chain resolved independently and opened
+# TWO sessions, and therefore two pooled connections, for every authenticated
+# request. 176 handlers use the first name; the whole auth chain uses the
+# second.
+#
+# With a 20+20 pool and Starlette's 40-thread default for sync handlers, that
+# is up to 80 connections wanted against 40 available -- which is how this
+# database reached "FATAL: sorry, too many clients already" and dropped CCTV
+# transit events.
+#
+# Aliasing also fixes a subtler bug: `current_user` was loaded on a DIFFERENT
+# session from the one a handler committed, so mutating current_user and
+# committing `db` silently discarded the write. Same session now, so it does
+# not.
+#
+# Keep this an alias. Re-introducing a wrapper (even `yield from get_db()`)
+# restores the double-checkout.
+get_db_session = get_db
 
 
 def _get_current_user(
