@@ -42,6 +42,31 @@ They are FROZEN for the V2 rebuild. V2 is an architecture and scheduling change;
 if the CV parameters move at the same time, a V1/V2 comparison cannot attribute
 any difference to either. Proposed changes belong in a separate review, after
 the comparison.
+
+2026-08-26: THE ROOM NUMBERS ABOVE ARE NOW WRONG, AND HAVE BEEN CORRECTED
+------------------------------------------------------------------------
+Room detection moved from 480/0.03 to 960/0.015 with new_track_thresh 0.02.
+The claim in this docstring that 480 gave better worst-case scores than 960 was
+measured per FRAME, against whichever frames were to hand, and against no fixed
+ground truth. Re-measured against 16 labelled frames containing 41 hand-boxed
+people (scripts/cctv_v2_room_bench.py), scored per PERSON:
+
+    camera 59, four people   480     960     1280
+      LEFT-SEATED               0.30    0.40    0.70
+      TOP-DESK                  0.00    0.20    0.20   <- INVISIBLE at 480
+      RIGHT-SEATED              0.30    0.40    0.70
+      STANDING                  1.00    1.00    1.00
+    camera 60, one person       0.17    0.67    0.83
+    cost per pass               1.9s    3.8s    9.8s
+
+At 480 one of the four people in that room produces no detection at any
+confidence, on any frame. 960 rather than 1280 because all four cameras share
+one inference slot on this box and the doorways -- which mark attendance --
+queue behind the rooms.
+
+This does NOT break the V1/V2 comparison the freeze was protecting: V1 and V2
+were changed together, to identical values, in the same commit. What would break
+it is one of them moving alone.
 """
 from __future__ import annotations
 
@@ -102,6 +127,58 @@ class Profile:
     # that aged to 71 seconds.
     max_frame_age: float
 
+    # ── Tracking ─────────────────────────────────────────────────────────────
+    # ADDITIVE for Step 7. No existing measured value was changed.
+    #
+    # track_max_age_sec  how long a track is REMEMBERED after it stops being
+    #                    detected. Remembered, not reported -- a held track is
+    #                    kept only so the same person can be re-associated to it,
+    #                    and is never counted as present. V1 conflated those and
+    #                    an empty corridor reported five people.
+    #
+    #                    It must exceed the sampling interval or every track dies
+    #                    between passes. Measured live: doorways are served every
+    #                    5.34s and rooms every 4.87s.
+    #
+    #                    Doorway 12s -- a little over two passes. A doorway
+    #                    transit lasted a median 13.5s (camera 58, lunch hour),
+    #                    so two consecutive misses still belong to one crossing.
+    #                    Room 30s -- seated people are occluded for far longer,
+    #                    and a room track that dies gets re-counted as a new
+    #                    person the moment they lean back into view.
+    #
+    # track_min_hits     detections before a track is CONFIRMED rather than
+    #                    TENTATIVE. 2 for both: at multi-second sampling a third
+    #                    hit can cost 15s, and a doorway transit may only ever
+    #                    yield two (median 2.3 detections per transit, measured).
+    #
+    # track_high_conf    the ByteTrack high/low split. Set above each role's
+    #                    detection floor so the first association pass uses boxes
+    #                    that are actually reliable, and the leftovers get a
+    #                    second chance rather than being discarded.
+    # Whether the scheduler should prefer this camera when its picture is
+    # MOVING. Doorways only.
+    #
+    # Measured: 80% of camera 57's passes and 66% of camera 58's saw nobody at
+    # all, while a frame-difference costs ~2ms against a YOLO pass at ~4.9s. So
+    # most doorway inference was spent confirming an empty corridor, and the
+    # cost of noticing that cheaply first is negligible.
+    #
+    # ROOMS ARE DELIBERATELY NOT GATED. A room answers "who is sitting here",
+    # and a seated person barely moves -- gating on motion would let occupancy
+    # decay exactly when the room is calm, which is most of the time. A doorway
+    # asks "is somebody passing through", and somebody passing through moves by
+    # definition.
+    #
+    # This is a WEIGHTING, never a hard skip: an idle camera's score is damped,
+    # not zeroed, and the starvation deadline still guarantees it a turn. A
+    # camera cannot go blind because nothing happened to move in front of it.
+    motion_gated: bool
+
+    track_max_age_sec: float
+    track_min_hits: int
+    track_high_conf: float
+
     # ── Recognition ──────────────────────────────────────────────────────────
     match_threshold: float
     match_margin: float
@@ -135,6 +212,10 @@ DOORWAY = Profile(
     new_track_thresh=0.20,
     analysis_interval_target=0.12,
     max_frame_age=1.0,
+    motion_gated=True,
+    track_max_age_sec=12.0,
+    track_min_hits=2,
+    track_high_conf=0.35,
     match_threshold=0.45,
     match_margin=0.18,
     min_face_px=28.0,
@@ -152,12 +233,19 @@ DOORWAY = Profile(
 ROOM = Profile(
     role="room",
     model="models/yolo11m.pt",
-    input_size=480,
-    predict_conf=0.03,
+    # 960/0.015, was 480/0.03. See the note at the end of this docstring block
+    # and the matching entries in .env -- V1 and V2 are changed TOGETHER and to
+    # the same values, which is what keeps them comparable.
+    input_size=960,
+    predict_conf=0.015,
     tracker_cfg="models/bytetrack_person_lowconf.yaml",
-    new_track_thresh=0.03,
+    new_track_thresh=0.02,
     analysis_interval_target=1.5,
     max_frame_age=5.0,
+    motion_gated=False,
+    track_max_age_sec=30.0,
+    track_min_hits=2,
+    track_high_conf=0.02,
     match_threshold=0.42,
     match_margin=0.10,
     min_face_px=16.0,

@@ -657,6 +657,60 @@ export const cameras = {
   streamUrl: (id: number, token: string, nonce?: string | number) =>
     `/api/cameras/${id}/stream.mjpg?t=${encodeURIComponent(token)}` +
     (nonce != null ? `&n=${nonce}` : ""),
+  // Chair occupancy for a room camera. Computed by the CCTV V2 occupancy layer
+  // from the person boxes V1 has ALREADY produced, so polling this runs no
+  // extra inference and cannot slow the feed. Coordinates come back normalised
+  // with the frame size, because the <img> is object-fit: contain and pixel
+  // coordinates would be wrong as soon as it is resized.
+  occupancy: (id: number) =>
+    api.get<{
+      camera_id: number;
+      people_count: number;
+      chairs_total: number;
+      chairs_occupied: number;
+      chairs_free: number;
+      // Seats not yet decided. Without this the panel's numbers do not sum to
+      // the total and an undecided seat looks like a missing one.
+      chairs_unknown: number;
+      unassigned_people: number;
+      frame_width: number;
+      frame_height: number;
+      chairs: {
+        id: string;
+        occupied: boolean;
+        state: string;
+        occupant_track_id: number | null;
+        track_visible: boolean;
+        // Where the seat is, normalised 0..1, sent WITH its state. The page
+        // used to keep its own copy of the chair map, so any seat the backend
+        // gained but the copy lacked was counted and never drawn.
+        zone: [number, number, number, number];
+      }[];
+      people: {
+        track_id: number;
+        bbox: [number, number, number, number];
+        confidence: number;
+        chair_id: string | null;
+      }[];
+      // Chairs this camera can SEE but another camera controls. They carry no
+      // state because they take no part in this camera's occupancy -- a chair
+      // has exactly one owner. Drawn so three people at a desk this camera does
+      // not own do not read as a detection failure.
+      observed_elsewhere?: {
+        id: string;
+        zone: [number, number, number, number];
+        owned_by_camera: number | null;
+      }[];
+      // Physical chairs in the ROOM, each counted once. `chairs_total` is this
+      // camera's share; the two cameras' shares must never be added, because
+      // the row they both see would be counted twice.
+      room_chairs_total?: number;
+      // How old the analysis pass behind this answer is, and whether this
+      // response folded in a new one. A count is only ever as current as the
+      // last COMPLETED pass, and on this hardware that is seconds ago.
+      observation_age_sec?: number | null;
+      from_new_observation?: boolean;
+    }>(`/cameras/${id}/occupancy`),
   testConnection: (data: { source_url: string; source_type?: string }) =>
     api.post("/cameras/test-connection", data),
   stats: () => api.get("/cameras/stats"),

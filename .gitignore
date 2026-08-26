@@ -104,3 +104,6 @@ deploy/
 # Staging folder for face-enrolment photos. Biometric data - same rule as
 # data/unknown_faces and data/attendance_snapshots above: never committed.
 enrol_drop/
+
+# CCTV V2 measurement clips: frames of identifiable people. Never commit.
+data/cctv_v2_*/

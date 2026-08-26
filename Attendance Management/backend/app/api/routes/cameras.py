@@ -580,6 +580,49 @@ def get_camera_preview(
     return Response(content=jpeg, media_type="image/jpeg")
 
 
+@router.get("/cameras/{camera_id}/occupancy", tags=["cameras"])
+def get_camera_occupancy(
+    camera_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Chair occupancy for a room camera, for drawing on the live feed.
+
+    Computed by the CCTV V2 occupancy layer from the person boxes V1 HAS
+    ALREADY produced -- see app/cctv_v2/pipeline/v1_bridge.py. No extra RTSP
+    connection and NO ADDITIONAL INFERENCE: this reads a list that is already in
+    memory, so polling it costs essentially nothing and cannot slow the feed.
+
+    Coordinates are NORMALISED 0..1, with the frame size alongside them, so the
+    caller can scale the overlay to however the video is being displayed. Pixel
+    coordinates would be wrong the moment the <img> is resized.
+
+    POLLING THIS IS FREE, AND ALSO INERT. Calling it more often does not make
+    occupancy change faster: the smoothing advances once per completed ANALYSIS
+    PASS, not once per request. It used to advance per request, which meant the
+    dashboard's 2s poll spent three "consecutive observations" on a single pass
+    and chairs flipped state while nobody moved. `from_new_observation` says
+    whether this response folded in a new pass, and `observation_age_sec` how
+    old that pass is.
+
+    `chairs` are the seats THIS CAMERA OWNS. `observed_elsewhere` are seats it
+    can see but another camera controls -- a chair has exactly one owner, so the
+    two cameras' `chairs_total` must never be added. `room_chairs_total` is the
+    room's real count, each chair once.
+
+    404 when V1 is not running this camera -- a different thing from an empty
+    room, and a dashboard must not show them identically.
+    """
+    from app.cctv_v2.pipeline.v1_bridge import occupancy_snapshot
+
+    data = occupancy_snapshot(camera_id)
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"camera {camera_id} is not running; no occupancy available",
+        )
+    return data
+
+
 @router.get("/cameras/{camera_id}/stream.mjpg", tags=["cameras"])
 async def stream_camera_mjpeg(
     camera_id: int,

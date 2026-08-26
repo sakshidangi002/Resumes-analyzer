@@ -151,6 +151,54 @@ const CctvIcons = {
   ),
 };
 
+type OccupancySnapshot = {
+  camera_id: number;
+  people_count: number;
+  chairs_total: number;
+  chairs_occupied: number;
+  chairs_free: number;
+  // Seats the smoothing has not decided yet. Reported so the panel can add up:
+  // occupied + free + unknown == total, always.
+  chairs_unknown: number;
+  unassigned_people: number;
+  frame_width: number;
+  frame_height: number;
+  chairs: {
+    id: string;
+    occupied: boolean;
+    state: string;
+    occupant_track_id: number | null;
+    track_visible: boolean;
+    // Normalised 0..1, from the backend chair map. See the note below.
+    zone: [number, number, number, number];
+  }[];
+  people: {
+    track_id: number;
+    bbox: [number, number, number, number];
+    confidence: number;
+    chair_id: string | null;
+  }[];
+  // Seats this camera watches but does not control -- see the note where they
+  // are drawn. No state, because they take no part in this camera's occupancy.
+  observed_elsewhere?: {
+    id: string;
+    zone: [number, number, number, number];
+    owned_by_camera: number | null;
+  }[];
+  room_chairs_total?: number;
+  observation_age_sec?: number | null;
+  from_new_observation?: boolean;
+};
+
+// Seat coordinates used to be duplicated here, mirroring ROOM_GEOMETRY in
+// app/cctv_v2/config/geometry.py. They are not any more: the API sends each
+// chair's `zone` alongside its state.
+//
+// The copy was not merely redundant, it was silently lossy. Any seat added to
+// the backend map that this table did not know about hit `if (!zone) return
+// null` and was counted in "Chairs: N" while never being drawn -- so completing
+// the chair map would have made the overlay LESS complete.
+
 export default function CctvAttendance() {
   const scanTimerRef = useRef<number | null>(null);
   const busyRef = useRef(false);
@@ -163,6 +211,10 @@ export default function CctvAttendance() {
   const [scanInterval, setScanInterval] = useState("10");
   const [autoScan, setAutoScan] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  // Chair occupancy for room cameras. Null means "this camera has none" --
+  // either it is a doorway or V1 is not running it -- which is deliberately
+  // different from an empty room.
+  const [occupancy, setOccupancy] = useState<OccupancySnapshot | null>(null);
   const [scanStatus, setScanStatus] = useState("Enter a CCTV stream URL and run a scan.");
   const [attendanceStatus, setAttendanceStatus] = useState("No attendance recorded yet.");
   const [lastScanAt, setLastScanAt] = useState("-");
@@ -205,6 +257,12 @@ export default function CctvAttendance() {
     capture_fps?: number;
     display_fps?: number;
     active_tracks?: number;
+    // Bodies in frame, and how many of them have a name. Kept as three separate
+    // fields because they answer three separate questions -- see the status bar.
+    people_tracked?: number;
+    people_recognised?: number;
+    people_unknown?: number;
+    person_tracking?: boolean;
     recognition_status?: string;
     last_error?: string | null;
   } | null>(null);
@@ -261,6 +319,27 @@ export default function CctvAttendance() {
     }
   };
 
+  // Whether fullscreen covers the whole screen or shows the whole frame.
+  //
+  // The room cameras encode 960x1080 -- taller than wide -- so on a 16:9 monitor
+  // those two cannot both be true. "fill" stretches to the edges; "fit" keeps
+  // the true shape and leaves black down the sides. Defaults to fill, because
+  // the black gutters are what an operator actually complains about.
+  //
+  // Deliberately NOT `object-fit: cover`, which is the usual answer: cover
+  // scales to the width, and 1920/960 is 2x, so half the frame height would be
+  // cropped away -- the far-end and nearest chairs among it. Losing seats from
+  // an occupancy display to remove a black border is a bad trade, so the
+  // stretch is the one on offer.
+  const [feedFill, setFeedFill] = useState<"fill" | "fit">("fill");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement != null);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
   const handleCamSelect = (id: number | "") => {
     setSelectedCamId(id);
     if (id === "") { setStreamUrl(""); setCameraId(""); return; }
@@ -294,6 +373,35 @@ export default function CctvAttendance() {
       lastEventTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }));
   };
+
+  // Poll chair occupancy for the selected camera.
+  //
+  // 2s is comfortable: the backend reads person boxes V1 has already computed,
+  // so a poll costs no inference. A camera with no chair map returns 404 and
+  // the overlay simply does not render.
+  useEffect(() => {
+    if (selectedCamId === "") {
+      setOccupancy(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await camerasApi.occupancy(selectedCamId as number);
+        if (!cancelled) setOccupancy(res.data ?? null);
+      } catch {
+        // 404 = doorway camera, or V1 is not running it. Not an error worth
+        // showing: most cameras legitimately have no chairs.
+        if (!cancelled) setOccupancy(null);
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [selectedCamId]);
 
   const runScan = async () => {
     if (busyRef.current) return;
@@ -497,7 +605,7 @@ export default function CctvAttendance() {
                 ) : null}
               </div>
               {selectedCamId !== "" && mediaToken ? (
-                <div ref={feedRef} className="cctv-feed" style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
+                <div ref={feedRef} className="cctv-feed" data-fill={feedFill} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
                     key={`${selectedCamId}-${feedNonce}`}
                     className="cctv-feed-img"
@@ -516,6 +624,232 @@ export default function CctvAttendance() {
                       }, 2000);
                     }}
                   />
+                  {/* Chair occupancy, drawn in FRAME coordinates.
+                      The <img> is object-fit: contain, so a percentage-
+                      positioned div would drift from the picture as soon as the
+                      box is a different aspect ratio. An SVG whose viewBox is
+                      the frame and whose preserveAspectRatio is xMidYMid meet
+                      is letterboxed by exactly the same rule the image is, so
+                      the boxes stay on the chairs at any size, including
+                      fullscreen. */}
+                  {occupancy ? (
+                    <svg
+                      viewBox={`0 0 ${occupancy.frame_width} ${occupancy.frame_height}`}
+                      /* Must be letterboxed by exactly the rule the <img> is,
+                         or the boxes drift off the chairs. "meet" matches
+                         object-fit: contain; "none" matches object-fit: fill,
+                         so a stretched picture gets stretched zones and the two
+                         stay on top of each other. Only fullscreen stretches --
+                         the inline preview is always contained. */
+                      preserveAspectRatio={
+                        isFullscreen && feedFill === "fill"
+                          ? "none"
+                          : "xMidYMid meet"
+                      }
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                    >
+                      {/* Seats another camera owns. Drawn dim and grey, with
+                          no FREE/OCCUPIED, because this camera does not decide
+                          them -- a chair has exactly one owner, or two state
+                          machines argue over one seat. Without these, camera
+                          59's view of the shared desk shows people sitting in
+                          nothing, which reads as a detection failure. */}
+                      {occupancy.observed_elsewhere?.map((z) => {
+                        const [zx1, zy1, zx2, zy2] = z.zone;
+                        const x = zx1 * occupancy.frame_width;
+                        const y = zy1 * occupancy.frame_height;
+                        const w = (zx2 - zx1) * occupancy.frame_width;
+                        const h = (zy2 - zy1) * occupancy.frame_height;
+                        return (
+                          <g key={`o${z.id}`} opacity={0.45}>
+                            <rect x={x} y={y} width={w} height={h}
+                                  fill="none" stroke="#94a3b8" strokeWidth={2}
+                                  strokeDasharray="4 6" />
+                            <text x={x + 4} y={y + 18} fill="#cbd5e1" fontSize={15}>
+                              cam {z.owned_by_camera}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      {occupancy.chairs.map((ch) => {
+                        const [zx1, zy1, zx2, zy2] = ch.zone;
+                        const x = zx1 * occupancy.frame_width;
+                        const y = zy1 * occupancy.frame_height;
+                        const w = (zx2 - zx1) * occupancy.frame_width;
+                        const h = (zy2 - zy1) * occupancy.frame_height;
+                        // THREE states, not two. A chair that has not been
+                        // decided yet is UNKNOWN, and drawing it as FREE was a
+                        // straight contradiction of the panel beside it: four
+                        // seats labelled FREE while the counter said "Free: 0",
+                        // because the counter -- correctly -- would not count an
+                        // undecided seat as free. Whichever number is right, the
+                        // picture and the total have to say the same thing.
+                        const state = ch.occupied
+                          ? "OCCUPIED"
+                          : ch.state === "free"
+                            ? "FREE"
+                            : "UNKNOWN";
+                        const colour = state === "OCCUPIED"
+                          ? "#ef4444"
+                          : state === "FREE"
+                            ? "#22c55e"
+                            : "#94a3b8";
+                        // A chair stays OCCUPIED through the smoothing window
+                        // while its occupant is briefly undetected. That is
+                        // intended, but the operator must be able to tell it
+                        // apart from a live sighting, so a held state is dashed
+                        // and says so.
+                        const held = ch.occupied && !ch.track_visible;
+                        return (
+                          <g key={ch.id}>
+                            <rect
+                              x={x} y={y} width={w} height={h}
+                              fill="none" stroke={colour} strokeWidth={4}
+                              strokeDasharray={held ? "10 8" : undefined}
+                            />
+                            <rect x={x} y={Math.max(0, y - 46)} width={Math.max(150, w)} height={44} fill="rgba(0,0,0,0.72)" />
+                            <text x={x + 6} y={Math.max(16, y - 26)} fill={colour} fontSize={22} fontWeight={700}>
+                              {ch.id} {state}
+                            </text>
+                            <text x={x + 6} y={Math.max(32, y - 8)} fill="rgba(255,255,255,0.85)" fontSize={16}>
+                              {state === "OCCUPIED"
+                                ? `trk${ch.occupant_track_id}${held ? " · track lost" : " ●"}`
+                                : state === "UNKNOWN"
+                                  ? "not decided yet"
+                                  : ""}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      {/* What the detector actually saw. BLUE = this person is
+                          in a mapped seat, YELLOW = in none. Yellow means "no
+                          mapped seat" -- never "not sitting" -- and it is the
+                          correct answer for anyone standing, walking, or in a
+                          chair the camera only half sees. Nobody is ever
+                          snapped to a nearby chair to make the picture tidier. */}
+                      {occupancy.people?.map((pr) => {
+                        const [bx1, by1, bx2, by2] = pr.bbox;
+                        const x = bx1 * occupancy.frame_width;
+                        const y = by1 * occupancy.frame_height;
+                        const w2 = (bx2 - bx1) * occupancy.frame_width;
+                        const h2 = (by2 - by1) * occupancy.frame_height;
+                        const seated = pr.chair_id != null;
+                        const colour = seated ? "#38bdf8" : "#fbbf24";
+                        const label = seated
+                          ? `trk${pr.track_id} -> ${pr.chair_id}`
+                          : `trk${pr.track_id} UNASSIGNED`;
+                        return (
+                          <g key={`p${pr.track_id}`}>
+                            <rect x={x} y={y} width={w2} height={h2}
+                                  fill="none" stroke={colour} strokeWidth={3} />
+                            <rect x={x} y={y + h2} width={Math.max(190, w2)} height={30}
+                                  fill="rgba(0,0,0,0.72)" />
+                            <text x={x + 6} y={y + h2 + 21} fill={colour}
+                                  fontSize={18} fontWeight={700}>
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  ) : null}
+
+                  {/* Chair counts, in the same stats-box style the feed
+                      already uses, sitting under V1's box rather than fighting
+                      it for the corner.
+
+                      Values are printed exactly as the API returns them.
+                      Recomputing them in the browser would create a second
+                      source of truth that could disagree with the boxes drawn
+                      above -- and the whole point of putting them on the video
+                      is that the number and the picture agree. */}
+                  {occupancy && occupancy.chairs_total > 0 ? (
+                    <div
+                      style={{
+                        position: "absolute", top: 190, right: 8,
+                        padding: "0.5rem 0.7rem", borderRadius: 6,
+                        background: "rgba(0,0,0,0.72)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#fff", fontSize: "0.82rem", fontWeight: 700,
+                        lineHeight: 1.5, fontFamily: "monospace",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <div>Chairs: {occupancy.chairs_total}</div>
+                      <div style={{ color: "#ef4444" }}>
+                        Occupied: {occupancy.chairs_occupied}
+                      </div>
+                      <div style={{ color: "#22c55e" }}>
+                        Free: {occupancy.chairs_free}
+                      </div>
+                      {/* Shown only when there ARE undecided seats, but shown
+                          then without fail: occupied + free must account for
+                          every chair, and when they do not the missing ones
+                          have to be named. A panel reading "Chairs: 6
+                          Occupied: 2  Free: 0" with no explanation is how this
+                          was first noticed as a bug. */}
+                      {occupancy.chairs_unknown > 0 ? (
+                        <div style={{ color: "#94a3b8" }}>
+                          Undecided: {occupancy.chairs_unknown}
+                        </div>
+                      ) : null}
+                      <div style={{ color: "#fbbf24" }}>
+                        Unassigned: {occupancy.unassigned_people}
+                      </div>
+                      {/* "Chairs" above is what THIS CAMERA OWNS, which is not
+                          the room. Cameras 59 and 60 face each other along one
+                          desk, so the row they both see is owned by one of them
+                          and the two cameras' counts must never be added --
+                          that is how a 13-chair room came to look like 18. The
+                          room total is stated separately for that reason. */}
+                      {occupancy.room_chairs_total != null &&
+                       occupancy.room_chairs_total !== occupancy.chairs_total ? (
+                        <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          this camera owns {occupancy.chairs_total} of{" "}
+                          {occupancy.room_chairs_total} in the room
+                        </div>
+                      ) : (
+                        <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          mapped seats only
+                        </div>
+                      )}
+                      {/* A correct-but-old answer must not look current. The
+                          count is only ever as fresh as the last COMPLETED
+                          analysis pass, which on this hardware is seconds ago. */}
+                      {occupancy.observation_age_sec != null ? (
+                        <div style={{ color: "rgba(255,255,255,0.45)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          seen {occupancy.observation_age_sec.toFixed(0)}s ago
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* Fill/fit toggle, INSIDE the feed.
+                      It has to live here rather than in the panel header: only
+                      this element goes fullscreen, so a control outside it is
+                      invisible exactly when it is wanted. */}
+                  {isFullscreen ? (
+                    <button
+                      type="button"
+                      onClick={() => setFeedFill((m) => (m === "fill" ? "fit" : "fill"))}
+                      title={
+                        feedFill === "fill"
+                          ? "Filling the screen: the picture is stretched wider than life, but no part of the room is hidden. Click for the true shape."
+                          : "True shape, so black down the sides -- this camera encodes 960x1080. Click to fill the screen."
+                      }
+                      style={{
+                        position: "absolute", bottom: 12, right: 12, zIndex: 5,
+                        fontSize: "0.78rem", padding: "0.35rem 0.7rem",
+                        borderRadius: 8, cursor: "pointer",
+                        background: "rgba(0,0,0,0.6)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#e2e8f0",
+                      }}
+                    >
+                      {feedFill === "fill" ? "Fill screen" : "True shape"}
+                    </button>
+                  ) : null}
+
                   {/* Real-time status bar overlaid on the feed */}
                   <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
@@ -531,9 +865,31 @@ export default function CctvAttendance() {
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#7aa2ff" }}>
                       {(liveStat?.display_fps ?? 0).toFixed(0)} FPS
                     </span>
+                    {/* THREE numbers, never one.
+                        This chip used to read "Faces: N" off `active_tracks`,
+                        which on a body-tracking camera counts BODIES -- so a
+                        room full of people with their backs to the lens was
+                        labelled as a room where no faces were found, and the
+                        two failures became impossible to tell apart.
+
+                        People is the count of bodies and does not depend on
+                        recognition. Recognised and Unknown split that same
+                        number by whether a usable face was read. Unknown is
+                        NOT an error state and never reduces People. */}
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
-                      Faces: {liveStat?.active_tracks ?? 0}
+                      {liveStat?.person_tracking === false ? "Faces" : "People"}:{" "}
+                      {liveStat?.people_tracked ?? liveStat?.active_tracks ?? 0}
                     </span>
+                    {liveStat?.person_tracking !== false ? (
+                      <>
+                        <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#22c55e" }}>
+                          Recognised: {liveStat?.people_recognised ?? 0}
+                        </span>
+                        <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fbbf24" }}>
+                          Unknown: {liveStat?.people_unknown ?? 0}
+                        </span>
+                      </>
+                    ) : null}
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fbbf24" }}>
                       {liveStat?.recognition_status || "idle"}
                     </span>

@@ -72,6 +72,22 @@ def _auto_concurrency() -> int:
 _MAX_CONCURRENT = _auto_concurrency()
 _slots = threading.BoundedSemaphore(_MAX_CONCURRENT)
 
+# Minimum box HEIGHT, in pixels, for a detection to be treated as a person.
+#
+# A SIZE floor, not a score floor, and the two reject different things. The room
+# cameras have to run at a very low confidence to reach a person seated with
+# their back to the lens (measured: 0.035-0.057), and at that floor the detector
+# also emits fragments a few pixels tall on frame edges and on decode-corruption
+# bands. Camera 60 produced seven of them in ONE frame, all about 10x7 px --
+# and several outscored a real seated person, so no confidence threshold can
+# separate them. Size can: over 41 labelled people on these two cameras the
+# SMALLEST real person is 46 px tall.
+#
+# 30 leaves a clear margin under that 46 and a wide one over the junk. It is
+# deliberately not tighter: a person further from the lens than anyone in the
+# measured set must still get through.
+_MIN_PERSON_PX = float(os.getenv("CCTV_MIN_PERSON_PX", "30"))
+
 # How close to the frame border counts as "at the edge" (fraction of width or
 # height). A person leaves a room through an edge; a person hidden by a chair
 # does not move. See the expiry logic in ByteTrackEngine.update.
@@ -137,6 +153,28 @@ _CROP_ASSIST_CAMERAS = {
 # Safe for attendance: a body track cannot mark attendance on its own. That
 # requires a face match clearing services/attendance_gate.
 _ADOPT_UNTRACKED_MIN_CONF = float(os.getenv("CCTV_ADOPT_UNTRACKED_MIN_CONF", "0.35"))
+
+# The same rule, for ROOM cameras, where 0.35 is roughly ten times too high.
+#
+# The bar above was set from DOORWAY evidence -- "empty corridor frames score
+# 0.00-0.01, real people 0.43-0.78" -- and it is correct there. It is wrong for
+# a room, where the people are seated with their backs to the lens and score
+# 0.02-0.20. Every one of them fails it.
+#
+# That combination is severe, because the two halves reinforce each other. A
+# room detection is intermittent, so ByteTrack rarely gets the two consecutive
+# sightings it needs to assign an id; the adoption path exists precisely to
+# rescue that case; and its bar excluded every person a room camera can see. Run
+# over ten labelled camera-59 frames containing 3-4 people each, the engine
+# produced tracks on 5 of them and NONE AT ALL on the other 5.
+#
+# 0.02 matches the room tracker's new_track_thresh: a detection good enough to
+# create a track through ByteTrack is good enough to be adopted when ByteTrack
+# is too slow to do it. Safe for attendance because a room camera cannot mark
+# any -- and a body track cannot mark attendance on its own regardless.
+_STEEP_ADOPT_UNTRACKED_MIN_CONF = float(
+    os.getenv("CCTV_STEEP_ADOPT_UNTRACKED_MIN_CONF", "0.02")
+)
 
 # How far an adopted detection may be from an existing track and still be judged
 # the same person, as a multiple of that track's box size.
@@ -318,6 +356,7 @@ class ByteTrackEngine:
         camera_id: str = "?",
         tracker_cfg: str | None = None,
         model_path: str | None = None,
+        adopt_min_conf: float | None = None,
     ):
         s = get_settings()
         # MONITOR cameras may run a lighter/faster model than the IN/OUT
@@ -339,6 +378,10 @@ class ByteTrackEngine:
         # well-aimed one (its people score 0.11 instead of 0.36-0.67), so the
         # caller can hand this engine its own config.
         self.tracker_cfg = (_resolve(tracker_cfg) or _tracker_cfg()) if tracker_cfg else _tracker_cfg()
+        # Per-camera, because a doorway and a room disagree about it by a factor
+        # of ten -- see _STEEP_ADOPT_UNTRACKED_MIN_CONF.
+        self.adopt_min_conf = (_ADOPT_UNTRACKED_MIN_CONF if adopt_min_conf is None
+                               else float(adopt_min_conf))
         self.tracks: dict[int, PersonTrack] = {}
         self._model = None            # own model  ⇒ own predictor ⇒ own ByteTrack state
         self._last_sig: tuple | None = None   # for change-based logging (no spam)
@@ -418,6 +461,11 @@ class ByteTrackEngine:
                 int(x2 + crop_x1), int(y2 + crop_y1),
             )
             if box[2] <= box[0] or box[3] <= box[1]:
+                continue
+            # Same size floor as the full-frame pass. The crop runs at HALF the
+            # already-low confidence, so it is the likelier source of few-pixel
+            # fragments, not the less likely one.
+            if (box[3] - box[1]) < _MIN_PERSON_PX:
                 continue
 
             # Associate with an existing full-frame track when possible.
@@ -567,6 +615,8 @@ class ByteTrackEngine:
 
                 for idx, box in enumerate(xyxy):
                     b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                    if (b[3] - b[1]) < _MIN_PERSON_PX:
+                        continue          # too small to be a person -- see above
                     tid = ids[idx] if (ids is not None and idx < len(ids)) else None
 
                     if tid is not None:
@@ -588,7 +638,7 @@ class ByteTrackEngine:
                     # that second pass may never see the person. Adopt it now if
                     # it is confidently a person -- see _ADOPT_UNTRACKED_MIN_CONF.
                     score = det_scores[idx] if idx < len(det_scores) else 0.0
-                    if _ADOPT_UNTRACKED_MIN_CONF <= 0 or score < _ADOPT_UNTRACKED_MIN_CONF:
+                    if self.adopt_min_conf <= 0 or score < self.adopt_min_conf:
                         continue
 
                     # Do not double-count, and do not churn the id.

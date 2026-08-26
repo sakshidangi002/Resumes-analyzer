@@ -540,6 +540,10 @@ class HCNetSDKCameraWorker:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < 80.0:
                 logger.debug(f"Camera {self.camera_id}: Skipping blurry frame")
+                # Blurry frames are unsuitable for face recognition, but they
+                # are still valid camera frames. Publish them so a low-light or
+                # motion-blurred stream does not look frozen in the dashboard.
+                self._encode_preview(frame)
                 return
             
             # Convert to RGB for recognition
@@ -557,7 +561,7 @@ class HCNetSDKCameraWorker:
             detections = [{"box": face.get("box"), "face": face} for face in faces]
 
             # Step 2: Update face tracker (always update for smooth tracking)
-            tracks = self.face_tracker.update(detections)
+            tracks = self.face_tracker.update(detections, frame_shape=rgb.shape[:2])
 
             # Frame skipping for recognition only (not tracking)
             self._frame_counter += 1
@@ -747,7 +751,7 @@ class HCNetSDKCameraWorker:
                     cv2.LINE_AA,
                 )
         
-        # Draw camera info overlay (top-left)
+        # Draw camera info overlay (top-right)
         from datetime import datetime
         overlay_lines = [
             f"Camera: {camera_name}",
@@ -759,17 +763,20 @@ class HCNetSDKCameraWorker:
         # Draw overlay background
         overlay_height = 24 * len(overlay_lines) + 8
         overlay_width = 220
+        frame_height, frame_width = annotated.shape[:2]
+        panel_x1 = max(0, frame_width - overlay_width - 10)
+        panel_x2 = min(frame_width - 1, panel_x1 + overlay_width)
         cv2.rectangle(
             annotated,
-            (10, 10),
-            (10 + overlay_width, 10 + overlay_height),
+            (panel_x1, 10),
+            (panel_x2, min(frame_height - 1, 10 + overlay_height)),
             (0, 0, 0),
             -1,
         )
         cv2.rectangle(
             annotated,
-            (10, 10),
-            (10 + overlay_width, 10 + overlay_height),
+            (panel_x1, 10),
+            (panel_x2, min(frame_height - 1, 10 + overlay_height)),
             (255, 255, 255),
             1,
         )
@@ -780,7 +787,7 @@ class HCNetSDKCameraWorker:
             cv2.putText(
                 annotated,
                 line,
-                (20, y_pos),
+                (panel_x1 + 10, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 255),

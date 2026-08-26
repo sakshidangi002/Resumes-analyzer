@@ -25,7 +25,10 @@ when its behaviour is later questioned.
 import pytest
 
 from app.cctv_v2.capture.grabber import CameraGrabber
-from app.cctv_v2.scheduler.loop import InferenceScheduler
+from app.cctv_v2.scheduler.loop import (
+    MOTION_DAMP_MAX_SEC,
+    InferenceScheduler,
+)
 
 
 class Clock:
@@ -62,9 +65,19 @@ def build(clock, cameras=ALL, max_starvation=20.0, inference_cost=0.0):
     return sched, grabbers, processed
 
 
-def publish_all(grabbers, clock, cameras=None):
+def publish_all(grabbers, clock, cameras=None, motion=1.0):
+    """Publish a frame to each camera.
+
+    `motion` defaults to 1.0 -- "something is happening in front of this
+    camera". Most tests here are about PRIORITY ordering, and they only mean
+    anything when every camera has something worth looking at; a frame with no
+    motion is a different scenario, and the tests that care about it say so
+    explicitly. Before motion gating existed these tests got motion=0 by
+    accident and passed regardless, which is precisely the ambiguity being
+    removed.
+    """
     for cid in (cameras or grabbers):
-        grabbers[cid].publish(f"f{cid}", timestamp=clock.t)
+        grabbers[cid].publish(f"f{cid}", timestamp=clock.t, motion=motion)
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +464,7 @@ def _run_with_59_dark(sched, grabbers, clock, steps):
     """Advance the scheduler while 57/58/60 stream and 59 sends nothing."""
     for _ in range(steps):
         for cid in (57, 58, 60):
-            grabbers[cid].publish("fresh", timestamp=clock.t)
+            grabbers[cid].publish("fresh", timestamp=clock.t, motion=1.0)
         sched.run_once()
         clock.advance(0.5)
 
@@ -491,7 +504,7 @@ def test_inference_stops_within_the_cutoff_of_a_stream_dying():
     last_seen = died_at
     for _ in range(60):                               # 30s of 59 being dead
         for cid in (57, 58, 60):
-            grabbers[cid].publish("fresh", timestamp=clock.t)
+            grabbers[cid].publish("fresh", timestamp=clock.t, motion=1.0)
         sel = sched.run_once()
         if sel and sel.camera_id == 59:
             last_seen = clock.t
@@ -534,7 +547,7 @@ def test_recovery_is_prompt_because_time_spent_stale_still_counts_as_waiting():
 
     for _ in range(30):
         for cid in (57, 58, 60):
-            grabbers[cid].publish("fresh", timestamp=clock.t)
+            grabbers[cid].publish("fresh", timestamp=clock.t, motion=1.0)
         sched.run_once()
         clock.advance(0.5)
 
@@ -589,3 +602,115 @@ def test_frame_age_gates_but_does_not_rank():
     sched.stats[60].last_served = clock.t - 1.0
 
     assert sched.select_next().camera_id == 59
+
+
+# ---------------------------------------------------------------------------
+# Motion gating
+#
+# Measured: 80% of camera 57's passes and 66% of camera 58's saw nobody at all,
+# while a frame-difference costs ~2ms against a ~4.9s YOLO pass. Most doorway
+# inference was spent confirming an empty corridor.
+#
+# So an idle DOORWAY is ranked down. Two things this must never become:
+# a hard skip (a camera would go blind because nothing moved), and anything at
+# all on a ROOM (a seated person barely moves, so gating rooms would let
+# occupancy decay exactly when the room is calm).
+# ---------------------------------------------------------------------------
+def test_an_idle_doorway_ranks_below_a_moving_one(monkeypatch):
+    """The mechanism, exercised with damping switched ON.
+
+    It is OFF in production: measured live at 0.25 the doorway interval went
+    from 6.5s to 11.0s, because a damped doorway (3 x 0.25) ranks below a room
+    (1) and the rooms took the freed capacity. Kept and tested so it can be
+    revisited when doorway inference is cheap enough to make it pay."""
+    import app.cctv_v2.scheduler.loop as L
+    monkeypatch.setattr(L, "IDLE_SCORE_FACTOR", 0.25)
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(57, 58))
+    grabbers[57].publish("empty corridor", timestamp=clock.t, motion=0.0)
+    grabbers[58].publish("someone walking", timestamp=clock.t, motion=0.20)
+    clock.advance(1.0)
+
+    assert sched.select_next().camera_id == 58
+
+
+def test_a_room_is_never_damped_for_being_still():
+    """A seated person barely moves. Gating rooms would drop occupancy exactly
+    when the room is calm, which is most of the time."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(59, 60))
+    publish_all(grabbers, clock, motion=0.0)
+    clock.advance(2.0)
+
+    assert sched.select_next() is not None
+    sched.run_once()
+    assert sum(s.idle_damped for s in sched.stats.values()) == 0
+
+
+def test_damping_is_a_weighting_not_a_skip():
+    """An idle doorway must still be served. A camera that can be silenced by
+    nothing happening in front of it is a camera that has gone blind."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(57,))
+    grabbers[57].publish("empty", timestamp=clock.t, motion=0.0)
+    clock.advance(1.0)
+
+    sel = sched.select_next()
+    assert sel is not None and sel.camera_id == 57
+
+
+def test_damping_stops_once_a_doorway_has_waited_too_long(monkeypatch):
+    import app.cctv_v2.scheduler.loop as L
+    monkeypatch.setattr(L, "IDLE_SCORE_FACTOR", 0.25)
+    """Bounds the cost of the motion hint being WRONG -- a person standing
+    still, or motion scoring misbehaving. Without this an idle doorway falls
+    back on the 20s starvation deadline, which is worse than the 6.5s it gets
+    today on the camera whose job is catching a 2-second event."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(57, 59))
+    grabbers[57].publish("still", timestamp=clock.t, motion=0.0)
+    grabbers[59].publish("room", timestamp=clock.t, motion=0.0)
+
+    clock.advance(MOTION_DAMP_MAX_SEC + 1.0)
+    grabbers[57].publish("still", timestamp=clock.t, motion=0.0)
+    grabbers[59].publish("room", timestamp=clock.t, motion=0.0)
+
+    # Past the cap the doorway is scored at full priority 3 against the room's 1.
+    assert sched.select_next().camera_id == 57
+
+
+def test_a_moving_doorway_still_loses_to_a_badly_starved_room():
+    """Motion changes the ranking; it does not repeal the starvation deadline."""
+    clock = Clock()
+    sched, grabbers, _ = build(clock, max_starvation=5.0)
+    publish_all(grabbers, clock, motion=0.0)
+    sched.stats[59].last_served = clock.t - 30.0
+    grabbers[57].publish("busy", timestamp=clock.t, motion=0.9)
+    clock.advance(0.1)
+
+    sel = sched.select_next()
+    assert sel.camera_id == 59 and sel.reason == "starvation"
+
+
+def test_damping_is_counted_so_it_can_be_audited(monkeypatch):
+    import app.cctv_v2.scheduler.loop as L
+    monkeypatch.setattr(L, "IDLE_SCORE_FACTOR", 0.25)
+    clock = Clock()
+    sched, grabbers, _ = build(clock, cameras=(57,))
+    for i in range(3):
+        grabbers[57].publish("empty", timestamp=clock.t, motion=0.0)
+        sched.select_next()
+        clock.advance(0.5)
+
+    assert sched.stats[57].idle_damped == 3
+    assert sched.summary()["cameras"][57]["motion_gated"] is True
+
+
+def test_motion_damping_is_OFF_in_production():
+    """Pinned deliberately. Enabling it measurably made doorways worse: 6.5s ->
+    11.0s live, because an idle doorway scored below a room and the rooms took
+    the capacity. Turn this on only with a live measurement showing otherwise."""
+    import app.cctv_v2.scheduler.loop as L
+
+    assert L.IDLE_SCORE_FACTOR == 1.0
+

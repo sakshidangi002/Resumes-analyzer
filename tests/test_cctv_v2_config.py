@@ -105,7 +105,13 @@ def test_doorway_profile_matches_the_measured_values():
 
 def test_room_profile_matches_the_measured_values():
     p = profiles.ROOM
-    assert (p.input_size, p.predict_conf, p.new_track_thresh) == (480, 0.03, 0.03)
+    # 960/0.015/0.02, re-measured 2026-08-26 against 16 labelled frames.
+    # At the previous 480/0.03 one of the four people on camera 59 produced no
+    # detection at any confidence on any frame -- see profiles.py.
+    assert (p.input_size, p.predict_conf, p.new_track_thresh) == (960, 0.015, 0.02)
+    # The detector floor must sit BELOW the track-creation floor, or ByteTrack's
+    # second association stage never sees the weak boxes it exists to consume.
+    assert p.predict_conf < p.new_track_thresh
     assert (p.match_threshold, p.match_margin) == (0.42, 0.10)
     assert (p.min_face_px, p.max_yaw) == (16.0, 75.0)
     assert (p.observations_required, p.quality_required, p.consensus_required) == (2, 0.15, 0.40)

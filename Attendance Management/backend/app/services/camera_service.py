@@ -337,6 +337,28 @@ _ANCHOR_CONFIRM       = int(os.getenv("CCTV_ANCHOR_CONFIRM", "2"))
 _face_px_width = face_quality.face_px_width
 
 
+def people_split(tracks) -> tuple[int, int, int]:
+    """(people, recognised, unknown) for a list of body tracks.
+
+    ONE definition, in one place, because the relationship between the three is
+    the property that matters and it is easy to break by computing them apart:
+
+        people      = how many bodies are in frame
+        recognised  = how many of them a face was read for
+        unknown     = THE REMAINDER, never counted independently
+
+    Deriving `unknown` by subtraction is what makes "recognition failed" and
+    "nobody there" impossible to confuse. Counting it separately would let the
+    two drift, and a room of people with their backs to the lens would once
+    again be able to report nobody at all.
+
+    `people` never consults identity. That is the whole contract.
+    """
+    tracks = list(tracks or [])
+    recognised = sum(1 for t in tracks if getattr(t, "matched", False))
+    return len(tracks), recognised, len(tracks) - recognised
+
+
 # ---------------------------------------------------------------------------
 # Background attendance writer
 # ---------------------------------------------------------------------------
@@ -2570,6 +2592,17 @@ class CameraWorker:
                     tracker_cfg=(_STEEP_TRACKER_CFG if steep else None),
                     imgsz=(_mon_imgsz or None),
                     model_path=(_mon_model or None),
+                    # A room camera needs its OWN adoption bar. The shared 0.35
+                    # was set from doorway evidence, where real people score
+                    # 0.43-0.78; seated staff seen from behind score 0.02-0.20
+                    # and fail it every time. Combined with ByteTrack needing
+                    # two consecutive sightings before it issues an id -- which
+                    # an intermittent room detection rarely supplies -- that is
+                    # what left a room full of people reporting nobody.
+                    adopt_min_conf=(
+                        bytetrack_engine._STEEP_ADOPT_UNTRACKED_MIN_CONF
+                        if steep else None
+                    ),
                 )
                 self.use_person_tracking = True
                 logger.info(
@@ -2813,6 +2846,24 @@ class CameraWorker:
 
     def serialize_state(self) -> dict:
         s = self.state
+        # How many of the people in frame have a name, and how many do not.
+        #
+        # READ-ONLY and purely additive: nothing here changes what is tracked,
+        # counted or recognised. It exists because the dashboard could previously
+        # show only `active_tracks`, which forced a viewer to guess whether a
+        # low number meant "few people" or "few people RECOGNISED" -- the exact
+        # confusion this camera stack is built to avoid.
+        #
+        # `people` is the number of BODIES and never depends on these two.
+        # recognised + unknown always equals it, because `unknown` is defined as
+        # the remainder rather than counted separately; a person whose face
+        # cannot be read is unknown, never absent.
+        try:
+            with self._frame_lock:
+                tracks = list(self._latest_tracks)
+        except Exception:                                      # noqa: BLE001
+            tracks = []
+        n_people, n_recognised, n_unknown = people_split(tracks)
         # Report what the camera is ACTUALLY running, not the value it was
         # constructed with. They diverge as soon as an operator edits the
         # profile, and a status page showing a threshold the camera is not using
@@ -2847,6 +2898,13 @@ class CameraWorker:
             "frame_age_ms": s.frame_age_ms,
             "recognition_status": s.recognition_status,
             "active_tracks": s.active_tracks,
+            # The three-way split the overlay needs. `people_tracked` is body
+            # tracks -- the same number as active_tracks on a body-tracking
+            # camera, named unambiguously so a caller does not have to know
+            # which mode the camera is in to read it.
+            "people_tracked": n_people,
+            "people_recognised": n_recognised,
+            "people_unknown": n_unknown,
             "crossing_enabled": self.crossing_enabled,
             "crossing_count": s.crossing_count,
             # Cumulative transits for TODAY on this camera (seeded from the DB

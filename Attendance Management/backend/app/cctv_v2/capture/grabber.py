@@ -57,6 +57,15 @@ class FrameSnapshot:
     timestamp: float       # time.time() when the frame was decoded
     sequence: int          # monotonic per camera; gaps prove frames were dropped
 
+    # Fraction of pixels that changed since the previous frame, 0..1.
+    #
+    # Computed here because the grabber already holds every frame and a
+    # downscaled absolute difference costs ~2ms, against ~4.9s for a YOLO pass.
+    # It lets the scheduler notice an empty corridor without paying to confirm
+    # it. 0.0 when there is no previous frame to compare against, which reads
+    # as "no evidence of motion" rather than "no motion".
+    motion: float = 0.0
+
     def staleness(self, now: Optional[float] = None) -> float:
         """Seconds since this frame was captured."""
         return max(0.0, (time.time() if now is None else now) - self.timestamp)
@@ -90,6 +99,7 @@ class CameraGrabber:
 
         self._lock = threading.Lock()
         self._latest: Optional[FrameSnapshot] = None
+        self._motion_ref = None          # downscaled previous frame
         self._seq = 0
         self._grabbed = 0
         self._dropped = 0
@@ -144,7 +154,39 @@ class CameraGrabber:
             )
 
     # ── producer ─────────────────────────────────────────────────────────────
-    def publish(self, frame: object, timestamp: Optional[float] = None) -> FrameSnapshot:
+    def _motion_score(self, frame) -> float:
+        """Fraction of pixels that changed since the last frame.
+
+        Deliberately crude and cheap: greyscale, downscaled to 240x270, blurred,
+        thresholded. It is a hint for scheduling, never a detection -- a person
+        standing still scores near zero, which is why rooms are not gated on it
+        and why the scheduler damps rather than skips.
+
+        Any failure returns 1.0, not 0.0: if motion cannot be measured the
+        camera must not be quietly deprioritised into blindness.
+        """
+        try:
+            import cv2
+            import numpy as np
+
+            if not hasattr(frame, "shape"):
+                return 0.0
+            small = cv2.resize(frame, (240, 270))
+            if small.ndim == 3:
+                small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            small = cv2.GaussianBlur(small, (5, 5), 0)
+            ref, self._motion_ref = self._motion_ref, small
+            if ref is None:
+                return 0.0
+            diff = cv2.absdiff(small, ref)
+            return float(np.count_nonzero(diff > 22)) / diff.size
+        except Exception:                                      # noqa: BLE001
+            logger.debug("motion scoring failed camera=%s", self.camera_id,
+                         exc_info=True)
+            return 1.0
+
+    def publish(self, frame: object, timestamp: Optional[float] = None,
+                motion: Optional[float] = None) -> FrameSnapshot:
         """Put a frame in the slot, replacing whatever was there.
 
         Public so tests can drive a grabber without a camera. Counts a DROP when
@@ -152,6 +194,8 @@ class CameraGrabber:
         the honest measure of how far behind inference is running, and it should
         be large on this hardware rather than hidden.
         """
+        if motion is None:
+            motion = self._motion_score(frame)
         with self._lock:
             self._seq += 1
             self._grabbed += 1
@@ -162,6 +206,7 @@ class CameraGrabber:
                 frame=frame,
                 timestamp=time.time() if timestamp is None else timestamp,
                 sequence=self._seq,
+                motion=motion,
             )
             self._latest = snap
             self._last_frame_time = snap.timestamp
