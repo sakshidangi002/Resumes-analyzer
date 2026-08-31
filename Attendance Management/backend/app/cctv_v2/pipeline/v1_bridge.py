@@ -50,6 +50,7 @@ import threading
 import time
 from typing import Optional
 
+from app.cctv_v2.pipeline import chair_registry
 from app.cctv_v2.pipeline.occupancy import OccupancyRegistry, RoomSnapshot
 from app.cctv_v2.pipeline.track import PersonTrack, TrackState
 
@@ -125,11 +126,40 @@ def read_v1_observation(camera_id: int) -> tuple[list[PersonTrack], float]:
     if worker is None:
         return [], 0.0
 
+    # VALUES, TAKEN INSIDE THE LOCK. Not references.
+    #
+    # `_latest_tracks` holds LIVE PersonTrack objects that V1 keeps mutating:
+    # the next analysis pass calls `update_box` on the very same objects, and
+    # the recognition stage writes identity fields to them for the remainder of
+    # the current pass. Copying the LIST under the lock -- which is what this
+    # used to do -- copies none of that. It hands out references and then reads
+    # their fields after releasing, so a reader could pair pass N's timestamp
+    # with pass N+1's boxes.
+    #
+    # The consequence was bounded but real: the same physical pass could be
+    # folded into the occupancy state machine twice, quietly spending one of the
+    # confirmations that exist to keep a chair steady.
+    #
+    # So the four values occupancy needs are read out to plain immutable tuples
+    # while the lock is held, together with the stamp. After this block nothing
+    # V1 does can alter what this observation says.
     try:
         with worker._frame_lock:
-            v1_tracks = list(getattr(worker, "_latest_tracks", []) or [])
             observed_at = float(
                 getattr(getattr(worker, "state", None), "updated_at", 0.0) or 0.0)
+            snapshot = tuple(
+                (
+                    getattr(t, "track_id", None),
+                    tuple(getattr(t, "box", ()) or ()),
+                    # The DETECTOR's score. `confidence` on a V1 track is the
+                    # FACE MATCH score written by bind_identity, so reading it
+                    # here published "0.0 confidence" for every unrecognised
+                    # person -- which on a room camera is all of them.
+                    float(getattr(t, "detection_confidence", 0.0) or 0.0),
+                    float(getattr(t, "last_seen", 0.0) or 0.0),
+                )
+                for t in (getattr(worker, "_latest_tracks", []) or [])
+            )
     except Exception:                                          # noqa: BLE001
         logger.debug("v1_bridge: could not read tracks camera=%s",
                      camera_id, exc_info=True)
@@ -137,10 +167,8 @@ def read_v1_observation(camera_id: int) -> tuple[list[PersonTrack], float]:
 
     now = time.time()
     out: list[PersonTrack] = []
-    for t in v1_tracks:
-        box = getattr(t, "box", None)
-        tid = getattr(t, "track_id", None)
-        if box is None or tid is None or len(box) != 4:
+    for tid, box, det_conf, last_seen in snapshot:
+        if tid is None or len(box) != 4:
             continue
         x1, y1, x2, y2 = (float(v) for v in box)
         if x2 <= x1 or y2 <= y1:
@@ -149,10 +177,10 @@ def read_v1_observation(camera_id: int) -> tuple[list[PersonTrack], float]:
             camera_id=int(camera_id),
             track_id=int(tid),
             bbox=(x1, y1, x2, y2),
-            confidence=float(getattr(t, "confidence", 0.0) or 0.0),
+            confidence=det_conf,
             frame_timestamp=now,
             frame_sequence=0,
-            first_seen=float(getattr(t, "last_seen", now) or now),
+            first_seen=last_seen or now,
             last_seen=now,
             hits=1,
             # V1 has already decided this track is real -- see the docstring.
@@ -221,6 +249,16 @@ def occupancy_snapshot(camera_id: int) -> Optional[dict]:
         room = _registry.get(cid)
         w, h = frame_size(cid)
         room.frame_w, room.frame_h = w, h
+
+        # Adopt whatever the chair sweeper has learned. Done here, under the same
+        # lock as the update, so the map cannot change between deciding which
+        # seats exist and settling their states.
+        #
+        # `apply_geometry` refuses an empty map and keeps the state of every seat
+        # that survives the change, so a sweeper fault degrades to "the inventory
+        # stopped changing" rather than to an empty or reset room.
+        if chair_registry.auto_enabled():
+            room.apply_geometry(chair_registry.store().get(cid).geometry())
         snap: RoomSnapshot = _registry.update(cid, tracks, time.time())
 
     data = snap.as_dict()
@@ -246,6 +284,18 @@ def occupancy_snapshot(camera_id: int) -> Optional[dict]:
         {
             "track_id": t.track_id,
             "bbox": [t.bbox[0] / w, t.bbox[1] / h, t.bbox[2] / w, t.bbox[3] / h],
+            # HOW SURE ARE WE SOMEBODY IS THERE -- the person detector's score.
+            #
+            # `confidence` is kept as an alias so nothing that already reads it
+            # breaks, but both now carry the DETECTION score. Until this change
+            # they carried the FACE MATCH score, so every unrecognised person
+            # was published at 0.0 while being detected perfectly well.
+            #
+            # The face-match score is deliberately NOT offered here. Occupancy
+            # answers "is this seat taken", never "who is in it", and letting
+            # identity into this payload would rebuild the coupling this module
+            # exists to prevent. It is available on /cameras/{id}/status.
+            "detection_confidence": round(t.confidence, 3),
             "confidence": round(t.confidence, 3),
             # None means "in no MAPPED seat" -- standing, walking, or in a chair
             # the camera only half sees. It must never be rendered as "not
@@ -258,6 +308,17 @@ def occupancy_snapshot(camera_id: int) -> Optional[dict]:
     data["source"] = "v1_tracks"     # no additional inference was run
     data["frame_width"] = w
     data["frame_height"] = h
+    # Four separate freshness facts, because they answer different questions and
+    # collapsing them is how a steady answer gets mistaken for a stuck one:
+    #
+    #   observation_updated_at  when V1 last completed an analysis pass
+    #   observation_age_sec     how old that pass is now
+    #   state_updated_at        when a chair last actually CHANGED
+    #   from_new_observation    whether THIS response folded in a new pass
+    #
+    # A room that has been settled for ten minutes has a fresh observation and
+    # an old state change, and that is correct, not stale.
+    data["observation_updated_at"] = observed_at or None
     data["observation_age_sec"] = (round(time.time() - observed_at, 1)
                                    if observed_at else None)
     data["from_new_observation"] = True
@@ -276,7 +337,22 @@ def occupancy_snapshot(camera_id: int) -> Optional[dict]:
     # Physical chairs in the ROOM, each counted once. `chairs_total` above is
     # this camera's share of them; adding the two cameras' shares would
     # double-count the row they both see.
-    data["room_chairs_total"] = room_chair_total(cid)
+    if chair_registry.auto_enabled():
+        # Sum the LEARNED inventories of the cameras that own this room's seats,
+        # not the configured map -- otherwise a chair the sweeper found would
+        # show up in this camera's count while the room total stayed at the
+        # number somebody typed months ago.
+        data["room_chairs_total"] = chair_registry.room_confirmed_total(cid)
+    else:
+        data["room_chairs_total"] = room_chair_total(cid)
+
+    # How the inventory was arrived at, so the UI can distinguish a configured
+    # seat count from a learned one -- and show that a newly spotted chair is
+    # still gathering evidence rather than being ignored.
+    registry = chair_registry.store().get(cid)
+    data["chairs_auto"] = chair_registry.auto_enabled()
+    data["chairs_pending"] = registry.pending_count
+    data["chairs_sweeps"] = registry.sweeps
 
     _last_observed[cid] = observed_at
     _last_payload[cid] = data

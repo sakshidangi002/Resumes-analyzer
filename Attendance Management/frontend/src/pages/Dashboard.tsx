@@ -9,6 +9,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+import { dailyTarget } from "../utils/workingHours";
 interface ReminderBirthday {
   employee_id: number;
   employee_code: string;
@@ -146,7 +147,11 @@ export default function Dashboard() {
     lateToday: 0
   });
   const todayISO = useMemo(() => formatLocalDate(new Date()), []);
-  const expectedHoursPerDay = Number(empDetails?.expected_working_hours || 9);
+  // null when this person has no fixed daily target -- see utils/workingHours.
+  // Kept as null rather than 0 so the weekly meter below can be hidden instead
+  // of dividing by it and rendering a full bar against a "0 Hours" target.
+  const dailyHoursTarget = dailyTarget(empDetails?.expected_working_hours);
+  const expectedHoursPerDay = dailyHoursTarget ?? 0;
 
   const tomorrowISO = useMemo(() => {
     const d = new Date();
@@ -595,19 +600,25 @@ export default function Dashboard() {
                   <span className="eds-eyebrow">Weekly Performance</span>
                   <span className="eds-figure">{Math.round(weeklyHours)} Hours Logged</span>
                 </div>
-                <div
-                  className="eds-meter"
-                  role="img"
-                  aria-label={`${Math.round(weeklyHours)} of ${(expectedHoursPerDay * 5).toFixed(0)} target hours logged`}
-                >
+                {dailyHoursTarget === null ? null : (
                   <div
-                    className="eds-meter-fill"
-                    style={{ width: `${Math.min(100, Math.round((weeklyHours / (expectedHoursPerDay * 5)) * 100))}%` }}
-                  ></div>
-                </div>
+                    className="eds-meter"
+                    role="img"
+                    aria-label={`${Math.round(weeklyHours)} of ${(dailyHoursTarget * 5).toFixed(0)} target hours logged`}
+                  >
+                    <div
+                      className="eds-meter-fill"
+                      style={{ width: `${Math.min(100, Math.round((weeklyHours / (dailyHoursTarget * 5)) * 100))}%` }}
+                    ></div>
+                  </div>
+                )}
                 <div className="eds-week-block eds-week-block--end">
                   <span className="eds-eyebrow">Target</span>
-                  <span className="eds-figure">{(expectedHoursPerDay * 5).toFixed(0)} Hours</span>
+                  <span className="eds-figure">
+                    {dailyHoursTarget === null
+                      ? "No fixed hours"
+                      : `${(dailyHoursTarget * 5).toFixed(0)} Hours`}
+                  </span>
                 </div>
               </div>
             </section>

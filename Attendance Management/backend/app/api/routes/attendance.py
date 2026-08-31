@@ -327,7 +327,12 @@ def daily_attendance_report(
                 sign_out_time=rec.sign_out_time if rec else None,
                 total_work_hours=float(rec.total_work_hours) if rec and rec.total_work_hours is not None else None,
                 total_break_hours=float(rec.total_break_hours) if rec and rec.total_break_hours is not None else None,
-                expected_working_hours=float(emp.expected_working_hours or 9.0),
+                # 0 is a real value -- "no fixed hours" -- and must reach the UI
+                # as 0 so it can say so, rather than being rewritten to 9 here.
+                expected_working_hours=(
+                    0.0 if emp.expected_working_hours == 0
+                    else float(emp.expected_working_hours or 9.0)
+                ),
                 status=rec.status if rec else "ABSENT",
                 is_late=rec.is_late if rec else False,
                 is_early_exit=rec.is_early_exit if rec else False,

@@ -155,7 +155,7 @@ def test_the_live_totals_are_whatever_the_map_says():
     than something that drifts."""
     # Per-camera OWNED counts. The room has 13 chairs and neither camera owns
     # all of them -- the row both cameras see belongs to 60 alone.
-    assert len(room_geometry(59).chairs) == 8
+    assert len(room_geometry(59).chairs) == 7
     assert len(room_geometry(60).chairs) == 6
     assert has_chair_map(59) and has_chair_map(60)
 
@@ -221,9 +221,9 @@ def test_the_room_total_counts_each_chair_once():
     row, which is what made 13 chairs look like 18."""
     from app.cctv_v2.config.geometry import room_chair_total, room_geometry
 
-    assert room_chair_total(59) == room_chair_total(60) == 14
+    assert room_chair_total(59) == room_chair_total(60) == 13
     assert (len(room_geometry(59).chairs)
-            + len(room_geometry(60).chairs)) == 14
+            + len(room_geometry(60).chairs)) == 13
 
 
 def test_a_camera_alone_in_its_room_owns_its_whole_room():
@@ -231,3 +231,60 @@ def test_a_camera_alone_in_its_room_owns_its_whole_room():
     from app.cctv_v2.config.geometry import room_chair_total, room_geometry
 
     assert room_chair_total(57) == len(room_geometry(57).chairs) == 0
+
+
+# ---------------------------------------------------------------------------
+# PROTECTED CONFIGURATION
+# ---------------------------------------------------------------------------
+# These are not design statements, they are a tripwire. Every one of them has
+# been changed at some point in this system's history by an optimisation that
+# looked local, so they are asserted where a diff will show them.
+def test_confirmation_counts_are_unchanged():
+    """confirm_free was measured, not chosen: over 38 genuine detector dropouts
+    the longest was 9 consecutive passes and 5 already survives only 76% of
+    them. Lowering it to make the UI feel faster buys false FREE states on
+    chairs people are still sitting in."""
+    g = RoomGeometry()
+    assert g.confirm_occupied == 2
+    assert g.confirm_free == 5
+
+
+def test_doorway_crossing_lines_are_unchanged():
+    """Camera 57's 0.775 and camera 58's 0.35 were each fitted against real
+    transits on that specific camera. They are not interchangeable -- 0.35 was
+    measured UNREACHABLE on 57, where no foot ever crossed it."""
+    from app.cctv_v2.config.geometry import crossing_line
+
+    assert crossing_line(57).position == 0.775
+    assert crossing_line(58).position == 0.35
+
+
+def test_rooms_are_not_motion_gated():
+    """A seated person barely moves. Gating a room on motion would let occupancy
+    decay exactly when the room is calm, which is most of the time."""
+    from app.cctv_v2.config.profiles import ROOM
+
+    assert ROOM.motion_gated is False
+
+
+def test_room_detection_settings_are_unchanged():
+    from app.cctv_v2.config.profiles import ROOM
+
+    assert ROOM.input_size == 960
+    assert ROOM.predict_conf == 0.015
+    assert ROOM.predict_conf < ROOM.new_track_thresh
+
+
+def test_chair_ownership_is_unchanged():
+    """59 = R2-R8, 60 = S1-S6, disjoint, 13 in the room."""
+    from app.cctv_v2.config.geometry import room_chair_total, room_geometry
+
+    a = [c.chair_id for c in room_geometry(59).chairs]
+    b = [c.chair_id for c in room_geometry(60).chairs]
+    # Starts at R2, not R1. R1 was mapped over a seat that does not exist and
+    # was removed; the survivors keep their ids rather than being renumbered,
+    # so that occupancy already recorded against R5 still refers to R5.
+    assert a == [f"R{i}" for i in range(2, 9)]
+    assert b == [f"S{i}" for i in range(1, 7)]
+    assert set(a) & set(b) == set()
+    assert room_chair_total(59) == 13

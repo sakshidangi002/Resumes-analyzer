@@ -174,8 +174,17 @@ def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: 
             AttendanceRecord.date < end,
         ).all()
         
+        from app.core.staff_policy import expected_daily_hours, is_fixed_salary_staff
+
         unrequested_sl = 0
         for rec, emp in att_records:
+            # Fixed-salary staff keep no leave account: staff_policy states that
+            # short days "must not be charged against Short/Paid Leave buffers,
+            # which they typically have no allocation for". Charging them here
+            # drove the balance NEGATIVE for exactly those people -- they have a
+            # zero allocation, so every short day subtracted from nothing.
+            if is_fixed_salary_staff(emp):
+                continue
             if rec.status == "SHORT":
                 unrequested_sl += 1
             elif rec.status == "HALF_DAY":
@@ -183,8 +192,9 @@ def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: 
                 unrequested_sl += 2
             elif rec.status == "PRESENT" and rec.total_work_hours is not None:
                 worked = float(rec.total_work_hours)
-                expected = float(emp.expected_working_hours or 9.0)
-                if (expected - 2.0) <= worked < expected:
+                expected = expected_daily_hours(emp)
+                # No daily target means no "just short of a full day" window.
+                if expected is not None and (expected - 2.0) <= worked < expected:
                     unrequested_sl += 1
         
         return alloc.allocated_days - Decimal(n_req) - Decimal(unrequested_sl)

@@ -511,6 +511,19 @@ async def _unified_lifespan(parent_app: FastAPI):
             logger.info("CCTV camera manager started")
         except Exception:
             logger.exception("Failed to start CCTV camera manager – cameras will not run")
+
+        # --- Automatic chair inventory ------------------------------------
+        # Started only alongside the camera workers: it reads frames out of
+        # their memory, so on an API-only instance there would be nothing for it
+        # to look at. A failure here must never stop the cameras -- without it
+        # the chair map simply stays as configured.
+        try:
+            from app.cctv_v2.pipeline import chair_sweeper
+            chair_sweeper.start()
+        except Exception:
+            logger.exception(
+                "Failed to start the chair sweeper – chair counts will stay as configured"
+            )
     else:
         logger.info(
             "CCTV camera manager DISABLED for this process (CCTV_WORKERS_ENABLED=0). "
@@ -546,6 +559,15 @@ async def _unified_lifespan(parent_app: FastAPI):
             yield
     finally:
         # --- Shutdown camera workers ---------------------------------------
+        # Stopped BEFORE the cameras: it reads their frames, and its final act
+        # is to persist the inventory, which should happen while the process is
+        # still healthy.
+        try:
+            from app.cctv_v2.pipeline import chair_sweeper
+            chair_sweeper.stop()
+        except Exception:
+            logger.exception("Error stopping the chair sweeper")
+
         try:
             from app.services.camera_service import camera_manager
             camera_manager.stop_all()

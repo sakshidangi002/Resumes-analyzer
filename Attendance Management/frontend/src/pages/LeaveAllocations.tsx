@@ -49,6 +49,14 @@ const Icons = {
       <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path>
     </svg>
   ),
+  Trash: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+  ),
   Plus: () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
       <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
@@ -128,6 +136,24 @@ export default function LeaveAllocations() {
   };
 
   const typeName = (id: number) => types.find((t) => t.id === id)?.name ?? `#${id}`;
+
+  const handleDelete = (a: Allocation) => {
+    const label = `${typeName(a.leave_type_id)} for ${employeeLabel(a.employee_id)}`;
+    if (!window.confirm(`Delete the ${label} allocation?`)) return;
+    setError("");
+    setSuccess("");
+    leaveApi
+      .deleteAllocation(a.id)
+      // Drop it locally rather than refetching: the list effect is keyed on the
+      // financial year, so it will not re-run just because a row went away.
+      .then(() => {
+        setAllocations((prev) => prev.filter((x) => x.id !== a.id));
+        setSuccess(`Deleted ${label}.`);
+      })
+      .catch((err) =>
+        setError(err.response?.data?.detail || "Failed to delete allocation.")
+      );
+  };
 
   const openAdd = () => {
     setEditRow(null);
@@ -299,6 +325,25 @@ export default function LeaveAllocations() {
                               title="Edit Allocation"
                             >
                               <Icons.Edit />
+                            </button>
+                            {/* Disabled once any of the allocation is spent. The
+                                server refuses this too -- the used figure is the
+                                only record that those days were taken, so removing
+                                the row would erase it while the approved requests
+                                remained. Editing the allocation down is the way to
+                                stop further leave. */}
+                            <button
+                              type="button"
+                              className="eds-iconbtn eds-iconbtn--del"
+                              onClick={() => handleDelete(a)}
+                              disabled={Number(a.used_days) > 0}
+                              title={
+                                Number(a.used_days) > 0
+                                  ? `Cannot delete: ${Math.round(Number(a.used_days))} day(s) already used. Edit the allocation instead.`
+                                  : "Delete Allocation"
+                              }
+                            >
+                              <Icons.Trash />
                             </button>
                           </div>
                         </div>

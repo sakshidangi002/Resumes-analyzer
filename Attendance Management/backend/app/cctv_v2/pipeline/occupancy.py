@@ -97,10 +97,18 @@ class RoomSnapshot:
     chairs: tuple[dict, ...]
     chair_map_configured: bool
 
+    # When any chair last CHANGED state, as opposed to when it was last looked
+    # at. The two are routinely far apart -- a settled room is observed every
+    # few seconds and changes nothing for minutes -- and a caller that cannot
+    # tell them apart has no way to know whether a stale-looking answer is stale
+    # or simply steady.
+    state_updated_at: float = 0.0
+
     def as_dict(self) -> dict:
         return {
             "camera_id": self.camera_id,
             "timestamp": self.timestamp,
+            "state_updated_at": self.state_updated_at,
             "people_count": self.people_count,
             "active_track_ids": list(self.active_track_ids),
             "chairs_total": self.total_chairs,
@@ -189,6 +197,38 @@ class RoomOccupancy:
         """
         return {c.chair_id: c.box for c in self.geometry.chairs}
 
+    def apply_geometry(self, geometry: RoomGeometry) -> bool:
+        """Adopt a new chair map, preserving the state of seats that survive it.
+
+        `self.chairs` has to mirror `self.geometry` exactly. `update` indexes
+        `self.chairs[seat.chair_id]` for every seat in the geometry, so a seat
+        the map gained without a status here is a KeyError; and the occupied /
+        free / unknown counts are taken over `self.chairs`, so a seat the map
+        LOST but which still had a status would keep being counted -- a chair
+        removed from the room would go on reporting occupancy forever.
+
+        Seats that exist in both maps keep their state and their smoothing
+        counters, so re-aiming the map does not reset a chair somebody is
+        sitting in. Genuinely new seats start UNKNOWN, which is the honest
+        answer: nothing has been observed about them yet.
+
+        Refuses an EMPTY map and reports False. An empty geometry would silently
+        turn a working room into "no chairs configured", and the most likely
+        source of one is a detector or config fault -- exactly when the last
+        known-good map is the thing worth keeping.
+        """
+        if not geometry.chairs:
+            return False
+
+        self.geometry = geometry
+        wanted = {c.chair_id for c in geometry.chairs}
+        for chair_id in [c for c in self.chairs if c not in wanted]:
+            del self.chairs[chair_id]
+        for chair_id in wanted:
+            if chair_id not in self.chairs:
+                self.chairs[chair_id] = ChairStatus(chair_id=chair_id)
+        return True
+
     def update(self, tracks: Iterable[PersonTrack], timestamp: float) -> RoomSnapshot:
         """Fold in the tracks currently CONFIRMED on this camera."""
         present = [t for t in tracks if t.state is TrackState.CONFIRMED]
@@ -227,6 +267,11 @@ class RoomOccupancy:
             self._settle(status, observed, timestamp,
                          claims.get(seat.chair_id, (0.0, None))[1])
 
+        # The most recent moment any seat actually CHANGED. `since` is stamped
+        # by _settle when a state is adopted, so this is a real event time, not
+        # the time of the last look.
+        state_updated_at = max((c.since for c in self.chairs.values()), default=0.0)
+
         occupied = sum(1 for c in self.chairs.values() if c.state is ChairState.OCCUPIED)
         free = sum(1 for c in self.chairs.values() if c.state is ChairState.FREE)
         unknown = sum(1 for c in self.chairs.values() if c.state is ChairState.UNKNOWN)
@@ -260,6 +305,7 @@ class RoomOccupancy:
             # true`, which is precisely the "gap versus empty room" distinction
             # this field exists to make.
             chair_map_configured=bool(self.geometry.chairs),
+            state_updated_at=state_updated_at,
         )
 
     def _plausibly_seated(self, region, chair_id: str) -> bool:

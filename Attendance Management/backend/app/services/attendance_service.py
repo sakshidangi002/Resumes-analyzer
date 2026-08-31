@@ -179,9 +179,22 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     if rec.total_work_hours is not None:
         from app.models.employee import Employee
         emp = db.query(Employee).filter(Employee.id == rec.employee_id).first()
-        expected = float(emp.expected_working_hours or DEFAULT_EXPECTED_HOURS)
+        from app.core.staff_policy import expected_daily_hours
 
+        expected = expected_daily_hours(emp)
         hours = float(rec.total_work_hours)
+
+        # No fixed daily target (expected_working_hours set to 0). There is
+        # nothing to fall short OF, so the SHORT / HALF_DAY ladder below -- all
+        # of which is defined relative to a target -- does not describe this
+        # person's arrangement. They worked, or they did not.
+        #
+        # This is the case the old `or 9.0` hid: a zero became a nine, and
+        # somebody on no fixed hours was scored against a nine-hour day.
+        if expected is None:
+            rec.status = "PRESENT" if hours > 0 else "ABSENT"
+            return
+
         missed = expected - hours
         # Half a day is defined against this employee's own shift length. The
         # previous fixed 4.5 was only correct for a 9-hour shift and silently

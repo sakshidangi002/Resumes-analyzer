@@ -63,11 +63,15 @@ logger = logging.getLogger(__name__)
 # know the COCO ordering to understand the filter.
 PERSON_CLASS_ID = 0
 
-# COCO class 56. Used ONLY for setup and sanity checks, never as the per-frame
-# source of truth for occupancy: measured against these two rooms it returned
-# 1-9 chairs on camera 59 (about 10 visible) and 3-10 on camera 60 (6-8
-# visible), depending on input size and confidence. Seats are configured in
-# config/geometry.py instead. See occupancy.py.
+# COCO class 56. Never a PER-FRAME source of truth for occupancy: measured
+# against these two rooms it returned 1-9 chairs on camera 59 (about 10 visible)
+# and 3-10 on camera 60 (6-8 visible), depending on input size and confidence.
+#
+# That spread is why chair detections are not used directly. They are fed to
+# pipeline/chair_registry.py, which treats them as EVIDENCE and only changes the
+# seat inventory after several sweeps agree -- so the wobble above averages out
+# instead of reaching the UI. The hand-verified map in config/geometry.py is
+# still the seed and still the fallback when CCTV_CHAIR_AUTO is off.
 CHAIR_CLASS_ID = 56
 
 # How many recent latencies to keep per role for percentile reporting. Bounded
@@ -304,13 +308,17 @@ class PersonDetector:
 
 def detect_chairs(model, frame, imgsz: int, conf: float,
                   camera_id: int) -> tuple[tuple[float, float, float, float], ...]:
-    """Chair boxes for SETUP ONLY.
+    """Raw chair boxes, in pixels.
 
-    Deliberately not a method on PersonDetector and not called by the pipeline.
-    Chair occupancy is decided from configured zones plus person association;
-    this exists so a human placing those zones has the detector's opinion in
-    front of them, and so a later sanity check can ask whether the configured
-    seat count is in the right neighbourhood.
+    Deliberately not a method on PersonDetector: it takes a model rather than
+    owning one, because its two callers need different models. The setup script
+    passes a throwaway instance, and the chair sweeper passes its own shared one
+    -- never a camera's tracking model, since calling `predict()` on a model that
+    `track()` configured tears down the predictor holding that camera's ByteTrack
+    state.
+
+    The output is noisy by nature (see CHAIR_CLASS_ID). Nothing should use it as
+    an answer on its own; chair_registry.py is what turns it into an inventory.
     """
     try:
         raw = model.predict(frame, imgsz=imgsz, conf=conf,

@@ -272,6 +272,8 @@ export const leave = {
     allocated_days: number;
     financial_year_id?: number;
   }) => api.post("/leave/allocations", null, { params: { ...params } }),
+  deleteAllocation: (allocation_id: number) =>
+    api.delete(`/leave/allocations/${allocation_id}`),
   requests: (params?: { employee_id?: number; status?: string }) =>
     api.get("/leave/requests", { params }),
   approvals: (params?: { status?: string }) =>
@@ -456,8 +458,15 @@ export type AuditLogRow = {
 };
 
 export const audit = {
-  list: (params?: { limit?: number; action?: string }) =>
-    api.get<AuditLogRow[]>("/audit", { params }),
+  // from_date/to_date are naive ISO strings ("2026-08-01T00:00:00"), matching the
+  // naive UTC `created_at` column. Sending an offset or a trailing Z would make
+  // FastAPI hand SQLAlchemy an aware datetime and the comparison would fail.
+  list: (params?: {
+    limit?: number;
+    action?: string;
+    from_date?: string;
+    to_date?: string;
+  }) => api.get<AuditLogRow[]>("/audit", { params }),
 };
 
 export type OnboardingTaskRow = {
@@ -689,6 +698,9 @@ export const cameras = {
       people: {
         track_id: number;
         bbox: [number, number, number, number];
+        // Person-detector score. `confidence` is a deprecated alias with the
+        // same value; both previously carried the face-match score.
+        detection_confidence?: number;
         confidence: number;
         chair_id: string | null;
       }[];
@@ -705,9 +717,11 @@ export const cameras = {
       // camera's share; the two cameras' shares must never be added, because
       // the row they both see would be counted twice.
       room_chairs_total?: number;
-      // How old the analysis pass behind this answer is, and whether this
-      // response folded in a new one. A count is only ever as current as the
-      // last COMPLETED pass, and on this hardware that is seconds ago.
+      // Four separate freshness facts. A room settled for ten minutes has a
+      // FRESH observation and an OLD state change; a caller that cannot tell
+      // those apart reads "steady" as "stuck".
+      observation_updated_at?: number | null;   // when V1 last completed a pass
+      state_updated_at?: number;                // when a chair last CHANGED
       observation_age_sec?: number | null;
       from_new_observation?: boolean;
     }>(`/cameras/${id}/occupancy`),

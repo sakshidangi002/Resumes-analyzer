@@ -600,9 +600,25 @@ def get_camera_occupancy(
     occupancy change faster: the smoothing advances once per completed ANALYSIS
     PASS, not once per request. It used to advance per request, which meant the
     dashboard's 2s poll spent three "consecutive observations" on a single pass
-    and chairs flipped state while nobody moved. `from_new_observation` says
-    whether this response folded in a new pass, and `observation_age_sec` how
-    old that pass is.
+    and chairs flipped state while nobody moved.
+
+    Four freshness fields, because they answer different questions:
+
+        observation_updated_at   when V1 last completed an analysis pass
+        observation_age_sec      how old that pass is now
+        state_updated_at         when a chair last actually CHANGED
+        from_new_observation     whether THIS response folded in a new pass
+
+    A room settled for ten minutes has a FRESH observation and an OLD state
+    change. Collapsing the two is how a steady answer gets read as a stuck one.
+
+    HOW FAST CAN IT CHANGE? Not faster than
+    `confirmations x observation interval`. Measured on this deployment from
+    the app's own PERF log (n=2572 passes), a room camera's observation interval
+    is 8.1s median, so a seat becomes FREE about 40s after its occupant leaves.
+    Polling harder cannot improve that and never could; the levers are the
+    confirmation counts (bounded by how long the detector loses a seated
+    person -- see geometry.py) and the pass rate (bounded by CPU).
 
     `chairs` are the seats THIS CAMERA OWNS. `observed_elsewhere` are seats it
     can see but another camera controls -- a chair has exactly one owner, so the

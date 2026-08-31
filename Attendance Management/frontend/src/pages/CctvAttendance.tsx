@@ -175,6 +175,10 @@ type OccupancySnapshot = {
   people: {
     track_id: number;
     bbox: [number, number, number, number];
+    // How sure the PERSON DETECTOR was. `confidence` is a deprecated alias
+    // carrying the same value; both used to carry the face-match score, so an
+    // unrecognised person read 0.0 while being detected perfectly well.
+    detection_confidence?: number;
     confidence: number;
     chair_id: string | null;
   }[];
@@ -186,6 +190,14 @@ type OccupancySnapshot = {
     owned_by_camera: number | null;
   }[];
   room_chairs_total?: number;
+  // Whether the seat list is LEARNED from the detector or fixed to the
+  // configured map, and how many candidate seats are still gathering the
+  // sightings they need before they count.
+  chairs_auto?: boolean;
+  chairs_pending?: number;
+  chairs_sweeps?: number;
+  observation_updated_at?: number | null;
+  state_updated_at?: number;
   observation_age_sec?: number | null;
   from_new_observation?: boolean;
 };
@@ -654,20 +666,26 @@ export default function CctvAttendance() {
                           machines argue over one seat. Without these, camera
                           59's view of the shared desk shows people sitting in
                           nothing, which reads as a detection failure. */}
-                      {occupancy.observed_elsewhere?.map((z) => {
+                      {occupancy.observed_elsewhere?.map((z, idx) => {
                         const [zx1, zy1, zx2, zy2] = z.zone;
                         const x = zx1 * occupancy.frame_width;
                         const y = zy1 * occupancy.frame_height;
                         const w = (zx2 - zx1) * occupancy.frame_width;
                         const h = (zy2 - zy1) * occupancy.frame_height;
+                        // The owner is named ONCE, on the first zone, rather
+                        // than stamped on all five -- the repetition said
+                        // nothing extra and scattered "cam 60" across the room.
+                        const first = idx === 0;
                         return (
-                          <g key={`o${z.id}`} opacity={0.45}>
+                          <g key={`o${z.id}`} opacity={0.3}>
                             <rect x={x} y={y} width={w} height={h}
-                                  fill="none" stroke="#94a3b8" strokeWidth={2}
+                                  fill="none" stroke="#94a3b8" strokeWidth={1.5}
                                   strokeDasharray="4 6" />
-                            <text x={x + 4} y={y + 18} fill="#cbd5e1" fontSize={15}>
-                              cam {z.owned_by_camera}
-                            </text>
+                            {first ? (
+                              <text x={x + 4} y={Math.max(12, y - 6)} fill="#cbd5e1" fontSize={13}>
+                                cam {z.owned_by_camera}&apos;s seats
+                              </text>
+                            ) : null}
                           </g>
                         );
                       })}
@@ -704,28 +722,56 @@ export default function CctvAttendance() {
                           <g key={ch.id}>
                             <rect
                               x={x} y={y} width={w} height={h}
-                              fill="none" stroke={colour} strokeWidth={4}
+                              fill="none" stroke={colour}
+                              strokeWidth={state === "FREE" ? 2 : 4}
+                              strokeOpacity={state === "FREE" ? 0.75 : 1}
                               strokeDasharray={held ? "10 8" : undefined}
                             />
-                            <rect x={x} y={Math.max(0, y - 46)} width={Math.max(150, w)} height={44} fill="rgba(0,0,0,0.72)" />
-                            <text x={x + 6} y={Math.max(16, y - 26)} fill={colour} fontSize={22} fontWeight={700}>
-                              {ch.id} {state}
-                            </text>
-                            <text x={x + 6} y={Math.max(32, y - 8)} fill="rgba(255,255,255,0.85)" fontSize={16}>
-                              {state === "OCCUPIED"
-                                ? `trk${ch.occupant_track_id}${held ? " · track lost" : " ●"}`
-                                : state === "UNKNOWN"
-                                  ? "not decided yet"
-                                  : ""}
-                            </text>
+                            {/* A free seat needs no words. Twelve chairs in a
+                                receding row each carrying a 150x44 caption is
+                                what turned this view into a wall of black
+                                boxes, and "FREE" was the caption on ten of
+                                them -- the least interesting thing on screen,
+                                repeated the most. Free seats are now the quiet
+                                default: a thin outline and a small id, so the
+                                eye goes to the ones that are not free. */}
+                            {state === "FREE" ? (
+                              <text
+                                x={x + 4} y={y + 16} fill={colour} fontSize={14}
+                                fontWeight={600} opacity={0.9}
+                                style={{ paintOrder: "stroke", stroke: "rgba(0,0,0,0.85)", strokeWidth: 3 }}
+                              >
+                                {ch.id}
+                              </text>
+                            ) : (
+                              <>
+                                <rect
+                                  x={x} y={Math.max(0, y - 26)}
+                                  width={Math.max(96, Math.min(w, 190))} height={24}
+                                  fill="rgba(0,0,0,0.75)" rx={3}
+                                />
+                                <text x={x + 5} y={Math.max(14, y - 8)} fill={colour} fontSize={15} fontWeight={700}>
+                                  {ch.id} {state === "OCCUPIED"
+                                    ? (held ? "· held" : `· trk${ch.occupant_track_id}`)
+                                    : "· undecided"}
+                                </text>
+                              </>
+                            )}
                           </g>
                         );
                       })}
-                      {/* What the detector actually saw. BLUE = this person is
-                          in a mapped seat, YELLOW = in none. Yellow means "no
-                          mapped seat" -- never "not sitting" -- and it is the
-                          correct answer for anyone standing, walking, or in a
-                          chair the camera only half sees. Nobody is ever
+                      {/* Only the people the seat map could NOT place.
+                          V1 already draws a box and a name banner for EVERY
+                          person into the MJPEG itself, so drawing them all
+                          again here put two rectangles and two captions around
+                          each body -- the single biggest source of clutter in
+                          this view. A seated person is already accounted for by
+                          their chair's own "· trkNNN" caption.
+                          What the video cannot say is that somebody is in NO
+                          mapped seat, so that is all this draws. Amber means
+                          "no mapped seat" -- never "not sitting" -- and it is
+                          the correct answer for anyone standing, walking, or in
+                          a chair the camera only half sees. Nobody is ever
                           snapped to a nearby chair to make the picture tidier. */}
                       {occupancy.people?.map((pr) => {
                         const [bx1, by1, bx2, by2] = pr.bbox;
@@ -733,20 +779,18 @@ export default function CctvAttendance() {
                         const y = by1 * occupancy.frame_height;
                         const w2 = (bx2 - bx1) * occupancy.frame_width;
                         const h2 = (by2 - by1) * occupancy.frame_height;
-                        const seated = pr.chair_id != null;
-                        const colour = seated ? "#38bdf8" : "#fbbf24";
-                        const label = seated
-                          ? `trk${pr.track_id} -> ${pr.chair_id}`
-                          : `trk${pr.track_id} UNASSIGNED`;
+                        if (pr.chair_id != null) return null;
+                        const colour = "#fbbf24";
                         return (
                           <g key={`p${pr.track_id}`}>
                             <rect x={x} y={y} width={w2} height={h2}
-                                  fill="none" stroke={colour} strokeWidth={3} />
-                            <rect x={x} y={y + h2} width={Math.max(190, w2)} height={30}
-                                  fill="rgba(0,0,0,0.72)" />
-                            <text x={x + 6} y={y + h2 + 21} fill={colour}
-                                  fontSize={18} fontWeight={700}>
-                              {label}
+                                  fill="none" stroke={colour} strokeWidth={2}
+                                  strokeDasharray="8 6" />
+                            <rect x={x} y={y + h2} width={Math.max(104, Math.min(w2, 190))} height={22}
+                                  fill="rgba(0,0,0,0.75)" rx={3} />
+                            <text x={x + 5} y={y + h2 + 16} fill={colour}
+                                  fontSize={14} fontWeight={700}>
+                              trk{pr.track_id} · no seat
                             </text>
                           </g>
                         );
@@ -810,9 +854,20 @@ export default function CctvAttendance() {
                         </div>
                       ) : (
                         <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400, fontSize: "0.7rem" }}>
-                          mapped seats only
+                          {occupancy.chairs_auto ? "auto-counted seats" : "mapped seats only"}
                         </div>
                       )}
+                      {/* A chair the detector has just started seeing is NOT
+                          ignored, it is accumulating evidence -- saying so stops
+                          "I added a chair and nothing happened" from looking
+                          like a failure during the couple of minutes it takes
+                          to confirm. */}
+                      {occupancy.chairs_auto && (occupancy.chairs_pending ?? 0) > 0 ? (
+                        <div style={{ color: "rgba(250,204,21,0.75)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          {occupancy.chairs_pending} possible new seat
+                          {occupancy.chairs_pending === 1 ? "" : "s"} being confirmed
+                        </div>
+                      ) : null}
                       {/* A correct-but-old answer must not look current. The
                           count is only ever as fresh as the last COMPLETED
                           analysis pass, which on this hardware is seconds ago. */}

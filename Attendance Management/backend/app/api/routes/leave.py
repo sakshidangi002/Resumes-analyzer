@@ -26,6 +26,7 @@ from app.services.leave_service import (
     paid_leave_summary,
     _count_leave_days,
 )
+from app.services.audit_service import log_audit
 from app.services.notification_service import notify_user_for_employee, notify_users_with_roles
 from app.services.email_service import send_notification
 from app.core.config import get_settings
@@ -434,6 +435,65 @@ def create_allocation(
         return allocate_leave_for_fy(db, employee_id, fy.id, leave_type_id, allocated_days)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.delete("/allocations/{allocation_id}")
+def delete_allocation(
+    allocation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Remove a leave allocation row.
+
+    Refuses once any of it has been consumed. `used_days` is the only record
+    that those days were taken -- the approved requests were decremented against
+    THIS row -- so deleting it would not "free up" the leave, it would erase the
+    evidence that it was ever spent while the approved requests stayed on the
+    books. Set the allocation to the used figure instead if the intent is to
+    stop further leave being taken.
+
+    Note for PL and SL specifically: `ensure_default_allocations_for_employee`
+    recreates a missing default the next time the employee's balance is read, so
+    deleting one of those returns it as a 0-day row rather than removing it for
+    good. Deleting is therefore a way to reset a row, not to hide a leave type.
+    """
+    alloc = db.query(LeaveAllocation).filter(LeaveAllocation.id == allocation_id).first()
+    if not alloc:
+        raise HTTPException(status_code=404, detail="Leave allocation not found")
+
+    used = Decimal(str(alloc.used_days or 0))
+    if used > 0:
+        lt = db.query(LeaveType).filter(LeaveType.id == alloc.leave_type_id).first()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot delete: {used} day(s) of "
+                f"{(lt.name if lt else 'this leave')} have already been used. "
+                "Reduce the allocation instead."
+            ),
+        )
+
+    emp = db.query(Employee).filter(Employee.id == alloc.employee_id).first()
+    lt = db.query(LeaveType).filter(LeaveType.id == alloc.leave_type_id).first()
+    # Captured before the delete -- afterwards there is nothing left to describe.
+    details = (
+        f"{(emp.full_name if emp else 'employee ' + str(alloc.employee_id))}: "
+        f"{(lt.code if lt else 'leave')} allocation of {alloc.allocated_days} day(s) "
+        f"deleted (FY {alloc.financial_year_id})"
+    )
+
+    db.delete(alloc)
+    db.commit()
+
+    log_audit(
+        db,
+        current_user.id,
+        "LEAVE_ALLOCATION_DELETE",
+        entity_type="LeaveAllocation",
+        entity_id=str(allocation_id),
+        details=details,
+    )
+    return {"detail": "Leave allocation deleted"}
 
 
 @router.post("/requests", response_model=LeaveRequestResponse)

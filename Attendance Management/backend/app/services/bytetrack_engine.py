@@ -485,7 +485,7 @@ class ByteTrackEngine:
             self._next_aux_id += 1
             self.tracks[aux_id] = PersonTrack(
                 track_id=aux_id, box=box, max_misses=self.max_misses,
-                provisional=True,
+                provisional=True, detection_confidence=float(score),
             )
             seen.add(aux_id)
             scores.append(round(score, 3))
@@ -618,16 +618,23 @@ class ByteTrackEngine:
                     if (b[3] - b[1]) < _MIN_PERSON_PX:
                         continue          # too small to be a person -- see above
                     tid = ids[idx] if (ids is not None and idx < len(ids)) else None
+                    # The DETECTOR's score for this box. It was already computed
+                    # for the log line above and then thrown away, which is why
+                    # nothing downstream could answer "how sure are we somebody
+                    # is there" without reaching for the face-match score.
+                    det_conf = det_scores[idx] if idx < len(det_scores) else 0.0
 
                     if tid is not None:
                         seen.add(int(tid))
                         pt = self.tracks.get(int(tid))
                         if pt is None:
                             self.tracks[int(tid)] = PersonTrack(
-                                track_id=int(tid), box=b, max_misses=self.max_misses
+                                track_id=int(tid), box=b, max_misses=self.max_misses,
+                                detection_confidence=det_conf,
                             )
                         else:
                             pt.update_box(b)
+                            pt.detection_confidence = det_conf
                             # The tracker has now confirmed it; it is no longer
                             # provisional and may be coasted normally.
                             pt.provisional = False
@@ -700,7 +707,7 @@ class ByteTrackEngine:
                     # doorway count matters more than steady room boxes.
                     self.tracks[aux_id] = PersonTrack(
                         track_id=aux_id, box=b, max_misses=self.max_misses,
-                        provisional=True,
+                        provisional=True, detection_confidence=float(score),
                     )
                     seen.add(aux_id)
                     logger.info(
@@ -849,11 +856,18 @@ class ByteTrackEngine:
             # Detections that will never become tracks. If this fires
             # repeatedly the tracker config is discarding real people.
             if det_scores and len(live) < detections:
+                # The advice used to be "add its id to CCTV_STEEP_CAMERAS",
+                # which is stale and actively misleading on a room camera:
+                # `steep = self.is_monitor or id in _STEEP_CAMERAS`, so MONITOR
+                # cameras are already permissive and listing them changes
+                # nothing. Following it wastes a diagnosis on a lever that is
+                # already pulled.
                 logger.info(
                     "YOLO camera=%s %d detection(s) did NOT become tracks "
                     "(lowest kept vs dropped: %s) — if these are real people, "
-                    "this camera needs the permissive tracker "
-                    "(add its id to CCTV_STEEP_CAMERAS)",
+                    "this camera needs more PIXELS on them, not a lower bar "
+                    "(CCTV_CROP_ASSIST_CAMERAS); the permissive tracker is "
+                    "already on for monitor cameras",
                     self.camera_id, detections - len(live), sorted(det_scores),
                 )
 
@@ -905,6 +919,10 @@ class ByteTrackEngine:
                 duplicate_of.identity_source = track.identity_source
             if track.fuser.observations > duplicate_of.fuser.observations:
                 duplicate_of.fuser = track.fuser
+            # Keep the stronger detection evidence of the two boxes that turned
+            # out to be one person.
+            duplicate_of.detection_confidence = max(
+                duplicate_of.detection_confidence, track.detection_confidence)
             self.tracks.pop(track.track_id, None)
 
         if len(kept) != len(live):

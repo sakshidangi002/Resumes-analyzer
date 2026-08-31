@@ -24,3 +24,37 @@ def is_fixed_salary_staff(employee) -> bool:
     """
     staff_type = (getattr(employee, "staff_type", None) or "Employee").strip().lower()
     return staff_type != "employee"
+
+
+# The daily target assumed for someone who has never had one set. Only ever
+# applied to a NULL, never to a zero -- see below.
+DEFAULT_EXPECTED_HOURS = 9.0
+
+
+def expected_daily_hours(employee):
+    """This person's daily hour target, or None if they have no fixed hours.
+
+    Zero is a REAL value here, not a missing one. `create_support_staff` already
+    writes `expected_working_hours=0.0` with the comment "no work-hour
+    expectation for support staff", so the intent has always been that 0 means
+    "no fixed daily target". Every reader defeated it by writing
+    `float(emp.expected_working_hours or 9.0)` -- and `0.0 or 9.0` is `9.0`, so
+    a person on no fixed hours was silently measured against a nine-hour day.
+
+    Returning None rather than 0.0 forces each caller to say what it does when
+    there is no target, instead of dividing by it or subtracting from it:
+
+        expected = expected_daily_hours(emp)
+        if expected is None:
+            ...            # no target to measure against
+    """
+    raw = getattr(employee, "expected_working_hours", None)
+    if raw is None:
+        return DEFAULT_EXPECTED_HOURS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EXPECTED_HOURS
+    # Negative is not meaningful either; treat it the same as zero rather than
+    # letting it flow into a half-day threshold as a negative number.
+    return None if value <= 0 else value

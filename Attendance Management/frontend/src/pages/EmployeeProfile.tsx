@@ -135,7 +135,9 @@ function empToForm(e: Emp): ProfileForm {
     department_id: e.department_id ?? "",
     employment_type: e.employment_type,
     employment_status: e.employment_status,
-    expected_working_hours: e.expected_working_hours || 9.0,
+    // `?? 9.0`, never `|| 9.0`: 0 means "no fixed hours" and must survive being
+    // loaded into the form, or opening the page silently rewrites it to 9.
+    expected_working_hours: e.expected_working_hours ?? 9.0,
     reporting_manager_id: e.reporting_manager_id ?? "",
     pan_number: e.pan_number || "",
     aadhar_number: e.aadhar_number || "",
@@ -1219,7 +1221,12 @@ export default function EmployeeProfile() {
       department_id: form.department_id === "" ? null : Number(form.department_id),
       employment_type: form.employment_type,
       employment_status: form.employment_status,
-      expected_working_hours: Number(form.expected_working_hours) || 9.0,
+      // Typing 0 here means "this person has no fixed working hours". The old
+      // `Number(...) || 9.0` made that impossible to express: 0 is falsy, so it
+      // transmitted 9 and the field sprang back to a nine-hour day.
+      expected_working_hours: Number.isFinite(Number(form.expected_working_hours))
+        ? Number(form.expected_working_hours)
+        : 9.0,
       date_of_birth: form.date_of_birth.trim() || null,
       date_of_marriage: form.date_of_marriage.trim() || null,
       marital_status: form.marital_status.trim() || null,
@@ -1482,7 +1489,15 @@ export default function EmployeeProfile() {
                     <DetailField label="Designation" value={desigName} variant="job" />
                     <DetailField label="Employment type" value={emp.employment_type} variant="job" />
                     <DetailField label="Status" value={emp.employment_status} variant="job" />
-                    <DetailField label="Working hours" value={`${emp.expected_working_hours || 9.0} hrs/day`} variant="job" />
+                    <DetailField
+                      label="Working hours"
+                      value={
+                        Number(emp.expected_working_hours) > 0
+                          ? `${emp.expected_working_hours} hrs/day`
+                          : "No fixed hours"
+                      }
+                      variant="job"
+                    />
                   </div>
                 </section>
 
@@ -1884,9 +1899,10 @@ export default function EmployeeProfile() {
                         type="number"
                         step="0.5"
                         value={form.expected_working_hours}
+                        min="0"
                         onChange={(e) => setForm({ ...form, expected_working_hours: Number(e.target.value) })}
                         required
-                        placeholder="e.g. 9.0"
+                        placeholder="e.g. 9.0 — enter 0 for no fixed hours"
                       />
                     </div>
                   </div>

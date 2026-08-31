@@ -1628,6 +1628,35 @@ class _RecognitionThread(threading.Thread):
             )
             ptracks = w.person_tracker.update(persons)
 
+        # 1b. PUBLISH THE BODIES NOW, BEFORE THE FACE STAGE.
+        #
+        # The person boxes are finished at this point and nothing below changes
+        # the LIST -- the recognition stages only annotate the track objects in
+        # place, so a reader holding this list sees names appear on it as they
+        # are decided. Publishing here rather than at the end of the pass is
+        # therefore free of risk and worth several seconds.
+        #
+        # MEASURED on this deployment, from the app's own PERF log (n=2572
+        # passes): a room camera's person detection costs 1.7-2.0s, while a
+        # whole analysis pass takes 8.1s. The remaining ~6s is the face
+        # pipeline -- detection, embedding, matching -- which chair occupancy
+        # does not use and must not have to wait for. Publishing at the end made
+        # every occupancy answer ~6s staler than the evidence behind it.
+        #
+        # This does NOT change how often observations happen; the loop still
+        # iterates at its own pace. It changes how OLD each one is when it
+        # lands, which is a straight subtraction from the time between somebody
+        # leaving a chair and the dashboard saying so.
+        #
+        # `updated_at` is stamped exactly once per pass, here. The end-of-pass
+        # block no longer stamps it -- two stamps for one pass would advance the
+        # occupancy state machine twice on one observation, which is the bug
+        # that was fixed in v1_bridge, reintroduced one layer down.
+        w.state.active_tracks = len(ptracks)
+        with w._frame_lock:
+            w._latest_tracks = list(ptracks)
+            w.state.updated_at = time.time()
+
         # 2. Detect faces (with embeddings) once on the full frame. Skipped when the
         #    frame is too blurry to recognise anyone reliably.
         faces = [] if skip_faces else extract_faces_from_rgb(rgb)
@@ -1944,11 +1973,16 @@ class _RecognitionThread(threading.Thread):
             any_match = any_match or any(pt.matched for pt in ptracks)
 
 
-        # 3. Publish person tracks for the display thread.
-        w.state.active_tracks = len(ptracks)
-        with w._frame_lock:
-            w._latest_tracks = list(ptracks)
-            w.state.updated_at = time.time()
+        # 3. The tracks were published in step 1b, before the face stage, and
+        #    the recognition stages above annotated those same objects in place
+        #    -- so the names are already visible without republishing.
+        #
+        #    DELIBERATELY NOT RE-STAMPING `updated_at`. It identifies ONE
+        #    analysis pass, and the occupancy state machine advances once per
+        #    distinct stamp. Stamping again here would make a single pass count
+        #    as two observations and halve every confirmation threshold, which
+        #    is exactly the poll-counted-as-observation bug that was fixed in
+        #    v1_bridge, reappearing a layer lower down.
         if w.state.recognition_status == "analyzing":
             w.state.recognition_status = "recognized" if any_match else ("idle" if not ptracks else "analyzing")
 

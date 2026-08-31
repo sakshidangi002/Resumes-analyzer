@@ -68,11 +68,28 @@ class PersonTrack:
     box: Tuple[int, int, int, int]
     last_seen: float = field(default_factory=time.time)
 
+    # How confident the PERSON DETECTOR was about this body, 0..1.
+    #
+    # A separate field from `confidence` below, which despite its name is the
+    # FACE MATCH score written by `bind_identity`. Two different measurements of
+    # two different things had one name between them, and the occupancy API was
+    # publishing the wrong one: it reported `confidence` as the person's
+    # detection score, so an unrecognised person -- which on a room camera is
+    # everyone -- was published as 0.0 confidence while being detected perfectly
+    # well.
+    #
+    # Anything that asks "how sure are we somebody is there" wants this one.
+    # Anything that asks "how sure are we WHO they are" wants the other.
+    detection_confidence: float = 0.0
+
     # Identity bound from a recognised face inside this body.
     employee_id: Optional[int] = None
     employee_name: Optional[str] = None
     employee_code: Optional[str] = None
     matched: bool = False
+    # FACE MATCH score, not detection. Kept under this name because
+    # `bind_identity`, `get_display_info` and the dedupe merge all use it and
+    # renaming it would touch the attendance path for no functional gain.
     confidence: float = 0.0
     last_recognition_time: float = 0.0
     # HOW this identity was established: "face" (ArcFace matched a visible

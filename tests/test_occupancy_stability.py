@@ -18,6 +18,10 @@ the result again is not evidence, and must change nothing at all.
 """
 import pytest
 
+camera_service = pytest.importorskip(
+    "app.services.camera_service", reason="needs the vision stack (cv2)"
+)
+
 from app.cctv_v2.config.geometry import ChairZone, RoomGeometry
 from app.cctv_v2.pipeline import v1_bridge
 from app.cctv_v2.pipeline.occupancy import OccupancyRegistry, RoomOccupancy
@@ -310,3 +314,189 @@ def test_an_occupied_seat_still_takes_the_full_wait_to_free():
     assert snap.chairs[0]["occupied"] is True, "freed too early"
     snap = r.update([], 100.0)
     assert snap.chairs[0]["state"] == "free"
+
+
+# ---------------------------------------------------------------------------
+# LATENCY: an observation must not wait for work it does not use
+# ---------------------------------------------------------------------------
+# Measured on this deployment from the app's own PERF log (n=2572 passes): a
+# room camera's PERSON detection costs 1.7-2.0s while a whole analysis pass
+# takes 8.1s. The remaining ~6s is the face pipeline. Occupancy needs only the
+# person boxes, so publishing them at the END of the pass made every occupancy
+# answer ~6s older than the evidence behind it, for nothing.
+def test_person_tracks_are_published_before_the_face_stage():
+    import inspect
+
+    src = inspect.getsource(camera_service._RecognitionThread._analyze_person)
+    publish = src.index("w.state.updated_at = time.time()")
+    faces = src.index("extract_faces_from_rgb(rgb)")
+    assert publish < faces, (
+        "the person boxes are finished before the face stage and occupancy "
+        "uses only them; publishing after it just makes the answer staler"
+    )
+
+
+def test_one_analysis_pass_stamps_exactly_one_observation():
+    """`updated_at` identifies ONE pass. Stamping it twice would make a single
+    pass count as two observations and halve every confirmation threshold --
+    the poll-counted-as-observation bug, one layer lower down."""
+    import inspect
+
+    src = inspect.getsource(camera_service._RecognitionThread._analyze_person)
+    assert src.count("w.state.updated_at = time.time()") == 1
+
+
+def test_the_publish_happens_after_tracking_not_before():
+    """It must publish the CURRENT pass's boxes, not the previous pass's."""
+    import inspect
+
+    src = inspect.getsource(camera_service._RecognitionThread._analyze_person)
+    tracked = max(src.index("w.bytetrack_engine.update(frame)"),
+                  src.index("w.person_tracker.update(persons)"))
+    publish = src.index("w.state.updated_at = time.time()")
+    assert tracked < publish
+
+
+# ---------------------------------------------------------------------------
+# Freshness the caller can actually reason about
+# ---------------------------------------------------------------------------
+def test_the_payload_separates_being_looked_at_from_changing(bridge):
+    """A room settled for ten minutes has a FRESH observation and an OLD state
+    change. A caller that cannot tell those apart reads steady as stuck."""
+    snap = v1_bridge.occupancy_snapshot(CAMERA)
+    for field in ("observation_updated_at", "observation_age_sec",
+                  "state_updated_at", "from_new_observation"):
+        assert field in snap, f"{field} missing"
+
+
+def test_state_updated_at_moves_only_when_a_chair_changes():
+    r = _room()
+    r.update([_person()], 100.0)
+    settled = r.update([_person()], 101.0)          # confirm_occupied reached
+    assert settled.state_updated_at == 101.0
+
+    # More observations, same answer: the state stamp must not creep forward.
+    for t in (102.0, 103.0, 104.0):
+        again = r.update([_person()], t)
+        assert again.state_updated_at == 101.0
+        assert again.timestamp == t                 # but it WAS looked at
+
+
+# ---------------------------------------------------------------------------
+# SNAPSHOT CONSISTENCY
+# ---------------------------------------------------------------------------
+# `_latest_tracks` holds LIVE V1 PersonTrack objects. V1 keeps mutating them:
+# the next analysis pass calls update_box() on the same objects, and the
+# recognition stage writes identity fields to them for the rest of the current
+# pass. Copying the LIST under the lock copies none of that.
+#
+# The bridge therefore reads the VALUES it needs while the lock is held. What
+# these tests defend is that an observation, once taken, cannot be altered by
+# anything V1 does afterwards.
+class _MutableV1Track:
+    """Shaped like V1's PersonTrack, including the fields V1 mutates in place."""
+
+    def __init__(self, track_id, box, detection_confidence=0.42):
+        self.track_id = track_id
+        self.box = box
+        self.detection_confidence = detection_confidence
+        self.confidence = 0.0            # FACE MATCH score, written by bind_identity
+        self.last_seen = 1000.0
+        self.employee_id = None
+        self.employee_name = None
+        self.matched = False
+
+
+def test_the_snapshot_is_values_not_live_references(bridge):
+    """Mutating the V1 track AFTER the read must not change what was observed."""
+    live = _MutableV1Track(1, (100, 200, 180, 600))
+    bridge._latest_tracks = [live]
+    bridge.state.updated_at += 1.0
+
+    tracks, _ = v1_bridge.read_v1_observation(CAMERA)
+    assert tracks[0].bbox == (100.0, 200.0, 180.0, 600.0)
+
+    live.box = (900, 900, 950, 950)      # what the NEXT pass's update_box does
+    assert tracks[0].bbox == (100.0, 200.0, 180.0, 600.0), (
+        "the observation moved because it held a live reference"
+    )
+
+
+def test_a_pass_n_plus_1_box_cannot_replace_a_pass_n_box(bridge):
+    """The specific race: boxes advancing under a reader that still holds the
+    previous stamp."""
+    live = _MutableV1Track(1, (10, 10, 60, 200))
+    bridge._latest_tracks = [live]
+    bridge.state.updated_at += 1.0
+    first, stamp_first = v1_bridge.read_v1_observation(CAMERA)
+
+    live.box = (500, 500, 560, 700)      # pass N+1 mutates in place, no new stamp
+    again, stamp_again = v1_bridge.read_v1_observation(CAMERA)
+
+    assert stamp_first == stamp_again, "stamp changed without a new pass"
+    assert first[0].bbox == (10.0, 10.0, 60.0, 200.0)
+
+
+def test_the_timestamp_and_the_boxes_come_from_one_pass(bridge):
+    """Both are read inside the same lock acquisition, so they cannot be split
+    across two passes."""
+    import inspect
+
+    src = inspect.getsource(v1_bridge.read_v1_observation)
+    lock = src.index("with worker._frame_lock:")
+    tail = src.index("except Exception")
+    # Searched FROM the lock: both names also appear in the comment above it,
+    # and matching those would pass while the code did the wrong thing.
+    body = src[lock:tail]
+    assert "updated_at" in body, "the stamp is read outside the lock"
+    assert "_latest_tracks" in body, "the tracks are read outside the lock"
+    # And the values must be extracted there too, not just the container.
+    assert "getattr(t, \"box\"" in body, "boxes are copied outside the lock"
+
+
+def test_recognition_cannot_corrupt_a_published_observation(bridge):
+    """Recognition writes employee_id / matched / confidence to the same objects
+    while the pass continues. None of it may reach occupancy."""
+    live = _MutableV1Track(7, (100, 100, 200, 400), detection_confidence=0.33)
+    bridge._latest_tracks = [live]
+    bridge.state.updated_at += 1.0
+    snap = v1_bridge.occupancy_snapshot(CAMERA)
+    before = [dict(p) for p in snap["people"]]
+
+    live.employee_id = 42
+    live.employee_name = "Someone"
+    live.matched = True
+    live.confidence = 0.91               # the FACE MATCH score
+
+    same = v1_bridge.occupancy_snapshot(CAMERA)   # cached, no new pass
+    assert same["people"] == before
+    for person in same["people"]:
+        assert "employee_id" not in person and "employee_name" not in person
+
+
+def test_detection_confidence_is_not_the_face_match_score(bridge):
+    """The bug this separates. `confidence` on a V1 track is written by
+    bind_identity with the face score, so publishing it as the person's
+    confidence reported 0.0 for everyone a room camera cannot recognise -- which
+    is everyone."""
+    live = _MutableV1Track(3, (100, 100, 200, 400), detection_confidence=0.27)
+    live.confidence = 0.88               # a face match landed on this body
+    bridge._latest_tracks = [live]
+    bridge.state.updated_at += 1.0
+
+    person = v1_bridge.occupancy_snapshot(CAMERA)["people"][0]
+    assert person["detection_confidence"] == pytest.approx(0.27)
+    assert person["confidence"] == pytest.approx(0.27), "alias must agree"
+    assert person["detection_confidence"] != pytest.approx(0.88)
+
+
+def test_a_v1_track_without_the_new_field_still_works(bridge):
+    """Backward compatible: an object predating detection_confidence must not
+    raise, it must read as 0.0."""
+    class _Old:
+        track_id, box, last_seen, confidence = 5, (1, 2, 30, 90), 1000.0, 0.7
+
+    bridge._latest_tracks = [_Old()]
+    bridge.state.updated_at += 1.0
+    tracks, _ = v1_bridge.read_v1_observation(CAMERA)
+    assert tracks[0].confidence == 0.0

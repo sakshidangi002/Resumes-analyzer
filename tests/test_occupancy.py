@@ -335,10 +335,10 @@ def test_both_room_cameras_have_a_hand_placed_chair_map():
 
     assert has_chair_map(59) is True
     assert has_chair_map(60) is True
-    # 8 + 5, not 13 + 5. Cameras 59 and 60 face each other along one desk, so
-    # the row they BOTH see is owned by 60 alone -- see the ownership note in
-    # geometry.py. The room has 13 chairs; neither camera owns all of them.
-    assert len(room_geometry(59).chairs) == 8
+    # 7 + 6. Cameras 59 and 60 face each other along one desk, so the row they
+    # BOTH see is owned by 60 alone -- see the ownership note in geometry.py.
+    # The room has 13 chairs; neither camera owns all of them.
+    assert len(room_geometry(59).chairs) == 7
     assert len(room_geometry(60).chairs) == 6
 
 
@@ -347,12 +347,20 @@ def test_the_seats_people_actually_use_are_in_the_map():
 
     Under the COCO map the person at camera 59's right-hand desk had no seat at
     all -- the nearest zone was on the EMPTY chair beside her -- so she could
-    never occupy anything however well she was detected. R8 is that seat, and
-    L3 and R1 are the other two occupied through the measured window."""
+    never occupy anything however well she was detected. R8 is that seat.
+
+    R1 was ALSO recorded occupied through that window, and is no longer in the
+    map: the operator counted the row on 2026-08-31 and said seven, not eight.
+    Both things can be true. A zone does not need a chair under it to report
+    OCCUPIED -- it only needs a person's box to overlap it -- so a zone drawn
+    over the far end of the desk would have been "confirmed" by exactly the
+    person who sits at that end. That is the failure mode this whole file
+    exists to catch, and it argues for trusting the count over the observation.
+    If a chair really is there, R1 goes back into geometry.py by hand."""
     from app.cctv_v2.config.geometry import room_geometry
 
     ids = {c.chair_id for c in room_geometry(59).chairs}
-    assert {"R8", "R1"} <= ids
+    assert "R8" in ids
     # The left-hand desk seats moved to their owner, camera 60.
     assert "S3" in {c.chair_id for c in room_geometry(60).chairs}
     assert not any(c.chair_id.startswith("L") for c in room_geometry(59).chairs)

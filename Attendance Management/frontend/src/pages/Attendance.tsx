@@ -4,6 +4,7 @@ import { attendance as api, employees as employeesApi } from "../api/client";
 import CustomSelect from "../components/CustomSelect";
 import MonthlyAttendanceGrid from "../components/MonthlyAttendanceGrid";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+import { dailyTarget } from "../utils/workingHours";
 import { SectionLoader } from "../components/LoadingState";
 import { useTableControls } from "../components/dataTable";
 import type { SortState, SortDirection } from "../components/dataTable";
@@ -524,7 +525,7 @@ export default function Attendance() {
     breakMinutes: string | number = 0
   ): { status: string; hoursWorked: number } => {
     const emp = employees.find(e => e.id === employeeId);
-    const expected = emp?.expected_working_hours || 9;
+    const target = dailyTarget(emp?.expected_working_hours);
     if (!signIn || !signOut) return { status: "ABSENT", hoursWorked: 0 };
     const [ih, im] = signIn.split(":").map(Number);
     const [oh, om] = signOut.split(":").map(Number);
@@ -534,7 +535,10 @@ export default function Attendance() {
     const workedMins = outMins - inMins - breakMins;
     if (workedMins <= 0) return { status: "ABSENT", hoursWorked: 0 };
     const hoursWorked = workedMins / 60;
-    const expectedMins = expected * 60;
+    // No daily target: they worked, so they were present. There is no shorter
+    // -than-required to be short of.
+    if (target === null) return { status: "PRESENT", hoursWorked };
+    const expectedMins = target * 60;
     if (workedMins >= expectedMins * 0.9) return { status: "PRESENT", hoursWorked };
     if (workedMins >= expectedMins * 0.5) return { status: "HALF_DAY", hoursWorked };
     return { status: "SHORT", hoursWorked };
@@ -780,7 +784,7 @@ export default function Attendance() {
       member: (r) => `${r.info.first_name} ${r.info.last_name}`,
       sign_in_time: (r) => r.rec?.sign_in_time || "",
       sign_out_time: (r) => r.rec?.sign_out_time || "",
-      required: (r) => r.info.expected_working_hours || 9,
+      required: (r) => dailyTarget(r.info.expected_working_hours) ?? 0,
       working_hours: (r) => Number(r.rec?.total_work_hours ?? 0),
       break_time: (r) => Number(r.rec?.total_break_hours ?? 0),
       status: (r) => effectiveStatus(r),
@@ -962,14 +966,14 @@ export default function Attendance() {
                     // If DB says ABSENT but employee has actual working hours recorded,
                     // derive the real status from total_work_hours vs expected
                     let s = rawStatus;
+                    const target = dailyTarget(info.expected_working_hours);
                     if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
-                      const expected = info.expected_working_hours || 9;
-                      if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
-                      else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
+                      if (target === null) s = "PRESENT";
+                      else if (rec.total_work_hours >= target * 0.9) s = "PRESENT";
+                      else if (rec.total_work_hours >= target * 0.5) s = "HALF_DAY";
                       else s = "SHORT";
                     }
 
-                    const requiredHours = info.expected_working_hours || 9;
                     const signedOut = !!(rec?.sign_out_time && rec.sign_out_time !== "00:00:00");
                     const worked = workedHoursFor(rec);
 
@@ -988,7 +992,11 @@ export default function Attendance() {
                           {orDash(signedOut ? formatTime12h(rec?.sign_out_time) : "-")}
                         </td>
                         <td className="eds-cell-dim">
-                          {s === "WEEKLY_OFF" || s === "HOLIDAY" ? orDash("-") : `${requiredHours} Hours`}
+                          {s === "WEEKLY_OFF" || s === "HOLIDAY"
+                            ? orDash("-")
+                            : target === null
+                              ? "No fixed hours"
+                              : `${target} Hours`}
                         </td>
                         <td>
                           {worked == null ? (
@@ -996,16 +1004,18 @@ export default function Attendance() {
                           ) : (
                             <div className="eds-hours">
                               <span className="eds-hours-val">{formatCompactDuration(worked)}</span>
-                              <div
-                                className="eds-hours-track"
-                                role="img"
-                                aria-label={`${formatCompactDuration(worked)} worked of ${requiredHours} hours required`}
-                              >
+                              {target === null ? null : (
                                 <div
-                                  className="eds-hours-fill"
-                                  style={{ width: `${Math.min(100, Math.round((worked / requiredHours) * 100))}%` }}
-                                ></div>
-                              </div>
+                                  className="eds-hours-track"
+                                  role="img"
+                                  aria-label={`${formatCompactDuration(worked)} worked of ${target} hours required`}
+                                >
+                                  <div
+                                    className="eds-hours-fill"
+                                    style={{ width: `${Math.min(100, Math.round((worked / target) * 100))}%` }}
+                                  ></div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </td>

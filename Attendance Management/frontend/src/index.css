@@ -6154,6 +6154,50 @@ input[type="date"] {
   text-overflow: ellipsis;
 }
 
+/* Month / year pickers in a filter row.
+   The global `select` rule already carries the dark fill, border and caret; all
+   that is needed here is to stop `width: 100%` stretching them across the flex
+   row, and to match the 44px height of the search box beside them. */
+.eds-selectfield {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--eds-dim);
+}
+
+.eds-selectfield svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.eds-select-inline {
+  width: auto;
+  min-width: 148px;
+  height: 44px;
+  font-weight: 500;
+}
+
+/* A native dropdown list is painted by the OS, which on a dark page defaults to
+   light-on-light in some browsers. Pin both so the options stay readable. */
+.eds-select-inline option {
+  background: #14161a;
+  color: #e8eaed;
+}
+
+.eds-iconbtn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* A disabled button must not still light up on hover -- that reads as
+   "clickable but ignoring me". */
+.eds-iconbtn:disabled:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: var(--eds-dim);
+}
+
 .eds-iconbtn--del:hover {
   background: rgba(251, 113, 133, 0.14);
   border-color: rgba(251, 113, 133, 0.26);

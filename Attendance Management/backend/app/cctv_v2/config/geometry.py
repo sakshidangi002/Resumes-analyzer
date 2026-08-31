@@ -307,11 +307,17 @@ ROOM_GEOMETRY: dict[int, RoomGeometry] = {
     # OBSERVED_ELSEWHERE below so an overlay can draw them and say who owns
     # them -- rather than showing three people as unassigned with no explanation.
     #
-    # 8 chairs: the right-hand desk row, R1 nearest the far wall to R8 nearest
-    # the camera. The room's other 5 belong to camera 60.
+    # SEVEN chairs: the right-hand desk row, R2 nearest the far wall to R8
+    # nearest the camera. The room's other 6 belong to camera 60.
+    #
+    # R1 is GONE. It was mapped over the far end of the desk where there is no
+    # chair -- the operator counted the row and said seven, the same way they
+    # caught camera 60's missing sixth. An id is never reused or renumbered, so
+    # the row starts at R2 rather than being shuffled down: R5 has to keep
+    # meaning the seat it has always meant, or every occupancy record written
+    # before today quietly starts describing a different chair.
     59: RoomGeometry(chairs=(
-        ChairZone("R1", (0.392, 0.160, 0.458, 0.290), label="right row, far end"),
-        ChairZone("R2", (0.370, 0.250, 0.443, 0.400), label="right row 2"),
+        ChairZone("R2", (0.370, 0.250, 0.443, 0.400), label="right row, far end"),
         ChairZone("R3", (0.427, 0.282, 0.500, 0.448), label="right row 3"),
         ChairZone("R4", (0.465, 0.335, 0.545, 0.502), label="right row 4"),
         ChairZone("R5", (0.510, 0.385, 0.590, 0.578), label="right row 5"),
