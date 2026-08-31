@@ -7,6 +7,7 @@ import { SectionLoader } from "../components/LoadingState";
 import { formatDate } from "../utils/dateFormatter";
 import CustomSelect from "../components/CustomSelect";
 import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import DOMPurify from "dompurify";
 
 interface LetterTemplate {
   id: number;
@@ -37,6 +38,12 @@ interface LetterReply {
 
 // Premium SVG Icons for Actions
 const Icons = {
+  Doc: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 3 14 8 19 8" />
+    </svg>
+  ),
   View: () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"></path>
@@ -471,34 +478,34 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
 
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ flex: 1 }}>
-          <h1 className="page-title">{canManageLetters ? "Employee Letters" : "My Documents"}</h1>
-          <div className="page-subtitle">
+    <div className="eds">
+      <header className="eds-topbar">
+        <div>
+          <h1 className="eds-title">{canManageLetters ? "Employee Letters" : "My Documents"}</h1>
+          <p className="eds-subtitle">
             {canManageLetters ? "View and manage all letters generated for employees." : "View your generated letters"}
-          </div>
+          </p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
+
+      <div className="eds-page">
       {error && <div className="alert alert-error">{error}</div>}
       {success && <div className="alert alert-success">{success}</div>}
       {canManageLetters && (
         <>
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div className="flex items-center justify-between mb-6" style={{ gap: "1rem" }}>
-              <h3 style={{ margin: 0, fontSize: "1.25rem", color: "#fff", whiteSpace: "nowrap" }}>Generate Document</h3>
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--sky"><Icons.Doc /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Generate Document</h2>
+              </div>
             </div>
 
-            <form onSubmit={handleGenerate}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr 1fr auto", gap: "2rem", alignItems: "end", marginBottom: "1.5rem",
-                }}
-              >
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Select Template</label>
+            <form onSubmit={handleGenerate} className="eds-card-body" style={{ gap: 18 }}>
+              <div className="eds-form-grid3">
+                <div className="eds-fieldset">
+                  <span className="eds-fieldset-label">Select Template</span>
                   <CustomSelect
                     value={selectedTemplate}
                     onChange={(val) => setSelectedTemplate(val)}
@@ -509,8 +516,8 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                   />
                 </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Target Employee</label>
+                <div className="eds-fieldset">
+                  <span className="eds-fieldset-label">Target Employee</span>
                   <CustomSelect
                     value={String(selectedEmployeeId)}
                     onChange={(val) => setSelectedEmployeeId(val ? Number(val) : "")}
@@ -525,17 +532,16 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                   />
                 </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Delivery Options</label>
-                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", height: "48px" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", marginBottom: 0, whiteSpace: "nowrap" }}>
+                <div className="eds-fieldset">
+                  <span className="eds-fieldset-label">Delivery Options</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", height: "36px" }}>
+                    <label className="eds-check">
                       <input
                         type="checkbox"
                         checked={sendEmail}
                         onChange={(e) => setSendEmail(e.target.checked)}
-                        style={{ width: "18px", height: "18px" }}
                       />
-                      <span style={{ fontSize: "0.9rem" }}>Send Email</span>
+                      <span>Send Email</span>
                     </label>
                     {sendEmail && (
                       <CustomSelect
@@ -553,9 +559,10 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                 </div>
 
                 {sendEmail && (
-                  <div className="form-group" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
-                    <label style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Custom Sender (Optional)</label>
+                  <div className="eds-fieldset" style={{ gridColumn: "1 / -1" }}>
+                    <span className="eds-fieldset-label">Custom Sender (Optional)</span>
                     <input
+                      className="eds-input"
                       type="email"
                       value={fromEmail}
                       onChange={(e) => setFromEmail(e.target.value)}
@@ -567,86 +574,49 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
 
               {selectedEmployeeId && (
                 <>
-                  <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-                    <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "#fff" }}>Document Subject</label>
+                  <div className="eds-fieldset">
+                    <span className="eds-fieldset-label">Document Subject</span>
                     <input
+                      className="eds-input"
                       type="text"
                       value={subject}
                       onChange={(e) => setSubject(e.target.value)}
                       placeholder="The subject will be populated based on the selected template"
-                      style={{ fontSize: "1rem", fontWeight: 500 }}
                     />
                   </div>
 
-                  <div style={{ marginBottom: "1.5rem" }}>
-                    <div className="flex items-center justify-between mb-4">
-                      <label style={{ margin: "3px", fontSize: "0.9rem", fontWeight: 600, color: "#fff" }}>Body Content</label>
-                    </div>
-
-                    <div
-                      style={{
-                        position: "relative",
-                        border: "1px solid rgba(255, 255, 255, 0.12)",
-                        borderRadius: "12px",
-                        overflow: "hidden",
-                        background: "rgba(0, 0, 0, 0.2)"
-                      }}
-                    >
+                  <div className="eds-fieldset">
+                    <span className="eds-fieldset-label">Body Content</span>
+                    <div className="eds-codebox">
                       <textarea
+                        className="eds-codebox-area"
                         value={simpleBody}
                         onChange={(e) => setSimpleBody(e.target.value)}
                         rows={10}
-                        style={{
-                          width: "100%",
-                          maxWidth: "100%",
-                          border: "none",
-                          background: "transparent",
-                          padding: "1.5rem",
-                          fontSize: "0.95rem",
-                          resize: "vertical",
-                          color: "#eee"
-                        }}
                       />
-                      <div
-                        style={{
-                          padding: "0.5rem 1rem",
-                          background: "rgba(255, 255, 255, 0.04)",
-                          borderTop: "1px solid rgba(255, 255, 255, 0.08)",
-                          fontSize: "0.75rem",
-                          color: "rgba(255, 255, 255, 0.4)"
-                        }}
-                      >
+                      <div className="eds-codebox-foot">
                         Smart formatting is enabled. Line breaks will be preserved.
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ marginBottom: "2rem" }}>
-                    <div className="flex items-center gap-4 mb-6" style={{ color: "#fff" }}>
-                      <Icons.View />
-                      <span style={{ fontSize: "1.1rem", fontWeight: 700, letterSpacing: "0.02em" }}>Live Document Preview</span>
-                    </div>
+                  <div className="eds-fieldset">
+                    <span className="eds-fieldset-label">Live Document Preview</span>
                     <div
-                      className="preview-container"
-                      style={{
-                        marginTop: "1.5rem",
-                        border: "1px solid rgba(255, 255, 255, 0.2)",
-                        borderRadius: 16,
-                        padding: "3rem",
-                        background: "rgba(255, 255, 255, 0.04)",
-                        color: "#fff",
-                        minHeight: "250px",
-                        boxShadow: "inset 0 4px 20px rgba(0,0,0,0.3)"
-                      }}
+                      className="preview-container eds-preview"
+
                       dangerouslySetInnerHTML={{
-                        __html: simpleTextToHtml(simpleBody),
+                        __html: DOMPurify.sanitize(simpleTextToHtml(simpleBody), {
+                          USE_PROFILES: { html: true },
+                          FORBID_TAGS: ["style", "svg", "math", "iframe", "object", "embed", "form"],
+                          FORBID_ATTR: ["srcdoc"],
+                        }),
                       }}
                     />
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "end" }}>
-                    <button type="submit" className="btn btn-primary"
-                      style={{ padding: "0.75rem 2.5rem", fontSize: "1rem", fontWeight: 600, borderRadius: "10px" }}
+                  <div className="eds-controls-end">
+                    <button type="submit" className="eds-action eds-action--go"
                       disabled={generating || loading || templates.length === 0}
                       title="Generate and Finalize Letter"
                     >
@@ -660,7 +630,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
                 </>
               )}
             </form>
-          </div>
+          </section>
         </>
       )}
 
@@ -834,6 +804,7 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
           )}
         </div>
       )}
+      </div>
 
       {replyForId && (
         <div className="modal-backdrop" onClick={() => setReplyForId(null)}>
@@ -987,6 +958,6 @@ export default function Letters({ forceEmployeeView = false }: { forceEmployeeVi
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

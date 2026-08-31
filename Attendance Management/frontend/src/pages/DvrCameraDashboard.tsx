@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { dvr } from "../api/client";
+import { useMediaToken } from "../hooks/useMediaToken";
 
 type LiveCamera = {
   channel_id: number;
@@ -53,6 +54,8 @@ export default function DvrCameraDashboard() {
   // frame, which on this 4-core box is what makes the picture drift behind.
   const [liveChannel, setLiveChannel] = useState<number | null>(null);
   const liveImgRef = useRef<HTMLImageElement | null>(null);
+  // Short-lived token for the <img>-rendered DVR feed (see useMediaToken).
+  const { mediaToken } = useMediaToken();
 
   // Removing the <img> from the DOM usually aborts its request, but not
   // reliably for a stream that never completes. Clearing src first guarantees
@@ -176,15 +179,15 @@ export default function DvrCameraDashboard() {
 
   // Styles
   const cardStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 16,
-    padding: "0.8rem 1rem",
+    background: "var(--eds-card)",
+    border: "1px solid var(--eds-border)",
+    borderRadius: 14,
+    padding: "1.1rem 1.25rem",
   };
 
   const inputStyle: React.CSSProperties = {
     background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.1)",
+    border: "1px solid rgba(255,255,255,0.09)",
     borderRadius: 8,
     padding: "0.75rem 1rem",
     color: "white",
@@ -194,7 +197,11 @@ export default function DvrCameraDashboard() {
   };
 
   const btnStyle = (variant: "primary" | "secondary" | "danger" | "ghost"): React.CSSProperties => {
-   const base = {
+    const base = {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "0.4rem",
       padding: "0.6rem 1.2rem",
       borderRadius: 8,
       fontSize: "0.85rem",
@@ -204,9 +211,9 @@ export default function DvrCameraDashboard() {
       transition: "all 0.2s",
     };
     const variants = {
-      primary: { background: "#3b82f6", color: "white" },
-      secondary: { background: "rgba(255,255,255,0.1)", color: "white" },
-      danger: { background: "#ef4444", color: "white" },
+      primary: { background: "rgba(96,165,250,0.14)", color: "var(--eds-sky)", border: "1px solid rgba(96,165,250,0.3)" },
+      secondary: { background: "rgba(255,255,255,0.04)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" },
+      danger: { background: "rgba(251,113,133,0.12)", color: "var(--eds-rose)", border: "1px solid rgba(251,113,133,0.28)" },
       ghost: { background: "transparent", color: "rgba(255,255,255,0.7)" },
     };
     return { ...base, ...variants[variant] };
@@ -221,9 +228,9 @@ export default function DvrCameraDashboard() {
   };
 
   return (
-    <div className="page-stack">
+    <div className="eds">
       {/* Header */}
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+      <header className="eds-topbar">
         <div>
           <h1 className="page-title">📷 DVR Camera Dashboard</h1>
           <div className="page-subtitle">Automatic Hikvision DVR camera discovery and live streaming</div>
@@ -231,7 +238,9 @@ export default function DvrCameraDashboard() {
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
           <GlobalHeaderControls />
         </div>
-      </div>
+      </header>
+
+      <div className="eds-page dvr-dashboard-page">
 
       {/* Error */}
       {error && (
@@ -361,7 +370,7 @@ export default function DvrCameraDashboard() {
                         One camera streams at a time to keep the feed real-time
                       </span>
                     </button>
-                  ) : camera.worker_status?.is_alive ? (
+                  ) : camera.worker_status?.is_alive && mediaToken ? (
                     <>
                     <img
                       // Keyed by channel so switching cameras unmounts the old
@@ -370,7 +379,7 @@ export default function DvrCameraDashboard() {
                       ref={(el) => {
                         if (el) liveImgRef.current = el;
                       }}
-                      src={dvr.streamUrl(camera.channel_id)}
+                      src={dvr.streamUrl(camera.channel_id, mediaToken)}
                       alt={camera.name}
                       style={{
                         // Fit the whole frame inside the box (like a video
@@ -462,6 +471,7 @@ export default function DvrCameraDashboard() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

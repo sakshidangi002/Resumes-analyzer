@@ -20,19 +20,34 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
+from urllib.parse import urlparse
 from typing import Optional
 
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Response, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import (
+    get_current_user,
+    require_media_access,
+    require_media_or_bearer,
+    require_roles,
+)
+from app.core.net import is_allowed_camera_host_ip
+from app.core.security import MEDIA_TOKEN_TTL_SECONDS, create_media_token
 from app.db.session import get_db
 from app.models.camera import CameraConfig
-from app.services.camera_service import camera_manager
+from app.services.camera_service import (
+    _redact_url,
+    camera_manager,
+    open_capture_with_timeout,
+)
 from app.services.hikvision_discovery import discover_cameras
 from app.services.dvr_manager import get_dvr_manager
+from app.services.audit_service import log_audit
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,6 +69,14 @@ class CameraCreateRequest(BaseModel):
     tracking_max_distance: float = Field(default=100.0, ge=10.0, le=500.0)
     tracking_cooldown: float = Field(default=3.0, ge=0.5, le=30.0)
     enabled: bool = False
+    # Doorway line crossing. Fully implemented in person_tracker.check_line_crossing
+    # and honoured by CameraWorker, but previously absent from every request
+    # schema — so the feature could only be enabled with a manual UPDATE against
+    # the cameras table.
+    crossing_enabled: bool = False
+    line_orientation: str = Field(default="horizontal", pattern="^(horizontal|vertical)$")
+    line_position: float = Field(default=0.5, ge=0.0, le=1.0)
+    entry_direction: str = Field(default="down", pattern="^(up|down|left|right)$")
 
 
 class DVRDiscoveryRequest(BaseModel):
@@ -103,6 +126,11 @@ class CameraUpdateRequest(BaseModel):
     tracking_max_distance: Optional[float] = Field(None, ge=10.0, le=500.0)
     tracking_cooldown: Optional[float] = Field(None, ge=0.5, le=30.0)
     enabled: Optional[bool] = None
+    # See CameraCreateRequest — these were configurable only via direct SQL.
+    crossing_enabled: Optional[bool] = None
+    line_orientation: Optional[str] = Field(None, pattern="^(horizontal|vertical)$")
+    line_position: Optional[float] = Field(None, ge=0.0, le=1.0)
+    entry_direction: Optional[str] = Field(None, pattern="^(up|down|left|right)$")
 
 
 class TestConnectionRequest(BaseModel):
@@ -119,12 +147,29 @@ def _serialize_camera(cam: CameraConfig, live: Optional[dict] = None) -> dict:
         "id": cam.id,
         "name": cam.name,
         "location": cam.location,
+        # NOTE: `stream_url` is the RAW url, password included, because the edit
+        # form parses it (parseRtspUrl) and rebuilds it on save (buildRtspUrl) —
+        # redacting it here would write "***" back as the password and break the
+        # stream. Anything that merely DISPLAYS the url must use
+        # `stream_url_display` instead; the camera cards were rendering the raw
+        # value, so the DVR password was visible on screen.
         "stream_url": cam.source_url,  # Map source_url to stream_url for API consistency
+        "stream_url_display": _redact_url(cam.source_url),
         "source_type": cam.source_type,
         "camera_purpose": cam.camera_purpose,
         "threshold": cam.threshold,
         "interval_sec": cam.interval_sec,
         "enabled": cam.enabled,
+        # Round-trip the tuning + line-crossing config so the edit form can
+        # show what is actually stored. These were writable-but-invisible
+        # (and, for frame_skip and the tracking pair, not even written).
+        "frame_skip": cam.frame_skip,
+        "tracking_max_distance": cam.tracking_max_distance,
+        "tracking_cooldown": cam.tracking_cooldown,
+        "crossing_enabled": cam.crossing_enabled,
+        "line_orientation": cam.line_orientation,
+        "line_position": cam.line_position,
+        "entry_direction": cam.entry_direction,
         "created_at": cam.created_at.isoformat() if cam.created_at else None,
         "updated_at": cam.updated_at.isoformat() if cam.updated_at else None,
     }
@@ -135,6 +180,50 @@ def _serialize_camera(cam: CameraConfig, live: Optional[dict] = None) -> dict:
     return base
 
 
+def _validate_camera_source(source_url: str, source_type: str) -> str:
+    """Reject camera URLs that could make the server fetch public/metadata hosts."""
+    value = source_url.strip()
+    if source_type == "usb" or value.isdigit():
+        return value
+    if source_type == "hcnetsdk":
+        parsed = urlparse(value)
+        if parsed.scheme != "hcnetsdk" or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Invalid HCNetSDK camera source.")
+        host = parsed.hostname
+    else:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"rtsp", "rtsps", "http", "https"} or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Camera source must use a supported URL scheme.")
+        host = parsed.hostname
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
+        for address in addresses:
+            # Rule lives in app/core/net.py so it is unit-testable without
+            # importing the vision stack. See it for why link-local matters.
+            if not is_allowed_camera_host_ip(address):
+                # Name the host and what it resolved to. "Camera sources must
+                # resolve to a private network" alone gives the operator no way
+                # to tell WHICH part of the URL was wrong — and a typo in the
+                # host is the most common cause.
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Camera sources must be on a private network. "
+                        f"'{host}' resolves to {address}, which is public. "
+                        f"Use the camera's LAN address (e.g. 192.168.x.x)."
+                    ),
+                )
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Camera source hostname '{host}' could not be resolved. "
+                f"Check for a typo, or use the camera's IP address directly."
+            ),
+        ) from exc
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -143,6 +232,38 @@ def _serialize_camera(cam: CameraConfig, live: Optional[dict] = None) -> dict:
 def get_camera_stats(current_user=Depends(get_current_user)):
     """Return global camera system statistics."""
     return camera_manager.get_stats()
+
+
+@router.get("/corridor/summary", tags=["cameras"])
+def corridor_summary_endpoint(
+    day: Optional[date] = Query(default=None, description="IST date; defaults to today"),
+    current_user=Depends(get_current_user),
+):
+    """How many people passed through the corridor today, and how many were named.
+
+    in_count = employees_in + unknown_in. Counting depends on detection and
+    tracking only; recognition decides identity, never whether the person is
+    counted. A transit nobody could name is Unknown, not absent.
+    """
+    from app.services.corridor_counts import corridor_summary
+
+    return corridor_summary(day)
+
+
+@router.get("/corridor/events", tags=["cameras"])
+def corridor_events_endpoint(
+    day: Optional[date] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    current_user=Depends(get_current_user),
+):
+    """Individual corridor transits, newest first.
+
+    `identity` is null for an unknown transit and is never filled with a
+    best-guess employee.
+    """
+    from app.services.corridor_counts import corridor_events
+
+    return {"events": corridor_events(day, limit=limit)}
 
 
 @router.post("/cameras/test-connection", tags=["cameras"])
@@ -171,24 +292,17 @@ def test_camera_connection(
     stream_url = payload.stream_url.strip()
     source_type = payload.source_type
 
-    # Open capture
-    try:
-        if source_type == "usb" or stream_url.isdigit():
-            cap = cv2.VideoCapture(int(stream_url))
-        else:
-            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"VideoCapture exception: {exc}") from exc
-
-    if not cap.isOpened():
-        cap.release()
+    # Bounded open: cv2.VideoCapture() blocks synchronously on the connect, so
+    # CAP_PROP_OPEN_TIMEOUT_MSEC (previously set afterwards) never bounded it
+    # and an unreachable DVR held this request worker for FFmpeg's default.
+    cap = open_capture_with_timeout(
+        stream_url, source_type, camera_id=0, timeout_sec=12.0,
+    )
+    if cap is None:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Could not open stream. "
+                "Could not open stream within 12s. "
                 "Check: DVR IP, RTSP port 554, username/password, H.264 codec, "
                 "firewall rules, and that the DVR's RTSP service is enabled."
             ),
@@ -238,13 +352,19 @@ def list_cameras(
 @router.post("/cameras", tags=["cameras"])
 def create_camera(
     payload: CameraCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Add a new camera. If enabled=True, stream starts immediately."""
     try:
-        logger.info(f"Creating camera with payload: {payload.model_dump()}")
-        
+        # Log the payload with the source URL redacted — it carries the DVR
+        # password, and this line ran on every create.
+        _safe_payload = payload.model_dump()
+        _safe_payload["source_url"] = _redact_url(_safe_payload.get("source_url", ""))
+        logger.info("Creating camera with payload: %s", _safe_payload)
+
+
         # Validate payload manually for debugging
         if not payload.name or len(payload.name) < 1:
             raise ValueError("Camera name is required")
@@ -255,31 +375,44 @@ def create_camera(
         if payload.camera_purpose not in ["IN", "OUT", "MONITOR"]:
             raise ValueError(f"Invalid camera_purpose: {payload.camera_purpose}")
         
-        cam = CameraConfig(
-            name=payload.name,
-            location=payload.location,
-            source_url=payload.source_url,  # Database uses source_url
-            source_type=payload.source_type,
-            camera_purpose=payload.camera_purpose,
-            threshold=payload.threshold,
-            interval_sec=payload.interval_sec,
-            enabled=payload.enabled,
-        )
+        source_url = _validate_camera_source(payload.source_url, payload.source_type)
+
+        # Build from the validated payload rather than naming fields by hand.
+        # The hand-written version listed only 8 of them, so frame_skip,
+        # tracking_max_distance and tracking_cooldown were accepted by the API,
+        # returned in the 200 response, and silently discarded. Constructing
+        # from model_dump() means a schema field with no column raises here
+        # instead of vanishing.
+        data = payload.model_dump()
+        data["source_url"] = source_url
+        # `camera_type` is a legacy NOT NULL column kept in step with
+        # camera_purpose until it can be dropped (see CCTV_REVIEW.md §9).
+        data["camera_type"] = data["camera_purpose"]
+        cam = CameraConfig(**data)
         db.add(cam)
         db.commit()
         db.refresh(cam)
+        log_audit(db, current_user.id, "CAMERA_CREATED", "Camera", str(cam.id), f"Created camera {cam.name}", request.client.host if request.client else None)
         logger.info("Camera created: id=%d name=%s purpose=%s", cam.id, cam.name, cam.camera_purpose)
 
         if cam.enabled:
             camera_manager.add_camera(cam.id)
 
         return _serialize_camera(cam, camera_manager.get_status(cam.id))
+    except HTTPException:
+        # MUST come before `except Exception`. HTTPException subclasses
+        # Exception, so the generic handler below was swallowing the precise
+        # 422 from _validate_camera_source and re-raising it as a bare 500
+        # "Unable to create the camera." The operator was told nothing about
+        # WHY — the actual reason ("must resolve to a private network") only
+        # ever appeared in the server log.
+        raise
     except ValueError as exc:
-        logger.error(f"Validation error: {exc}")
+        logger.error("Camera validation error: %s", exc)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception(f"Failed to create camera: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to create camera: {str(exc)}") from exc
+        logger.exception("Failed to create camera: %s", exc)
+        raise HTTPException(status_code=500, detail="Unable to create the camera.") from exc
 
 
 @router.get("/cameras/{camera_id}", tags=["cameras"])
@@ -299,6 +432,7 @@ def get_camera(
 def update_camera(
     camera_id: int,
     payload: CameraUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -307,11 +441,18 @@ def update_camera(
         raise HTTPException(status_code=404, detail="Camera not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    if "source_url" in update_data:
+        update_data["source_url"] = _validate_camera_source(update_data["source_url"], update_data.get("source_type", cam.source_type))
+    if "camera_purpose" in update_data:
+        # Keep the legacy NOT NULL camera_type column in step, or the two
+        # disagree and whichever one a future query happens to read wins.
+        update_data["camera_type"] = update_data["camera_purpose"]
     was_enabled = cam.enabled
     for field, value in update_data.items():
         setattr(cam, field, value)
     db.commit()
     db.refresh(cam)
+    log_audit(db, current_user.id, "CAMERA_UPDATED", "Camera", str(camera_id), "Updated camera configuration", request.client.host if request.client else None)
     logger.info("Camera updated: id=%d", camera_id)
 
     # Restart worker to apply config changes
@@ -326,6 +467,7 @@ def update_camera(
 @router.delete("/cameras/{camera_id}", tags=["cameras"])
 def delete_camera(
     camera_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -336,6 +478,7 @@ def delete_camera(
     camera_manager.remove_camera(camera_id)
     db.delete(cam)
     db.commit()
+    log_audit(db, current_user.id, "CAMERA_DELETED", "Camera", str(camera_id), "Deleted camera configuration", request.client.host if request.client else None)
     logger.info("Camera deleted: id=%d", camera_id)
     return {"message": f"Camera {camera_id} deleted"}
 
@@ -402,11 +545,26 @@ def get_camera_status(
     return live
 
 
+@router.post("/cameras/media-token", tags=["cameras"])
+def issue_camera_media_token(current_user=Depends(require_roles(["Admin", "HR"]))):
+    """Mint a short-lived token for <img>-rendered camera media.
+
+    Browsers cannot attach an Authorization header to an <img src>, so the live
+    MJPEG feeds and JPEG previews take `?t=<token>` instead. This endpoint is
+    the authenticated chokepoint: only an Admin/HR session can obtain one, and
+    what it grants expires in ~2 minutes and covers camera media only.
+    """
+    return {
+        "token": create_media_token(current_user.id, [r.name for r in current_user.roles]),
+        "expires_in": MEDIA_TOKEN_TTL_SECONDS,
+    }
+
+
 @router.get("/cameras/{camera_id}/preview", tags=["cameras"])
 def get_camera_preview(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    _auth=Depends(require_media_or_bearer),
 ):
     """Return the latest annotated JPEG frame as binary image/jpeg."""
     cam = db.query(CameraConfig).filter(CameraConfig.id == camera_id).first()
@@ -422,13 +580,77 @@ def get_camera_preview(
     return Response(content=jpeg, media_type="image/jpeg")
 
 
+@router.get("/cameras/{camera_id}/occupancy", tags=["cameras"])
+def get_camera_occupancy(
+    camera_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Chair occupancy for a room camera, for drawing on the live feed.
+
+    Computed by the CCTV V2 occupancy layer from the person boxes V1 HAS
+    ALREADY produced -- see app/cctv_v2/pipeline/v1_bridge.py. No extra RTSP
+    connection and NO ADDITIONAL INFERENCE: this reads a list that is already in
+    memory, so polling it costs essentially nothing and cannot slow the feed.
+
+    Coordinates are NORMALISED 0..1, with the frame size alongside them, so the
+    caller can scale the overlay to however the video is being displayed. Pixel
+    coordinates would be wrong the moment the <img> is resized.
+
+    POLLING THIS IS FREE, AND ALSO INERT. Calling it more often does not make
+    occupancy change faster: the smoothing advances once per completed ANALYSIS
+    PASS, not once per request. It used to advance per request, which meant the
+    dashboard's 2s poll spent three "consecutive observations" on a single pass
+    and chairs flipped state while nobody moved.
+
+    Four freshness fields, because they answer different questions:
+
+        observation_updated_at   when V1 last completed an analysis pass
+        observation_age_sec      how old that pass is now
+        state_updated_at         when a chair last actually CHANGED
+        from_new_observation     whether THIS response folded in a new pass
+
+    A room settled for ten minutes has a FRESH observation and an OLD state
+    change. Collapsing the two is how a steady answer gets read as a stuck one.
+
+    HOW FAST CAN IT CHANGE? Not faster than
+    `confirmations x observation interval`. Measured on this deployment from
+    the app's own PERF log (n=2572 passes), a room camera's observation interval
+    is 8.1s median, so a seat becomes FREE about 40s after its occupant leaves.
+    Polling harder cannot improve that and never could; the levers are the
+    confirmation counts (bounded by how long the detector loses a seated
+    person -- see geometry.py) and the pass rate (bounded by CPU).
+
+    `chairs` are the seats THIS CAMERA OWNS. `observed_elsewhere` are seats it
+    can see but another camera controls -- a chair has exactly one owner, so the
+    two cameras' `chairs_total` must never be added. `room_chairs_total` is the
+    room's real count, each chair once.
+
+    404 when V1 is not running this camera -- a different thing from an empty
+    room, and a dashboard must not show them identically.
+    """
+    from app.cctv_v2.pipeline.v1_bridge import occupancy_snapshot
+
+    data = occupancy_snapshot(camera_id)
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"camera {camera_id} is not running; no occupancy available",
+        )
+    return data
+
+
 @router.get("/cameras/{camera_id}/stream.mjpg", tags=["cameras"])
-async def stream_camera_mjpeg(camera_id: int, request: Request):
+async def stream_camera_mjpeg(
+    camera_id: int,
+    request: Request,
+    _auth=Depends(require_media_access),
+):
     """Continuous MJPEG stream of the annotated live feed.
 
     Rendered directly by an <img> tag in the browser, so the video plays at the
-    backend display FPS with no client-side polling. (No auth dependency, same
-    as the DVR stream endpoint, because <img> cannot send a Bearer header.)
+    backend display FPS with no client-side polling. <img> cannot send a Bearer
+    header, so this is gated by a short-lived `?t=` media token from
+    POST /api/cameras/media-token rather than being left open.
     """
     async def generate_frames():
         # ~30 FPS ceiling; the display thread produces frames at CCTV_DISPLAY_FPS.
@@ -667,7 +889,11 @@ def dvr_stop_all(current_user=Depends(get_current_user)):
 
 
 @router.get("/dvr/cameras/{channel_id}/preview")
-def dvr_camera_preview(channel_id: int):
+def dvr_camera_preview(
+    channel_id: int,
+    request: Request,
+    _auth=Depends(require_media_or_bearer),
+):
     """Get latest JPEG frame from DVR camera."""
     dvr_manager = get_dvr_manager()
     
@@ -681,28 +907,31 @@ def dvr_camera_preview(channel_id: int):
     if not camera_status.get("worker_status", {}).get("is_alive"):
         raise HTTPException(status_code=400, detail="Camera not streaming")
     
-    # Get the camera worker
-    with dvr_manager._connection.lock:
-        camera = dvr_manager._connection.cameras.get(channel_id)
-        if not camera:
-            raise HTTPException(status_code=400, detail="Camera not available")
-        
-        # Get latest annotated JPEG from worker (HCNetSDK or RTSP)
-        jpeg = None
-        if camera.worker:
-            jpeg = camera.worker.get_latest_jpeg()
-        elif camera.rtsp_worker:
-            jpeg = camera.rtsp_worker.get_latest_jpeg()
-        
-        if jpeg is None:
-            raise HTTPException(status_code=503, detail="Stream connected, waiting for first frame")
-        
-        return Response(content=jpeg, media_type="image/jpeg")
+    # Resolve the worker through the manager: it returns whichever worker type
+    # this channel uses, both of which implement get_latest_jpeg(). Reaching
+    # into .worker / .rtsp_worker here is what produced an AttributeError (500)
+    # for HCNetSDK channels, whose worker lacked that method.
+    worker = dvr_manager.get_worker(channel_id)
+    if worker is None:
+        raise HTTPException(status_code=400, detail="Camera not available")
+
+    jpeg = worker.get_latest_jpeg()
+    if jpeg is None:
+        raise HTTPException(status_code=503, detail="Stream connected, waiting for first frame")
+
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 @router.get("/dvr/cameras/{channel_id}/stream")
-async def dvr_camera_stream(channel_id: int, request: Request):
-    """MJPEG streaming endpoint for live video feed."""
+async def dvr_camera_stream(
+    channel_id: int,
+    request: Request,
+    _auth=Depends(require_media_access),
+):
+    """MJPEG streaming endpoint for live video feed.
+
+    Gated by a short-lived `?t=` media token -- see stream_camera_mjpeg.
+    """
     dvr_manager = get_dvr_manager()
 
     if not dvr_manager._connection or not dvr_manager._connection.connected:
@@ -718,9 +947,7 @@ async def dvr_camera_stream(channel_id: int, request: Request):
     # Resolve the worker ONCE, up front, so the per-frame loop never has to take
     # the connection lock (which a blocking connect/start could be holding —
     # taking it here would stall the whole event loop).
-    conn = dvr_manager._connection
-    camera = conn.cameras.get(channel_id) if conn else None
-    worker = (camera.worker or camera.rtsp_worker) if camera else None
+    worker = dvr_manager.get_worker(channel_id)
 
     async def generate_frames():
         while worker is not None:

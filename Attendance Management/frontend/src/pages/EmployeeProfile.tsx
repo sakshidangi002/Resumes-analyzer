@@ -12,6 +12,7 @@ import {
   company as companyApi,
   attendance as attendanceApi,
   recognition as recognitionApi,
+  sensitiveData as sensitiveApi,
   type CareerHistoryBundle,
   type CareerHistoryRow,
 } from "../api/client";
@@ -31,6 +32,59 @@ type TabKey =
 const EMPLOYMENT_TYPES = ["Full-time", "Intern", "Contract"];
 const EMPLOYMENT_STATUSES = ["Active", "Resigned", "Terminated"];
 const MARITAL_STATUSES = ["Single", "Married", "Divorced", "Widowed"];
+
+/**
+ * Renders an identifier that the API already returned MASKED, with an opt-in
+ * "Reveal" for Admin/HR.
+ *
+ * Masking is done by the server — the value in `masked` is genuinely all the
+ * browser was given. Revealing costs an extra request to an audited endpoint,
+ * so it must stay an explicit user action, never automatic on page load.
+ */
+function RevealableValue({
+  masked,
+  canReveal,
+  fetchFull,
+}: {
+  masked?: string | null;
+  canReveal: boolean;
+  fetchFull: () => Promise<string | null | undefined>;
+}) {
+  const [full, setFull] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const shown = full ?? masked;
+  if (!shown) return <>-</>;
+  if (full || !canReveal) return <>{shown}</>;
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+      {shown}
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setFailed(false);
+          try {
+            setFull((await fetchFull()) ?? null);
+          } catch {
+            setFailed(true);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "…" : "Reveal"}
+      </button>
+      {failed && (
+        <span style={{ color: "#dc2626", fontSize: "0.75rem" }}>Could not reveal</span>
+      )}
+    </span>
+  );
+}
 
 const maxDobDate = (() => {
   const d = new Date();
@@ -81,7 +135,9 @@ function empToForm(e: Emp): ProfileForm {
     department_id: e.department_id ?? "",
     employment_type: e.employment_type,
     employment_status: e.employment_status,
-    expected_working_hours: e.expected_working_hours || 9.0,
+    // `?? 9.0`, never `|| 9.0`: 0 means "no fixed hours" and must survive being
+    // loaded into the form, or opening the page silently rewrites it to 9.
+    expected_working_hours: e.expected_working_hours ?? 9.0,
     reporting_manager_id: e.reporting_manager_id ?? "",
     pan_number: e.pan_number || "",
     aadhar_number: e.aadhar_number || "",
@@ -1165,7 +1221,12 @@ export default function EmployeeProfile() {
       department_id: form.department_id === "" ? null : Number(form.department_id),
       employment_type: form.employment_type,
       employment_status: form.employment_status,
-      expected_working_hours: Number(form.expected_working_hours) || 9.0,
+      // Typing 0 here means "this person has no fixed working hours". The old
+      // `Number(...) || 9.0` made that impossible to express: 0 is falsy, so it
+      // transmitted 9 and the field sprang back to a nine-hour day.
+      expected_working_hours: Number.isFinite(Number(form.expected_working_hours))
+        ? Number(form.expected_working_hours)
+        : 9.0,
       date_of_birth: form.date_of_birth.trim() || null,
       date_of_marriage: form.date_of_marriage.trim() || null,
       marital_status: form.marital_status.trim() || null,
@@ -1258,19 +1319,20 @@ export default function EmployeeProfile() {
   const fullName = `${emp.first_name} ${emp.last_name}`;
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">{isMyProfileRoute ? "My profile" : "Employee profile"}</h1>
-          <div className="page-subtitle">
+          <h1 className="eds-title">{isMyProfileRoute ? "My profile" : "Employee profile"}</h1>
+          <p className="eds-subtitle">
             {isMyProfileRoute
               ? "Your details, attendance, leave, salary, and payslips"
               : "Employee details, attendance, leave, salary, and payslips"}
-          </div>
+          </p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       <div className="emp-profile-hero">
         <div className="emp-profile-hero-inner">
           <div className="emp-profile-avatar" title={fullName}>
@@ -1427,7 +1489,15 @@ export default function EmployeeProfile() {
                     <DetailField label="Designation" value={desigName} variant="job" />
                     <DetailField label="Employment type" value={emp.employment_type} variant="job" />
                     <DetailField label="Status" value={emp.employment_status} variant="job" />
-                    <DetailField label="Working hours" value={`${emp.expected_working_hours || 9.0} hrs/day`} variant="job" />
+                    <DetailField
+                      label="Working hours"
+                      value={
+                        Number(emp.expected_working_hours) > 0
+                          ? `${emp.expected_working_hours} hrs/day`
+                          : "No fixed hours"
+                      }
+                      variant="job"
+                    />
                   </div>
                 </section>
 
@@ -1458,8 +1528,32 @@ export default function EmployeeProfile() {
                       </div>
                     </div>
                     <div className="emp-detail-section__grid">
-                      <DetailField label="PAN" value={emp.pan_number || "-"} variant="contact" />
-                      <DetailField label="Aadhar" value={emp.aadhar_number || "-"} variant="contact" />
+                      <DetailField
+                        label="PAN"
+                        variant="contact"
+                        value={
+                          <RevealableValue
+                            masked={emp.pan_number}
+                            canReveal={canEdit}
+                            fetchFull={async () =>
+                              (await sensitiveApi.identifiers(employeeId)).data.pan_number
+                            }
+                          />
+                        }
+                      />
+                      <DetailField
+                        label="Aadhar"
+                        variant="contact"
+                        value={
+                          <RevealableValue
+                            masked={emp.aadhar_number}
+                            canReveal={canEdit}
+                            fetchFull={async () =>
+                              (await sensitiveApi.identifiers(employeeId)).data.aadhar_number
+                            }
+                          />
+                        }
+                      />
                     </div>
                   </section>
                 )}
@@ -1497,7 +1591,19 @@ export default function EmployeeProfile() {
                       <DetailField label="Bank name" value={bankForm.bank_name || "-"} variant="job" />
                       <DetailField label="Branch name" value={bankForm.branch_name || "-"} variant="job" />
                       <DetailField label="Account holder" value={bankForm.account_holder_name || "-"} variant="job" />
-                      <DetailField label="Account number" value={bankForm.account_number || "-"} variant="job" />
+                      <DetailField
+                        label="Account number"
+                        variant="job"
+                        value={
+                          <RevealableValue
+                            masked={bankForm.account_number}
+                            canReveal={canEdit}
+                            fetchFull={async () =>
+                              (await sensitiveApi.bankAccount(employeeId)).data.account_number
+                            }
+                          />
+                        }
+                      />
                       <DetailField label="IFSC" value={bankForm.ifsc_code || "-"} variant="job" />
                       <DetailField label="Account type" value={bankForm.account_type || "-"} variant="job" />
                     </div>
@@ -1793,9 +1899,10 @@ export default function EmployeeProfile() {
                         type="number"
                         step="0.5"
                         value={form.expected_working_hours}
+                        min="0"
                         onChange={(e) => setForm({ ...form, expected_working_hours: Number(e.target.value) })}
                         required
-                        placeholder="e.g. 9.0"
+                        placeholder="e.g. 9.0 — enter 0 for no fixed hours"
                       />
                     </div>
                   </div>
@@ -2378,6 +2485,7 @@ export default function EmployeeProfile() {
 
 
       </div>
+      </div>
 
       {formulaPayslip && (
         <div className="modal-backdrop" onClick={() => setFormulaPayslip(null)}>
@@ -2392,6 +2500,6 @@ export default function EmployeeProfile() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

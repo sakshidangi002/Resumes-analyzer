@@ -9,9 +9,13 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from PIL import Image
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
+from app.db.session import get_db
+from app.services.audit_service import log_audit
+from app.services.camera_service import _redact_url, open_capture_with_timeout
 from app.services.recognition import DEFAULT_THRESHOLD, recognize_faces, recognize_from_rgb
 
 router = APIRouter()
@@ -31,6 +35,82 @@ logger = logging.getLogger(__name__)
 # NOTE: deliberately NOT called CCTV_MIN_THRESHOLD -- camera_service.py already
 # uses that name for a different thing (a per-camera safety floor, default 0.35).
 MIN_ALLOWED_THRESHOLD = float(os.getenv("RECOGNITION_API_MIN_THRESHOLD", "0.15"))
+
+
+# ---------------------------------------------------------------------------
+# Upload-based attendance: anti-proxy control (S-04, partial)
+# ---------------------------------------------------------------------------
+# /recognize-frame accepts an arbitrary JPEG and records attendance for whoever
+# is recognised in it. That is a photo-attack with no camera involved: any
+# logged-in employee could POST a picture of a colleague and mark them present.
+#
+# There is no liveness model in this system, so a still image cannot be told
+# from a live capture. What CAN be enforced without one is WHO the frame is
+# allowed to mark: by default an uploaded frame may only record attendance for
+# the uploader themselves. That removes the "mark my friend in" abuse entirely
+# while leaving normal self-service check-in working.
+#
+# Shared kiosks (one tablet at reception marking many people) legitimately need
+# the old behaviour. Set KIOSK_ATTENDANCE_ROLES to the roles allowed to mark
+# OTHER people from an upload -- e.g. "Admin,HR". Empty (default) = nobody.
+#
+# RESIDUAL RISK, stated plainly: this does NOT stop someone holding a printed
+# photo up to a real IN/OUT camera. That is the same class of attack and it
+# still works. Closing it needs a passive-liveness model in the CCTV pipeline
+# (a texture/depth anti-spoof pass before _mark_attendance); this control is
+# the part that can be done correctly without one, not a substitute for it.
+KIOSK_ATTENDANCE_ROLES = {
+    role.strip()
+    for role in os.getenv("KIOSK_ATTENDANCE_ROLES", "").split(",")
+    if role.strip()
+}
+
+
+def _enforce_upload_attendance_policy(data: dict, current_user, db) -> dict:
+    """Drop attendance recorded from an upload for someone other than the uploader.
+
+    The recognition result is left intact -- the caller still sees who was
+    matched -- only the attendance side effect is refused, and the refusal is
+    audited so proxy attempts are visible rather than merely blocked.
+    """
+    attendance = data.get("attendance")
+    if not attendance:
+        return data
+
+    marked_employee_id = attendance.get("employee_id")
+    if marked_employee_id is None:
+        return data
+
+    if current_user.employee_id == marked_employee_id:
+        return data                                   # self check-in: allowed
+
+    role_names = {r.name for r in current_user.roles}
+    if KIOSK_ATTENDANCE_ROLES and (role_names & KIOSK_ATTENDANCE_ROLES):
+        log_audit(
+            db, current_user.id, "ATTENDANCE_MARKED_FOR_OTHER", "Employee",
+            str(marked_employee_id),
+            f"Kiosk upload by {current_user.username} marked employee "
+            f"{marked_employee_id} ({attendance.get('event_type')})",
+        )
+        return data
+
+    logger.warning(
+        "Blocked upload attendance: user=%s (employee_id=%s) tried to mark employee_id=%s",
+        current_user.username, current_user.employee_id, marked_employee_id,
+    )
+    log_audit(
+        db, current_user.id, "ATTENDANCE_PROXY_BLOCKED", "Employee",
+        str(marked_employee_id),
+        f"{current_user.username} uploaded a frame that matched employee "
+        f"{marked_employee_id}; attendance refused (not the uploader)",
+    )
+    data = dict(data)
+    data["attendance"] = None
+    data["attendance_blocked_reason"] = (
+        "An uploaded image can only record attendance for the person signed in. "
+        "Contact HR if you need kiosk check-in for others."
+    )
+    return data
 
 
 def _clamp_threshold(value: float) -> float:
@@ -62,6 +142,7 @@ async def recognize_frame(
     camera_id: Optional[str] = Query(default=None, description="Camera ID for attendance tracking"),
     camera_purpose: Optional[str] = Query(default=None, description="Camera purpose: IN or OUT"),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Accept a webcam frame and recognize the face inside the HRMS backend.
 
@@ -92,10 +173,12 @@ async def recognize_frame(
         )
     except RuntimeError as exc:
         logger.error("recognize_frame: RuntimeError: %s", exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Recognition service is temporarily unavailable.") from exc
     except Exception as exc:
         logger.exception("recognize_frame: unexpected error")
-        raise HTTPException(status_code=500, detail=f"Face recognition failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Face recognition failed. Please try again later.") from exc
+
+    data = _enforce_upload_attendance_policy(data, current_user, db)
 
     # Log outcome
     matched = [f for f in data.get("faces", []) if f.get("matched")]
@@ -121,31 +204,36 @@ def recognize_cctv_frame(
             detail="OpenCV is required for CCTV recognition.",
         ) from exc
 
-    logger.info(f"CCTV recognition request - URL: {payload.stream_url}, Camera ID: {payload.camera_id}, Type: {payload.camera_type}")
-    
+    # Redacted: an RTSP URL carries the DVR password in its userinfo.
+    logger.info(
+        "CCTV recognition request - URL: %s, Camera ID: %s, Type: %s",
+        _redact_url(payload.stream_url), payload.camera_id, payload.camera_type,
+    )
+
     # Decode URL-encoded characters (e.g., %40 -> @) for RTSP
     stream_url = unquote(payload.stream_url)
-    logger.info(f"Decoded URL: {stream_url}")
-    
+
     capture = None
     try:
-        # Use FFmpeg backend for RTSP streams
-        if stream_url.startswith("rtsp://"):
-            logger.info("Using FFmpeg backend for RTSP stream")
-            capture = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-            # Set timeout and buffer settings
-            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10 second timeout
-            capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5 second read timeout
-        else:
-            logger.info("Using default backend for non-RTSP stream")
-            capture = cv2.VideoCapture(stream_url)
+        # Bounded open. cv2.VideoCapture() blocks synchronously on the connect,
+        # so CAP_PROP_OPEN_TIMEOUT_MSEC (set afterwards) arrived too late to
+        # bound it — an unreachable DVR held this request worker for FFmpeg's
+        # internal default. open_capture_with_timeout caps it hard.
+        source_type = "rtsp" if stream_url.startswith("rtsp://") else "http"
+        capture = open_capture_with_timeout(
+            stream_url, source_type, camera_id=0, timeout_sec=12.0,
+        )
 
-        if not capture.isOpened():
-            logger.error(f"Could not open CCTV stream: {payload.stream_url}")
+        if capture is None:
+            logger.error(
+                "Could not open CCTV stream: %s", _redact_url(payload.stream_url)
+            )
             raise HTTPException(
-                status_code=503, 
-                detail="Could not open the CCTV stream. Check URL format, network connectivity, and camera availability."
+                status_code=503,
+                detail=(
+                    "Could not open the CCTV stream within 12s. Check URL format, "
+                    "network connectivity, and camera availability."
+                ),
             )
 
         logger.info("CCTV stream opened successfully, attempting to read frame...")
@@ -178,10 +266,10 @@ def recognize_cctv_frame(
         raise
     except RuntimeError as exc:
         logger.error(f"Runtime error in CCTV recognition: {exc}")
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Recognition service is temporarily unavailable.") from exc
     except Exception as exc:
         logger.exception(f"Unexpected error in CCTV recognition: {exc}")
-        raise HTTPException(status_code=500, detail=f"CCTV recognition failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="CCTV recognition failed. Please try again later.") from exc
     finally:
         if capture is not None:
             capture.release()

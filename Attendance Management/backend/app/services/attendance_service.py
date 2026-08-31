@@ -6,6 +6,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import AttendanceRecord, CompanyConfig, Holiday
 
+#: Attendance-classification thresholds, in hours.
+#:
+#: Only these three are fixed. The half-day boundary is deliberately NOT here:
+#: it is derived per employee as `expected_working_hours / 2`, because shifts
+#: differ and a single number is wrong for everyone not on that shift.
+GRACE_HOURS = 0.25          # 15 minutes
+SHORT_LEAVE_HOURS = 2.0     # missed up to this => short leave, not half day
+DEFAULT_EXPECTED_HOURS = 9.0  # used only when the employee record has none
+
 
 def get_company_config(db: Session):
     return db.query(CompanyConfig).first()
@@ -29,6 +38,22 @@ def _is_weekly_off(emp_date: date, weekly_off_days: str | None) -> bool:
 
 def _is_holiday(db: Session, emp_date: date) -> bool:
     return db.query(Holiday).filter(Holiday.date == emp_date).first() is not None
+
+
+def _holiday_dates_between(db: Session, start: date, end: date) -> set[date]:
+    """All holiday dates in a range, in ONE query.
+
+    Use this instead of calling `_is_holiday` from a per-day loop: that issues a
+    SELECT for every single day, and the database is remote (~29 ms per round
+    trip -- see db/session.py), so a month-long loop costs about a second of
+    pure latency before any real work happens.
+    """
+    return {
+        row[0]
+        for row in db.query(Holiday.date)
+        .filter(Holiday.date >= start, Holiday.date <= end)
+        .all()
+    }
 
 
 def apply_weekly_off_and_holiday(db: Session, record: AttendanceRecord) -> None:
@@ -112,9 +137,15 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     """
     Classify attendance status based on total_work_hours for working days.
 
-    - >= 8.5 hours  => PRESENT (full day)
-    - 7 to < 8.5    => SHORT (short leave)
-    - < 7           => HALF_DAY
+    Thresholds are derived from the EMPLOYEE's own `expected_working_hours`, not
+    from a fixed number of hours, because shifts differ: half a day is 4h for an
+    8h shift, 3.5h for a 7h shift and 3h for a 6h shift.
+
+    - missed <= 15 min grace          => PRESENT (full day)
+    - missed <= SHORT_LEAVE_HOURS     => SHORT (short leave)
+    - worked >= expected / 2          => HALF_DAY
+    - worked > 0 but under half a day => HALF_DAY (they did show up)
+    - worked == 0                     => ABSENT
     - Time In only (no Clock Out yet) => PRESENT so employee is not shown Absent
     - PAID_LEAVE / WEEKLY_OFF / HOLIDAY are HR/system-set and never overwritten by hours.
     """
@@ -122,7 +153,19 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     # from partial hours. An employee who has shown up is PRESENT until the day
     # is over; the real classification is applied when viewing a past day.
     from app.core.datetime_utils import get_ist_now
-    if rec.date >= get_ist_now().date():
+    # Imported lazily: attendance_event_service imports THIS module, so a
+    # module-level import here would be circular.
+    from app.services.attendance_event_service import business_date
+
+    # An HR edit is authoritative. Keep the selected status even when a later
+    # camera event triggers a summary recalculation for the same day.
+    if rec.source == "ADMIN":
+        return
+
+    # Business day, not calendar day. At 00:30 the in-progress day is still
+    # yesterday's record, and a calendar comparison would finalise a night
+    # shift's status to Half Day while the employee is still working.
+    if rec.date >= business_date(get_ist_now()):
         if rec.sign_in_time is not None:
             rec.status = "PRESENT"
         elif rec.is_weekly_off:
@@ -136,19 +179,38 @@ def apply_status_from_hours(db: Session, rec: AttendanceRecord) -> None:
     if rec.total_work_hours is not None:
         from app.models.employee import Employee
         emp = db.query(Employee).filter(Employee.id == rec.employee_id).first()
-        expected = float(emp.expected_working_hours or 9.0)
-        
+        from app.core.staff_policy import expected_daily_hours
+
+        expected = expected_daily_hours(emp)
         hours = float(rec.total_work_hours)
+
+        # No fixed daily target (expected_working_hours set to 0). There is
+        # nothing to fall short OF, so the SHORT / HALF_DAY ladder below -- all
+        # of which is defined relative to a target -- does not describe this
+        # person's arrangement. They worked, or they did not.
+        #
+        # This is the case the old `or 9.0` hid: a zero became a nine, and
+        # somebody on no fixed hours was scored against a nine-hour day.
+        if expected is None:
+            rec.status = "PRESENT" if hours > 0 else "ABSENT"
+            return
+
         missed = expected - hours
-        
-        if missed <= 0.25: # 15 min grace
+        # Half a day is defined against this employee's own shift length. The
+        # previous fixed 4.5 was only correct for a 9-hour shift and silently
+        # wrong for every other one.
+        half_day_hours = expected / 2
+
+        if missed <= GRACE_HOURS:
             rec.status = "PRESENT"
-        elif missed <= 2.0: # Short Leave (up to 2h missed)
+        elif missed <= SHORT_LEAVE_HOURS:
             rec.status = "SHORT"
-        elif missed <= 4.5: # Half Day (up to 4.5h missed)
+        elif hours >= half_day_hours:
             rec.status = "HALF_DAY"
-        else: # More than 4.5h missed (even if worked a little)
-            rec.status = "ABSENT" if hours == 0 else "HALF_DAY" # Show as Half Day if they at least showed up
+        else:
+            # Below half a day: still HALF_DAY if they attended at all, so a
+            # short attendance is never recorded as a full absence.
+            rec.status = "ABSENT" if hours == 0 else "HALF_DAY"
     else:
         if rec.sign_in_time is not None:
             # Clocked in but not out yet: show as Present
@@ -203,6 +265,11 @@ def monthly_attendance_summary(db: Session, employee_id: int, month: int, year: 
         ).all()
     }
 
+    # One query for the month's holidays, matching how `records` above is
+    # already batched. The per-day `_is_holiday()` call this replaces ran a
+    # SELECT for each of the ~31 days on every call to this summary.
+    holiday_dates = _holiday_dates_between(db, month_start, month_end)
+
     present = half_day = leave = absent = holiday = weekly_off = 0
 
     d = month_start
@@ -210,7 +277,7 @@ def monthly_attendance_summary(db: Session, employee_id: int, month: int, year: 
         rec = records.get(d)
         status = rec.status if rec else None
 
-        if _is_holiday(db, d):
+        if d in holiday_dates:
             holiday += 1
         elif _is_weekly_off(d, weekly_off_days):
             weekly_off += 1
@@ -262,11 +329,13 @@ def sign_in(db: Session, employee_id: int, d: date, sign_in_time: time) -> Atten
     grace_min = config.grace_time_minutes if config else 15
     # Assume standard start 09:00 for "late" check; can be configurable later
     standard_start = time(9, 0)
-    from datetime import datetime as dt
     t = datetime.combine(d, sign_in_time)
     s = datetime.combine(d, standard_start)
     rec.is_late = (t - s).total_seconds() > grace_min * 60
-    half_day_hours = config.half_day_threshold_hours if config else 4
+    # PRESENT is correct at sign-in: there is no sign-out yet, so no worked
+    # hours to classify. The real classification happens in
+    # `apply_status_from_hours`, which owns the half-day rule and derives it
+    # from the employee's own expected hours.
     rec.status = "PRESENT"
     db.commit()
     db.refresh(rec)
@@ -280,7 +349,6 @@ def sign_out(db: Session, employee_id: int, d: date, sign_out_time: time) -> Att
     apply_status_from_hours(db, rec)
     # Early exit: e.g. before 18:00
     standard_end = time(18, 0)
-    from datetime import datetime as dt
     t = datetime.combine(d, sign_out_time)
     s = datetime.combine(d, standard_end)
     rec.is_early_exit = t < s

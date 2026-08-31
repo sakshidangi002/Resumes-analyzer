@@ -7,6 +7,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class SignupRequest(BaseModel):
     username: str
     password: str
@@ -33,3 +38,4 @@ class Token(BaseModel):
     employee_id: Optional[int] = None
     employee_code: Optional[str] = None
     designation: Optional[str] = None
+    must_change_password: bool = False

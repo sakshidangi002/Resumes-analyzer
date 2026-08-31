@@ -1,9 +1,7 @@
 """``/ws/notifications`` — real-time notification feed for the logged-in user.
 
-Auth: browsers cannot send custom headers on the WebSocket handshake, so we
-accept the JWT either as a ``?token=`` query parameter (preferred) or as a
-``Sec-WebSocket-Protocol`` subprotocol (more secure — token never lands in
-proxy access logs as a query string). Both are checked.
+Auth uses the same-origin HttpOnly access_token cookie during the handshake;
+JWTs are never accepted in a query string.
 
 Wire protocol (server → client JSON frames):
 
@@ -24,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
@@ -87,10 +85,10 @@ async def notifications_socket(
 
     Client URL examples:
 
-        ws://host/ws/notifications?token=<JWT>
-        wss://host/ws/notifications?token=<JWT>
+        ws://host/ws/notifications
+        wss://host/ws/notifications
     """
-    actual_token = token or _token_from_subprotocols(websocket) or ""
+    actual_token = websocket.cookies.get("access_token", "")
     user_id = _resolve_user_id_from_token(actual_token)
     if user_id is None:
         # 4401 is the conventional "auth failed" close code for WebSocket
@@ -105,7 +103,7 @@ async def notifications_socket(
             {
                 "type": "hello",
                 "user_id": user_id,
-                "ts": datetime.utcnow().isoformat() + "Z",
+                "ts": datetime.now(timezone.utc).isoformat(),
             }
         )
         # Keep the socket open. We don't expect much client→server traffic,
@@ -117,7 +115,7 @@ async def notifications_socket(
                 # Idle keepalive — also helps detect half-open sockets.
                 try:
                     await websocket.send_json(
-                        {"type": "ping", "ts": datetime.utcnow().isoformat() + "Z"}
+                        {"type": "ping", "ts": datetime.now(timezone.utc).isoformat()},
                     )
                 except Exception:
                     break
@@ -131,11 +129,11 @@ async def notifications_socket(
             if isinstance(msg, dict) and msg.get("type") == "ping":
                 try:
                     await websocket.send_json(
-                        {"type": "pong", "ts": datetime.utcnow().isoformat() + "Z"}
+                        {"type": "pong", "ts": datetime.now(timezone.utc).isoformat()},
                     )
                 except Exception:
                     break
     except WebSocketDisconnect:
-        pass
+        logger.warning("websocket.send_json failed", exc_info=True)
     finally:
         connection_manager.disconnect(user_id, websocket)

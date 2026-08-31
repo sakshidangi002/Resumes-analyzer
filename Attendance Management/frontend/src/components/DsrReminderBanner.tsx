@@ -66,7 +66,12 @@ function parseHhmm(value: string): { hour: number; minute: number } {
 }
 
 export default function DsrReminderBanner() {
-  const { token, hasRole } = useAuth();
+  const { user, hasRole } = useAuth();
+  // Signed-in check. The session is an HttpOnly cookie, so there is no token
+  // in the client to test — `user` is what tells us anyone is logged in.
+  // Depend on the id (a primitive) rather than the object, so these effects
+  // re-run when the identity changes, not on every re-render.
+  const userId = user?.id ?? null;
   // Admin-only accounts are view-only on DSRs (they can't file one), so we
   // never nag them with the 5 PM "Submit your DSR" reminder. HR (with or
   // without Admin) still gets the reminder like any other employee.
@@ -77,7 +82,7 @@ export default function DsrReminderBanner() {
   const settingsRef = useRef<DSRReminderSettings | null>(null);
 
   useEffect(() => {
-    if (!token) return;
+    if (!userId) return;
     // Defer the permission prompt + Web Push subscribe slightly. Pestering at
     // login time is rude; once the dashboard has settled, ensurePushSubscription
     // handles permission + service worker + server-side subscription. After
@@ -88,10 +93,10 @@ export default function DsrReminderBanner() {
       ensurePushSubscription().catch(() => {});
     }, NOTIF_PERMISSION_DELAY_MS);
     return () => window.clearTimeout(t);
-  }, [token]);
+  }, [userId]);
 
   useEffect(() => {
-    if (!token || isAdminOnly) {
+    if (!userId || isAdminOnly) {
       setShow(false);
       settingsRef.current = null;
       return;
@@ -224,7 +229,7 @@ export default function DsrReminderBanner() {
       cancelled = true;
       window.clearInterval(t);
     };
-  }, [token, isAdminOnly]);
+  }, [userId, isAdminOnly]);
 
   if (!show) return null;
 

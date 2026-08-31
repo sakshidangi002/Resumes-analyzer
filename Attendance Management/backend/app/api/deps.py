@@ -1,15 +1,12 @@
 """Dependencies: get_db, get_current_user, role-based access."""
 from typing import Generator, List
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyCookie
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
 
-from app.db.session import SessionLocal, get_db
-from app.core.config import get_settings
-from app.core.security import decode_access_token
+from app.db.session import get_db
+from app.core.security import decode_access_token, decode_media_token
 from app.models import User
-from app.models.user import Role
 from app.models.employee import Employee, EmploymentStatus
 
 security = HTTPBearer(auto_error=False)
@@ -27,21 +24,43 @@ def is_employment_status_blocked(value: str | None) -> bool:
     return bool(value) and value in BLOCKED_EMPLOYMENT_STATUSES
 
 
-def get_db_session() -> Generator[Session, None, None]:
-    yield from get_db()
+# The SAME callable object as app.db.session.get_db, deliberately -- not a
+# wrapper around it.
+#
+# FastAPI caches resolved dependencies per request KEYED ON THE CALLABLE. A
+# wrapper is a different object, so `Depends(get_db)` in a route handler and
+# `Depends(get_db_session)` in the auth chain resolved independently and opened
+# TWO sessions, and therefore two pooled connections, for every authenticated
+# request. 176 handlers use the first name; the whole auth chain uses the
+# second.
+#
+# With a 20+20 pool and Starlette's 40-thread default for sync handlers, that
+# is up to 80 connections wanted against 40 available -- which is how this
+# database reached "FATAL: sorry, too many clients already" and dropped CCTV
+# transit events.
+#
+# Aliasing also fixes a subtler bug: `current_user` was loaded on a DIFFERENT
+# session from the one a handler committed, so mutating current_user and
+# committing `db` silently discarded the write. Same session now, so it does
+# not.
+#
+# Keep this an alias. Re-introducing a wrapper (even `yield from get_db()`)
+# restores the double-checkout.
+get_db_session = get_db
 
 
-def get_current_user(
+def _get_current_user(
     db: Session = Depends(get_db_session),
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> User:
-    if not credentials:
+    token = credentials.credentials if credentials else ((request.cookies.get("access_token", "") if request else ""))
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = credentials.credentials
     payload = decode_access_token(token)
     if not payload:
         raise HTTPException(
@@ -71,6 +90,89 @@ def get_current_user(
                 detail=f"Access revoked: employee is {emp_status}.",
             )
     return user
+
+
+def get_current_user(
+    db: Session = Depends(get_db_session),
+    request: Request = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User:
+    user = _get_current_user(db=db, request=request, credentials=credentials)
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required before accessing HRMS.",
+            headers={"X-Password-Change-Required": "true"},
+        )
+    return user
+
+
+def get_current_user_for_password_change(
+    db: Session = Depends(get_db_session),
+    request: Request = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User:
+    """Authenticated user dependency that remains available during forced change."""
+    return _get_current_user(db=db, request=request, credentials=credentials)
+
+
+CAMERA_MEDIA_ROLES = {"Admin", "HR"}
+
+
+def require_media_access(request: Request) -> dict:
+    """Authenticate a camera media request via `?t=<media token>`.
+
+    Used by the MJPEG stream and JPEG preview endpoints, which browsers load
+    through <img src="..."> and therefore cannot authenticate with a header.
+    Mint the token from POST /api/cameras/media-token.
+    """
+    token = request.query_params.get("t", "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing media token. Request one from /api/cameras/media-token.",
+        )
+    payload = decode_media_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired media token",
+        )
+    roles = {str(r) for r in (payload.get("roles") or [])}
+    if not (roles & CAMERA_MEDIA_ROLES):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    return payload
+
+
+def require_media_or_bearer(
+    request: Request,
+    db: Session = Depends(get_db_session),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    """Accept EITHER a normal Bearer session OR a `?t=` media token.
+
+    Endpoints such as /cameras/{id}/preview are fetched both by regular API
+    callers (header) and by <img> tags (query token).
+    """
+    if credentials:
+        # Keyword arguments, NOT positional. `get_current_user` takes
+        # (db, request, credentials) — passing credentials positionally binds it
+        # to `request`, leaves `credentials` holding its unresolved Depends()
+        # default, and the first attribute access blows up with a 500. Calling
+        # a dependency as a plain function means no defaults get resolved, so
+        # every argument it actually needs has to be supplied by name.
+        user = get_current_user(db=db, request=request, credentials=credentials)
+        role_names = {r.name for r in user.roles}
+        if not (role_names & CAMERA_MEDIA_ROLES):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        return user
+    return require_media_access(request)
 
 
 def require_roles(allowed_roles: List[str]):

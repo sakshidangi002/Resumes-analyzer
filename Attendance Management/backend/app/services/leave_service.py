@@ -1,5 +1,5 @@
 """Leave: FY April–March, no carry-forward; allocation and request workflow."""
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from sqlalchemy.orm import Session
 from app.models import LeaveType, LeaveAllocation, LeaveRequest, FinancialYear, Employee
@@ -81,8 +81,19 @@ def count_hr_direct_paid_leave_days(
 
     Approved leave already increments ``used_days`` and sets matching attendance
     rows — counting those attendance rows again would double the used total.
+
+    Non-employee staff (housekeeping, security, …) are on a fixed salary with no
+    daily-hours target, so their short days are not leave at all and must not be
+    charged here. They typically hold a ZERO Paid-Leave allocation, so counting
+    them produced a nonsensical "3.5 used of 0 allocated" and a negative balance.
     """
     from app.models.attendance import AttendanceRecord
+    from app.core.staff_policy import is_fixed_salary_staff
+    from app.models.employee import Employee
+
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if employee is not None and is_fixed_salary_staff(employee):
+        return Decimal("0")
 
     approved_dates = _approved_leave_dates(
         db, employee_id, pl_leave_type_id, fy_start, fy_end
@@ -163,8 +174,17 @@ def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: 
             AttendanceRecord.date < end,
         ).all()
         
+        from app.core.staff_policy import expected_daily_hours, is_fixed_salary_staff
+
         unrequested_sl = 0
         for rec, emp in att_records:
+            # Fixed-salary staff keep no leave account: staff_policy states that
+            # short days "must not be charged against Short/Paid Leave buffers,
+            # which they typically have no allocation for". Charging them here
+            # drove the balance NEGATIVE for exactly those people -- they have a
+            # zero allocation, so every short day subtracted from nothing.
+            if is_fixed_salary_staff(emp):
+                continue
             if rec.status == "SHORT":
                 unrequested_sl += 1
             elif rec.status == "HALF_DAY":
@@ -172,8 +192,9 @@ def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: 
                 unrequested_sl += 2
             elif rec.status == "PRESENT" and rec.total_work_hours is not None:
                 worked = float(rec.total_work_hours)
-                expected = float(emp.expected_working_hours or 9.0)
-                if (expected - 2.0) <= worked < expected:
+                expected = expected_daily_hours(emp)
+                # No daily target means no "just short of a full day" window.
+                if expected is not None and (expected - 2.0) <= worked < expected:
                     unrequested_sl += 1
         
         return alloc.allocated_days - Decimal(n_req) - Decimal(unrequested_sl)

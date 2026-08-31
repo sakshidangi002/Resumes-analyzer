@@ -25,10 +25,14 @@ from app.services.notification_service import create_notification
 from app.services.reminder_settings import (
     DEFAULT_REMINDER_TIME,
     DEFAULT_REMINDER_WEEKDAYS,
+    get_config_for_read,
     get_or_create_config,
     normalize_time,
     normalize_weekdays,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -37,7 +41,7 @@ _IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
 def _ist_today() -> date:
-    return (datetime.utcnow() + _IST_OFFSET).date()
+    return (__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() + _IST_OFFSET).date()
 
 
 def _ist_day_utc_window(today: date) -> tuple[datetime, datetime]:
@@ -84,7 +88,7 @@ class ReminderSettingsUpdate(BaseModel):
 
 
 def _settings_response(cfg: CompanyConfig) -> ReminderSettingsResponse:
-    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    ist_now = __import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now() + timedelta(hours=5, minutes=30)
     return ReminderSettingsResponse(
         enabled=bool(cfg.dsr_reminder_enabled),
         time=(cfg.dsr_reminder_time or DEFAULT_REMINDER_TIME),
@@ -102,7 +106,7 @@ def get_reminder_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
-    cfg = get_or_create_config(db)
+    cfg = get_config_for_read(db)
     return _settings_response(cfg)
 
 
@@ -220,7 +224,7 @@ def notify_me(
         )
     except Exception:
         # Push failure must never break the inbox flow.
-        pass
+        logger.warning("send_push_to_user failed", exc_info=True)
 
     return NotifyMeResponse(
         created=True, reason="created", today_ist=today.isoformat()
@@ -442,7 +446,7 @@ def remind_pending_dsr_today(
 
             _safe_send_email(db, u, today)
         except Exception:
-            pass
+            logger.debug("DSR reminder email failed (best-effort)", exc_info=True)
         notified += 1
 
     return ManualRemindResponse(

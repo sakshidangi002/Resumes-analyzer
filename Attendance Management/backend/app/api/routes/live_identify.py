@@ -28,6 +28,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import Employee, User
 from app.api.deps import require_roles
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -144,7 +147,7 @@ def name_track(
     try:
         track.bind_identity(int(emp.id), emp.full_name, emp.employee_code, True, 1.0)
     except Exception:
-        pass
+        logger.warning("track.bind_identity failed", exc_info=True)
 
     return {
         "message": f"{emp.full_name} identified. Re-ID will keep this name today.",

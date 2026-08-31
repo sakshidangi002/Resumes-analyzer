@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        # requirements-test.txt, not the full backend requirements: the latter
+        # pulls opencv/torch/insightface (GBs) which these unit tests do not
+        # need. Tests that DO need the vision stack importorskip themselves.
+        run: python -m pip install --upgrade pip && pip install -r requirements-test.txt
+      - name: Lint changed architecture seams
+        run: ruff check backend/config.py backend/services tests
+      - name: Run unit tests
+        # -rs reports skipped tests. Without it a test that silently stops
+        # running (missing dependency, bad import) looks identical to a passing
+        # one, which is exactly how regressions slip back in.
+        run: pytest -q -rs

@@ -18,6 +18,9 @@ from app.db.session import get_db
 from app.models import User, CompanyPolicy
 from app.schemas.policy import PolicyVersionResponse, PolicyGroup, PolicyHistory, PolicyUpdate
 from app.api.deps import require_roles
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -181,7 +184,7 @@ def delete_policy_version(
         try:
             Path(policy.attachment_path).unlink(missing_ok=True)
         except OSError:
-            pass
+            logger.debug("ignored, non-critical", exc_info=True)
     db.delete(policy)
     db.commit()
     return {"message": "Deleted"}

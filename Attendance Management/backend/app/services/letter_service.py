@@ -2,7 +2,7 @@
 from datetime import date
 from jinja2 import Template
 from sqlalchemy.orm import Session
-from app.models import LetterTemplate, LetterInstance, Employee, SalaryStructure, Payslip
+from app.models import LetterTemplate, LetterInstance, Employee
 from app.services.payroll_service import get_salary_structure_for_date
 
 

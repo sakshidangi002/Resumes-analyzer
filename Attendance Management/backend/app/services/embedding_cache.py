@@ -26,27 +26,48 @@ def blob_to_embedding(blob: bytes) -> np.ndarray:
 
 
 def _load_from_db() -> list[dict]:
+    # A query vector and a gallery vector must come from the same recognition
+    # model. Employee.embedding is a legacy hot-path blob and has no model
+    # version of its own, so it cannot be trusted after an ArcFace -> AdaFace
+    # switch. Use the provenance table as the compatibility gate.
+    from app.models.employee_face import EmployeeFaceEmbedding
+    from app.services.face_service import EMBEDDING_MODEL_VERSION
     with SessionLocal() as db:
         rows = (
             db.query(Employee)
+            .join(
+                EmployeeFaceEmbedding,
+                EmployeeFaceEmbedding.employee_id == Employee.id,
+            )
             .filter(
                 Employee.embedding.isnot(None),
                 Employee.employment_status == EmploymentStatus.ACTIVE.value,
+                EmployeeFaceEmbedding.active.is_(True),
+                EmployeeFaceEmbedding.model_version == EMBEDDING_MODEL_VERSION,
             )
+            .distinct()
             .order_by(Employee.id.desc())
             .all()
         )
+
+    from app.services.match import enrollment_bias_penalty
 
     candidates: list[dict] = []
     for emp in rows:
         if emp.embedding is None:
             continue
+        embedding = blob_to_embedding(emp.embedding)
         candidates.append(
             {
                 "employee_id": emp.id,
                 "employee_code": emp.employee_code,
                 "employee_name": emp.full_name,
-                "embedding": blob_to_embedding(emp.embedding),
+                "embedding": embedding,
+                # Precomputed here so the matcher pays nothing per comparison.
+                # Corrects the max-over-photos bias that otherwise favours
+                # whoever was enrolled with the most (or most varied) photos —
+                # see match.enrollment_bias_penalty.
+                "bias_penalty": enrollment_bias_penalty(embedding),
             }
         )
     return candidates

@@ -1,4 +1,5 @@
 /** Shared monthly calendar for attendance (employee self-serve or HR profile view). */
+import { useMemo } from "react";
 import { SectionLoader } from "./LoadingState";
 import CustomSelect from "./CustomSelect";
 
@@ -23,6 +24,23 @@ function formatHours(decimalHours: number): string {
   const m = totalMins % 60;
   return `${h}:${m.toString().padStart(2, "0")} Hrs`;
 }
+
+
+/* The frame shows check-in and check-out as directional glyphs rather than the
+   source's ⏱ emoji: arrival points down into the day, departure points out. */
+const ArrowIn = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="4" x2="12" y2="19" />
+    <polyline points="6 13 12 19 18 13" />
+  </svg>
+);
+
+const ArrowOut = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="20" x2="12" y2="5" />
+    <polyline points="6 11 12 5 18 11" />
+  </svg>
+);
 
 export default function MonthlyAttendanceGrid({
   month,
@@ -101,6 +119,41 @@ export default function MonthlyAttendanceGrid({
     return "emp-cal-badge--wo";
   };
 
+  // Month summary, from the records this component already holds. Graded against
+  // weekdays in the month so the rate cannot exceed 100%.
+  const summary = useMemo(() => {
+    const inMonth = records.filter((r: AttendanceRecordLite) => {
+      const d = new Date(r.date + "T00:00:00");
+      return d.getMonth() === month - 1 && d.getFullYear() === year;
+    });
+    const count = (...st: string[]) => inMonth.filter((r: AttendanceRecordLite) => st.includes(r.status)).length;
+    const present = count("PRESENT");
+    const partial = count("HALF_DAY", "SHORT");
+    const leave = count("ON_LEAVE", "PAID_LEAVE");
+    const absent = count("ABSENT");
+    const holiday = count("HOLIDAY");
+
+    const daysInMonth = new Date(year, month, 0).getDate();
+    let workingDays = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dow = new Date(year, month - 1, d).getDay();
+      if (dow !== 0 && dow !== 6) workingDays++;
+    }
+    const credited = present + partial * 0.5;
+    return {
+      workingDays,
+      rate: workingDays > 0 ? Math.min(100, Math.round((credited / workingDays) * 100)) : 0,
+      rows: [
+        { label: "Present", count: present, swatch: "emp-cal-bar--present" },
+        { label: "Half / short", count: partial, swatch: "emp-cal-bar--half" },
+        { label: "On leave", count: leave, swatch: "emp-cal-bar--leave" },
+        { label: "Absent", count: absent, swatch: "emp-cal-bar--absent" },
+        { label: "Holiday", count: holiday, swatch: "emp-cal-bar--holiday" },
+      ],
+    };
+  }, [records, month, year]);
+
+
   return (
     <>
       <div className="emp-cal-toolbar">
@@ -155,6 +208,25 @@ export default function MonthlyAttendanceGrid({
           </div>
         </div>
       </div>
+      {!loading && (
+        <>
+          <div className="emp-cal-summary">
+            {summary.rows.map((r) => (
+              <div className="emp-cal-sum-row" key={r.label}>
+                <span className={`emp-cal-legend-swatch ${r.swatch}`} />
+                <span className="emp-cal-sum-label">{r.label}</span>
+                <span className="emp-cal-sum-count">{r.count}</span>
+              </div>
+            ))}
+          </div>
+          <div className="emp-cal-rate">
+            <span className="emp-cal-rate-label">Attendance rate</span>
+            <span className="emp-cal-rate-value">
+              {summary.workingDays > 0 ? `${summary.rate}%` : "—"}
+            </span>
+          </div>
+        </>
+      )}
       {loading ? (
         <SectionLoader size="md" />
       ) : (
@@ -211,19 +283,19 @@ export default function MonthlyAttendanceGrid({
                         {(timeIn || timeOut) && (
                           <div className="emp-cal-times">
                             {timeIn && (
-                              <div className="emp-cal-time-row">
+                              <div className="emp-cal-time-row emp-cal-time-row--in">
                                 <span className="emp-cal-time-icon" aria-hidden>
-                                  ⏱
+                                  <ArrowIn />
                                 </span>
-                                <span>In {timeIn}</span>
+                                <span>{timeIn}</span>
                               </div>
                             )}
                             {timeOut && (
-                              <div className="emp-cal-time-row">
+                              <div className="emp-cal-time-row emp-cal-time-row--out">
                                 <span className="emp-cal-time-icon" aria-hidden>
-                                  ⏱
+                                  <ArrowOut />
                                 </span>
-                                <span>Out {timeOut}</span>
+                                <span>{timeOut}</span>
                               </div>
                             )}
                           </div>

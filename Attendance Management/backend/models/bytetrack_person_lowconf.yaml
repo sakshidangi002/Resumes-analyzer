@@ -1,3 +1,16 @@
+# MONITOR / steep-angle cameras.
+#
+# MEASURED across all four live camera frames: seated staff seen from
+# behind score 0.035-0.057, because legs are hidden by the chair and desk
+# and the head/limb silhouette a COCO person detector keys on is absent.
+# At the previous 0.10 they were detected and then discarded by the
+# tracker, so both room cameras under-reported the room.
+#
+# The two genuinely empty cameras produced zero detections at every
+# threshold down to 0.02, so 0.03 costs no false tracks here. These
+# cameras cannot mark attendance, so a spurious box is cosmetic while a
+# missed person defeats the camera's only purpose.
+
 # PERMISSIVE ByteTrack config — for cameras mounted at a STEEP top-down angle.
 #
 # Use this only for cameras where people are seen from above/behind, hunched at a
@@ -15,16 +28,51 @@
 
 tracker_type: bytetrack
 
-# Real people here measure 0.11 - 0.13, so stage-1 must sit below that.
-track_high_thresh: 0.10
+# ---- 2026-08-26: re-measured against a labelled benchmark. ----
+#
+# 16 frames from cameras 59 and 60, 41 people boxed by hand
+# (scripts/cctv_v2_room_bench.py, data/cctv_v2_rooms/). Scored per PERSON, not
+# per frame, because a track survives several passes without a detection -- so
+# what decides whether somebody is counted is whether they are ever seen at all:
+#
+#   camera 59, four people   floor 0.03   floor 0.02
+#     LEFT-SEATED  (L3)         0.40         0.40
+#     TOP-DESK     (R1)         0.10         0.20
+#     RIGHT-SEATED (R8)         0.40         0.40
+#   camera 60 (S3)              0.67         0.67
+#
+# and at imgsz 1280 the same drop is worth far more (L3 0.60 -> 0.70, R8 0.40 ->
+# 0.70), so the floor matters more the more pixels the detector is given.
+#
+# THE POINT OF THE SPLIT. The detector floor (CCTV_STEEP_PERSON_CONF) is now
+# 0.015, BELOW new_track_thresh, where it used to be equal to it. Equal floors
+# defeat ByteTrack's two-stage design: stage 2 exists to re-associate the weak
+# boxes to tracks that already exist, and with both bars at the same height
+# those boxes were discarded before stage 2 ever saw them. A seated person who
+# dipped for one pass could then only be re-CREATED, at the higher bar.
+#
+# What makes it safe to go this low is CCTV_MIN_PERSON_PX, a SIZE floor. At
+# these confidences the detector emits fragments a few pixels tall on frame
+# edges and decode-corruption bands, and some of them OUTSCORE a real seated
+# person -- so no confidence threshold separates them, and size does.
+#
+# False positives measured at 0.02 / imgsz 960 over the 16 frames: 7 unmatched
+# boxes, of which 4 are oversized duplicates on a REAL person and the rest are
+# partial boxes on people. Essentially none are furniture, which is the failure
+# this floor was feared to cause.
 
-# Stage-2: very weak boxes may only EXTEND an existing person's track.
-track_low_thresh: 0.04
+# Stage 1. Sits at the track-creation bar: an association pass that admits
+# weaker boxes than may create a person would let stage 1 do stage 2's job.
+track_high_thresh: 0.02
 
-# Creating a track needs 0.10 — low enough to admit these people, and person-class
-# noise is rare in this scene (measured: at conf 0.03 the whole frame produced only
-# 2 person detections, both on a real person).
-new_track_thresh: 0.10
+# Stage-2: very weak boxes may only EXTEND an existing person's track. Below the
+# detector floor on purpose, so nothing the detector emits is refused here --
+# this is the stage that keeps a briefly-invisible seated person alive.
+track_low_thresh: 0.01
+
+# Creating a track. The measured cost of 0.03 is the TOP-DESK person on camera
+# 59, who is seen half as often at 0.03 as at 0.02.
+new_track_thresh: 0.02
 
 # Frames (analysis ticks) a lost track is kept alive.
 track_buffer: 8

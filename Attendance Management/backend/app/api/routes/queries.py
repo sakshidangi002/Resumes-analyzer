@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
-from app.models import User, Employee, HRQuery, HRQueryReply
+from app.models import User, HRQuery, HRQueryReply
 from app.schemas.hr_query import (
     HRQueryCreate,
     HRQueryResponse,
@@ -64,6 +64,8 @@ def create_query(
 @router.get("", response_model=list[HRQueryResponse])
 def list_queries(
     status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["Admin", "HR", "Manager", "Employee"])),
 ):
@@ -77,7 +79,12 @@ def list_queries(
         q = q.filter(HRQuery.employee_id == current_user.employee_id)
     if status:
         q = q.filter(HRQuery.status == status)
-    rows = q.order_by(HRQuery.updated_at.desc(), HRQuery.id.desc()).all()
+    rows = (
+        q.order_by(HRQuery.updated_at.desc(), HRQuery.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     return [_attach_names(r) for r in rows]
 
 

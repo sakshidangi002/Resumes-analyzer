@@ -108,6 +108,16 @@ def get_or_create_config(db: Session) -> CompanyConfig:
     return cfg
 
 
+def get_config_for_read(db: Session) -> CompanyConfig:
+    """Return config/defaults without creating or updating a database row."""
+    return db.query(CompanyConfig).first() or CompanyConfig(
+        name="Default Company",
+        dsr_reminder_enabled=DEFAULT_REMINDER_ENABLED,
+        dsr_reminder_time=DEFAULT_REMINDER_TIME,
+        dsr_reminder_weekdays=DEFAULT_REMINDER_WEEKDAYS,
+    )
+
+
 def read_schedule(db: Session) -> tuple[bool, int, int, set[str]]:
     """Return ``(enabled, hour, minute, weekday_set)`` for the scheduler tick."""
     cfg = get_or_create_config(db)
@@ -123,7 +133,11 @@ def read_schedule(db: Session) -> tuple[bool, int, int, set[str]]:
     except ValueError:
         weekdays_csv = DEFAULT_REMINDER_WEEKDAYS
     return (
-        bool(cfg.dsr_reminder_enabled),
+        bool(
+            cfg.dsr_reminder_enabled
+            if cfg.dsr_reminder_enabled is not None
+            else DEFAULT_REMINDER_ENABLED
+        ),
         int(h),
         int(m),
         set(d for d in weekdays_csv.split(",") if d),

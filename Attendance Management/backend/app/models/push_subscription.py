@@ -44,7 +44,7 @@ class PushSubscription(Base):
     auth = Column(String(255), nullable=False)
 
     user_agent = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
 
     user = relationship("User", backref="push_subscriptions")

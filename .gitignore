@@ -17,9 +17,9 @@ dist/
 build/
 
 # Backend runtime
-backend/uploads/
-backend/data/
-backend/chromadb/
+**/backend/uploads/
+**/backend/data/
+**/backend/chromadb/
 backend/*.db
 backend/resume.db
 backend/temp_*.pdf
@@ -64,3 +64,46 @@ deploy/
 **/data/policy_attachments/
 **/data/resumes_data.xlsx
 **/chromadb_backup_*/
+
+# graph_engine run artifacts (per-run file backups, not source)
+.graph_engine_runs/
+
+# ---------------------------------------------------------------------------
+# Biometric runtime data - NEVER commit
+# ---------------------------------------------------------------------------
+# Face crops of employees AND of unidentified passers-by who never consented to
+# being recorded. Special-category personal data under the DPDP Act / GDPR, and
+# git history is permanent - a later `git rm` does not remove it. These are
+# written continuously by the camera pipeline and are on a retention clock
+# (attendance_snapshot.prune_snapshots / unknown_faces.purge_older_than), so
+# they are transient runtime state, not source.
+**/data/attendance_snapshots/
+**/data/unknown_faces/
+**/data/enroll_review/
+
+# ---------------------------------------------------------------------------
+# Logs - NEVER commit
+# ---------------------------------------------------------------------------
+# Logs written before main.RedactCredentialsFilter existed contain the DVR
+# password in plaintext (app-run.log.err held 30,719 copies of it). They also
+# carry employee names and other PII from the recognition trace.
+*.log
+*.log.err
+**/logs/
+
+# ---------------------------------------------------------------------------
+# Vendored third-party model source - NEVER commit
+# ---------------------------------------------------------------------------
+# third_party/AdaFace is a CLONE (it has its own .git) weighing 1.2 GB, of which
+# 1.19 GB is the same 596 MB checkpoint stored twice - adaface_ir50_webface4m.ckpt
+# sits at the repo root AND under pretrained/. Both are far past GitHub's 100 MB
+# per-file limit, and a nested .git cannot be committed as ordinary files anyway.
+# Fetch it at setup time instead; see the AdaFace upstream repo.
+**/third_party/AdaFace/
+
+# Staging folder for face-enrolment photos. Biometric data - same rule as
+# data/unknown_faces and data/attendance_snapshots above: never committed.
+enrol_drop/
+
+# CCTV V2 measurement clips: frames of identifiable people. Never commit.
+data/cctv_v2_*/

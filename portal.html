@@ -317,10 +317,8 @@
         // trust the client to enforce access; the backend already blocks
         // /resume/* and /resume-api/* for everyone else. This is purely UX.
         (async function () {
-            const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-            if (!token) return;
             try {
-                const r = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+                const r = await fetch("/api/auth/me", { credentials: "same-origin" });
                 if (!r.ok) return;
                 const me = await r.json();
                 const roles = (me && me.roles) || [];
@@ -328,7 +326,7 @@
                     const card = document.getElementById("resume-card");
                     if (card) {
                         card.style.display = "";
-                        card.href = `/resume/?token=${encodeURIComponent(token)}`;
+                        card.href = "/resume/";
                     }
                 }
             } catch (_) { /* ignore — card stays hidden */ }

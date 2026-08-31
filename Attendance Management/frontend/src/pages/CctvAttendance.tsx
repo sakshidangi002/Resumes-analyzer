@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { recognition as recognitionApi, cameras as camerasApi } from "../api/client";
+import { useMediaToken } from "../hooks/useMediaToken";
 
 type FacePayload = {
   box: number[];
@@ -123,14 +124,98 @@ function statusColor(status: string): string {
 
 const panelStyle: React.CSSProperties = {
   padding: "1rem",
-  borderRadius: 18,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 14,
+  background: "var(--eds-recess)",
+  border: "1px solid var(--eds-border)",
 };
+
+/* The design replaces the source's emoji glyphs (📷 ⛶ ▶ ⏹) with inline SVG.
+   Size comes from the control that holds them (.eds-chip 16px,
+   .eds-action 13px). */
+const CctvIcons = {
+  Camera: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="6" width="14" height="12" rx="2.5" />
+      <path d="M16 10l6-3v10l-6-3z" />
+    </svg>
+  ),
+  Play: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="7 4 20 12 7 20" />
+    </svg>
+  ),
+  Stop: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  ),
+};
+
+type OccupancySnapshot = {
+  camera_id: number;
+  people_count: number;
+  chairs_total: number;
+  chairs_occupied: number;
+  chairs_free: number;
+  // Seats the smoothing has not decided yet. Reported so the panel can add up:
+  // occupied + free + unknown == total, always.
+  chairs_unknown: number;
+  unassigned_people: number;
+  frame_width: number;
+  frame_height: number;
+  chairs: {
+    id: string;
+    occupied: boolean;
+    state: string;
+    occupant_track_id: number | null;
+    track_visible: boolean;
+    // Normalised 0..1, from the backend chair map. See the note below.
+    zone: [number, number, number, number];
+  }[];
+  people: {
+    track_id: number;
+    bbox: [number, number, number, number];
+    // How sure the PERSON DETECTOR was. `confidence` is a deprecated alias
+    // carrying the same value; both used to carry the face-match score, so an
+    // unrecognised person read 0.0 while being detected perfectly well.
+    detection_confidence?: number;
+    confidence: number;
+    chair_id: string | null;
+  }[];
+  // Seats this camera watches but does not control -- see the note where they
+  // are drawn. No state, because they take no part in this camera's occupancy.
+  observed_elsewhere?: {
+    id: string;
+    zone: [number, number, number, number];
+    owned_by_camera: number | null;
+  }[];
+  room_chairs_total?: number;
+  // Whether the seat list is LEARNED from the detector or fixed to the
+  // configured map, and how many candidate seats are still gathering the
+  // sightings they need before they count.
+  chairs_auto?: boolean;
+  chairs_pending?: number;
+  chairs_sweeps?: number;
+  observation_updated_at?: number | null;
+  state_updated_at?: number;
+  observation_age_sec?: number | null;
+  from_new_observation?: boolean;
+};
+
+// Seat coordinates used to be duplicated here, mirroring ROOM_GEOMETRY in
+// app/cctv_v2/config/geometry.py. They are not any more: the API sends each
+// chair's `zone` alongside its state.
+//
+// The copy was not merely redundant, it was silently lossy. Any seat added to
+// the backend map that this table did not know about hit `if (!zone) return
+// null` and was counted in "Chairs: N" while never being drawn -- so completing
+// the chair map would have made the overlay LESS complete.
 
 export default function CctvAttendance() {
   const scanTimerRef = useRef<number | null>(null);
   const busyRef = useRef(false);
+  // Short-lived token for the <img>-rendered live feed (see useMediaToken).
+  const { mediaToken, mediaTokenError, refreshMediaToken } = useMediaToken();
   const [streamUrl, setStreamUrl] = useState("");
   const [cameraId, setCameraId] = useState("gate-1");
   const [cameraType, setCameraType] = useState("IN");
@@ -138,6 +223,10 @@ export default function CctvAttendance() {
   const [scanInterval, setScanInterval] = useState("10");
   const [autoScan, setAutoScan] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  // Chair occupancy for room cameras. Null means "this camera has none" --
+  // either it is a doorway or V1 is not running it -- which is deliberately
+  // different from an empty room.
+  const [occupancy, setOccupancy] = useState<OccupancySnapshot | null>(null);
   const [scanStatus, setScanStatus] = useState("Enter a CCTV stream URL and run a scan.");
   const [attendanceStatus, setAttendanceStatus] = useState("No attendance recorded yet.");
   const [lastScanAt, setLastScanAt] = useState("-");
@@ -180,6 +269,12 @@ export default function CctvAttendance() {
     capture_fps?: number;
     display_fps?: number;
     active_tracks?: number;
+    // Bodies in frame, and how many of them have a name. Kept as three separate
+    // fields because they answer three separate questions -- see the status bar.
+    people_tracked?: number;
+    people_recognised?: number;
+    people_unknown?: number;
+    person_tracking?: boolean;
     recognition_status?: string;
     last_error?: string | null;
   } | null>(null);
@@ -236,6 +331,27 @@ export default function CctvAttendance() {
     }
   };
 
+  // Whether fullscreen covers the whole screen or shows the whole frame.
+  //
+  // The room cameras encode 960x1080 -- taller than wide -- so on a 16:9 monitor
+  // those two cannot both be true. "fill" stretches to the edges; "fit" keeps
+  // the true shape and leaves black down the sides. Defaults to fill, because
+  // the black gutters are what an operator actually complains about.
+  //
+  // Deliberately NOT `object-fit: cover`, which is the usual answer: cover
+  // scales to the width, and 1920/960 is 2x, so half the frame height would be
+  // cropped away -- the far-end and nearest chairs among it. Losing seats from
+  // an occupancy display to remove a black border is a bad trade, so the
+  // stretch is the one on offer.
+  const [feedFill, setFeedFill] = useState<"fill" | "fit">("fill");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement != null);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
   const handleCamSelect = (id: number | "") => {
     setSelectedCamId(id);
     if (id === "") { setStreamUrl(""); setCameraId(""); return; }
@@ -269,6 +385,35 @@ export default function CctvAttendance() {
       lastEventTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }));
   };
+
+  // Poll chair occupancy for the selected camera.
+  //
+  // 2s is comfortable: the backend reads person boxes V1 has already computed,
+  // so a poll costs no inference. A camera with no chair map returns 404 and
+  // the overlay simply does not render.
+  useEffect(() => {
+    if (selectedCamId === "") {
+      setOccupancy(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await camerasApi.occupancy(selectedCamId as number);
+        if (!cancelled) setOccupancy(res.data ?? null);
+      } catch {
+        // 404 = doorway camera, or V1 is not running it. Not an error worth
+        // showing: most cameras legitimately have no chairs.
+        if (!cancelled) setOccupancy(null);
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [selectedCamId]);
 
   const runScan = async () => {
     if (busyRef.current) return;
@@ -349,32 +494,38 @@ export default function CctvAttendance() {
   const hasAttendanceSummary = lastEmployee.name && (lastEmployee.firstIn || lastEmployee.lastOut);
 
   return (
-    <div className="page-stack">
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">CCTV Attendance</h1>
-          <div className="page-subtitle">Read one frame from a CCTV or IP camera stream and mark attendance automatically.</div>
+          <h1 className="eds-title">CCTV Attendance</h1>
+          <p className="eds-subtitle">Read one frame from a CCTV or IP camera stream and mark attendance automatically.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
-      <section className="card" style={{ marginTop: "1rem", padding: "1.4rem", border: "none", background: "linear-gradient(135deg, rgba(9,14,31,0.98), rgba(15,23,42,0.94))", color: "#fff" }}>
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "minmax(0, 1.4fr) minmax(280px, 0.6fr)" }}>
+      <div className="eds-page">
+      <section className="eds-card">
+        <div className="eds-card-head">
+          <span className="eds-chip eds-chip--emerald"><CctvIcons.Camera /></span>
+          <div className="eds-card-titles">
+            <h2 className="eds-card-title">Capture configuration</h2>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+            <span className="eds-status eds-status--present">Backend camera capture</span>
+            <span className="eds-status eds-status--info">Attendance API linked</span>
+            <span className="eds-status eds-status--warn">60 s duplicate guard</span>
+          </div>
+        </div>
+        <div className="eds-card-body" style={{ gap: 18 }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.22)", color: "#d3f9d8", fontSize: "0.82rem", fontWeight: 700 }}>Backend camera capture</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.22)", color: "#dbeafe", fontSize: "0.82rem", fontWeight: 700 }}>Attendance API linked</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.22)", color: "#fef3c7", fontSize: "0.82rem", fontWeight: 700 }}>60 s duplicate guard</span>
-            </div>
-
-            <div style={{ marginTop: "1.1rem", display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera
+            <div className="eds-form-grid3">
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera</span>
                 {dbCameras.length > 0 ? (
                   <select
+                    className="eds-input"
                     value={selectedCamId}
                     onChange={(e) => handleCamSelect(e.target.value === "" ? "" : Number(e.target.value))}
-                    style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }}
                   >
                     <option value="">— Select camera —</option>
                     {dbCameras.map((c) => (
@@ -385,39 +536,50 @@ export default function CctvAttendance() {
                     ))}
                   </select>
                 ) : (
-                  <input type="text" value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder="rtsp://user:pass@192.168.1.20:554/Streaming/Channels/101" style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+                  <input className="eds-input" type="text" value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder="rtsp://user:pass@192.168.1.20:554/Streaming/Channels/101" />
                 )}
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera ID
-                <input type="text" value={cameraId} onChange={(e) => setCameraId(e.target.value)} placeholder="gate-1" style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera ID</span>
+                <input className="eds-input" type="text" value={cameraId} onChange={(e) => setCameraId(e.target.value)} placeholder="gate-1" />
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Camera Purpose
-                <select value={cameraType} onChange={(e) => setCameraType(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }}>
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Camera Purpose</span>
+                <select className="eds-input" value={cameraType} onChange={(e) => setCameraType(e.target.value)}>
                   <option value="IN">Check-in (IN)</option>
                   <option value="OUT">Check-out (OUT)</option>
                   <option value="BREAK_OUT">Break-out (BREAK_OUT)</option>
                   <option value="BREAK_IN">Break-in (BREAK_IN)</option>
                 </select>
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Match threshold
-                <input type="number" step="0.01" min="0" max="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Match threshold</span>
+                <input className="eds-input" type="number" step="0.01" min="0" max="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
               </label>
-              <label style={{ display: "grid", gap: "0.35rem", color: "rgba(255,255,255,0.72)" }}>
-                Auto-scan interval (seconds)
-                <input type="number" min="5" step="1" value={scanInterval} onChange={(e) => setScanInterval(e.target.value)} style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)", padding: "0.8rem", background: "#0b1220", color: "#fff" }} />
+              <label className="eds-fieldset">
+                <span className="eds-fieldset-label">Auto-scan interval (seconds)</span>
+                <input className="eds-input" type="number" min="5" step="1" value={scanInterval} onChange={(e) => setScanInterval(e.target.value)} />
               </label>
             </div>
 
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "1.1rem" }}>
-              <button className="btn btn-primary" type="button" onClick={() => void runScan()}>Scan once</button>
-              <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(true)}>Start auto-scan</button>
-              <button className="btn btn-secondary" type="button" onClick={() => setAutoScan(false)}>Stop auto-scan</button>
-              <NavLink className="btn btn-secondary" to="/attendance">Review Attendance</NavLink>
-              <NavLink className="btn btn-secondary" to="/face-detection">Webcam Mode</NavLink>
-              <NavLink className="btn btn-secondary" to="/cctv-cameras">📷 Camera Manager</NavLink>
+            <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginTop: 18 }}>
+              <button className="eds-action eds-action--go" type="button" onClick={() => void runScan()}>
+                <CctvIcons.Play />
+                Scan once
+              </button>
+              <button className="eds-action" type="button" onClick={() => setAutoScan(true)}>
+                <CctvIcons.Play />
+                Start auto-scan
+              </button>
+              <button className="eds-action" type="button" onClick={() => setAutoScan(false)}>
+                <CctvIcons.Stop />
+                Stop auto-scan
+              </button>
+              <NavLink className="eds-action" to="/attendance">Review Attendance</NavLink>
+              <NavLink className="eds-action" to="/cctv-cameras">
+                <CctvIcons.Camera />
+                Camera Manager
+              </NavLink>
             </div>
           </div>
 
@@ -450,27 +612,299 @@ export default function CctvAttendance() {
                     onClick={toggleFullscreen}
                     style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem", borderRadius: 8, cursor: "pointer", background: "rgba(122,162,255,0.15)", border: "1px solid rgba(122,162,255,0.3)", color: "#cfe0ff" }}
                   >
-                    ⛶ Fullscreen
+                    Fullscreen
                   </button>
                 ) : null}
               </div>
-              {selectedCamId !== "" ? (
-                <div ref={feedRef} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
+              {selectedCamId !== "" && mediaToken ? (
+                <div ref={feedRef} className="cctv-feed" data-fill={feedFill} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
                     key={`${selectedCamId}-${feedNonce}`}
-                    src={`${camerasApi.streamUrl(selectedCamId as number)}?n=${feedNonce}`}
+                    className="cctv-feed-img"
+                    src={camerasApi.streamUrl(selectedCamId as number, mediaToken, feedNonce)}
                     alt="Live camera feed"
-                    style={{ width: "100%", display: "block", objectFit: "contain", background: "#000" }}
                     onError={() => {
                       // Reconnect once after a short delay; guard against stacking
                       // multiple timers if onError fires repeatedly.
                       if (feedRetryRef.current != null) return;
                       feedRetryRef.current = window.setTimeout(() => {
                         feedRetryRef.current = null;
+                        // Mint a fresh media token before retrying — an expired
+                        // one would otherwise fail identically on every retry.
+                        void refreshMediaToken();
                         setFeedNonce((n) => n + 1);
                       }, 2000);
                     }}
                   />
+                  {/* Chair occupancy, drawn in FRAME coordinates.
+                      The <img> is object-fit: contain, so a percentage-
+                      positioned div would drift from the picture as soon as the
+                      box is a different aspect ratio. An SVG whose viewBox is
+                      the frame and whose preserveAspectRatio is xMidYMid meet
+                      is letterboxed by exactly the same rule the image is, so
+                      the boxes stay on the chairs at any size, including
+                      fullscreen. */}
+                  {occupancy ? (
+                    <svg
+                      viewBox={`0 0 ${occupancy.frame_width} ${occupancy.frame_height}`}
+                      /* Must be letterboxed by exactly the rule the <img> is,
+                         or the boxes drift off the chairs. "meet" matches
+                         object-fit: contain; "none" matches object-fit: fill,
+                         so a stretched picture gets stretched zones and the two
+                         stay on top of each other. Only fullscreen stretches --
+                         the inline preview is always contained. */
+                      preserveAspectRatio={
+                        isFullscreen && feedFill === "fill"
+                          ? "none"
+                          : "xMidYMid meet"
+                      }
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                    >
+                      {/* Seats another camera owns. Drawn dim and grey, with
+                          no FREE/OCCUPIED, because this camera does not decide
+                          them -- a chair has exactly one owner, or two state
+                          machines argue over one seat. Without these, camera
+                          59's view of the shared desk shows people sitting in
+                          nothing, which reads as a detection failure. */}
+                      {occupancy.observed_elsewhere?.map((z, idx) => {
+                        const [zx1, zy1, zx2, zy2] = z.zone;
+                        const x = zx1 * occupancy.frame_width;
+                        const y = zy1 * occupancy.frame_height;
+                        const w = (zx2 - zx1) * occupancy.frame_width;
+                        const h = (zy2 - zy1) * occupancy.frame_height;
+                        // The owner is named ONCE, on the first zone, rather
+                        // than stamped on all five -- the repetition said
+                        // nothing extra and scattered "cam 60" across the room.
+                        const first = idx === 0;
+                        return (
+                          <g key={`o${z.id}`} opacity={0.3}>
+                            <rect x={x} y={y} width={w} height={h}
+                                  fill="none" stroke="#94a3b8" strokeWidth={1.5}
+                                  strokeDasharray="4 6" />
+                            {first ? (
+                              <text x={x + 4} y={Math.max(12, y - 6)} fill="#cbd5e1" fontSize={13}>
+                                cam {z.owned_by_camera}&apos;s seats
+                              </text>
+                            ) : null}
+                          </g>
+                        );
+                      })}
+                      {occupancy.chairs.map((ch) => {
+                        const [zx1, zy1, zx2, zy2] = ch.zone;
+                        const x = zx1 * occupancy.frame_width;
+                        const y = zy1 * occupancy.frame_height;
+                        const w = (zx2 - zx1) * occupancy.frame_width;
+                        const h = (zy2 - zy1) * occupancy.frame_height;
+                        // THREE states, not two. A chair that has not been
+                        // decided yet is UNKNOWN, and drawing it as FREE was a
+                        // straight contradiction of the panel beside it: four
+                        // seats labelled FREE while the counter said "Free: 0",
+                        // because the counter -- correctly -- would not count an
+                        // undecided seat as free. Whichever number is right, the
+                        // picture and the total have to say the same thing.
+                        const state = ch.occupied
+                          ? "OCCUPIED"
+                          : ch.state === "free"
+                            ? "FREE"
+                            : "UNKNOWN";
+                        const colour = state === "OCCUPIED"
+                          ? "#ef4444"
+                          : state === "FREE"
+                            ? "#22c55e"
+                            : "#94a3b8";
+                        // A chair stays OCCUPIED through the smoothing window
+                        // while its occupant is briefly undetected. That is
+                        // intended, but the operator must be able to tell it
+                        // apart from a live sighting, so a held state is dashed
+                        // and says so.
+                        const held = ch.occupied && !ch.track_visible;
+                        return (
+                          <g key={ch.id}>
+                            <rect
+                              x={x} y={y} width={w} height={h}
+                              fill="none" stroke={colour}
+                              strokeWidth={state === "FREE" ? 2 : 4}
+                              strokeOpacity={state === "FREE" ? 0.75 : 1}
+                              strokeDasharray={held ? "10 8" : undefined}
+                            />
+                            {/* A free seat needs no words. Twelve chairs in a
+                                receding row each carrying a 150x44 caption is
+                                what turned this view into a wall of black
+                                boxes, and "FREE" was the caption on ten of
+                                them -- the least interesting thing on screen,
+                                repeated the most. Free seats are now the quiet
+                                default: a thin outline and a small id, so the
+                                eye goes to the ones that are not free. */}
+                            {state === "FREE" ? (
+                              <text
+                                x={x + 4} y={y + 16} fill={colour} fontSize={14}
+                                fontWeight={600} opacity={0.9}
+                                style={{ paintOrder: "stroke", stroke: "rgba(0,0,0,0.85)", strokeWidth: 3 }}
+                              >
+                                {ch.id}
+                              </text>
+                            ) : (
+                              <>
+                                <rect
+                                  x={x} y={Math.max(0, y - 26)}
+                                  width={Math.max(96, Math.min(w, 190))} height={24}
+                                  fill="rgba(0,0,0,0.75)" rx={3}
+                                />
+                                <text x={x + 5} y={Math.max(14, y - 8)} fill={colour} fontSize={15} fontWeight={700}>
+                                  {ch.id} {state === "OCCUPIED"
+                                    ? (held ? "· held" : `· trk${ch.occupant_track_id}`)
+                                    : "· undecided"}
+                                </text>
+                              </>
+                            )}
+                          </g>
+                        );
+                      })}
+                      {/* Only the people the seat map could NOT place.
+                          V1 already draws a box and a name banner for EVERY
+                          person into the MJPEG itself, so drawing them all
+                          again here put two rectangles and two captions around
+                          each body -- the single biggest source of clutter in
+                          this view. A seated person is already accounted for by
+                          their chair's own "· trkNNN" caption.
+                          What the video cannot say is that somebody is in NO
+                          mapped seat, so that is all this draws. Amber means
+                          "no mapped seat" -- never "not sitting" -- and it is
+                          the correct answer for anyone standing, walking, or in
+                          a chair the camera only half sees. Nobody is ever
+                          snapped to a nearby chair to make the picture tidier. */}
+                      {occupancy.people?.map((pr) => {
+                        const [bx1, by1, bx2, by2] = pr.bbox;
+                        const x = bx1 * occupancy.frame_width;
+                        const y = by1 * occupancy.frame_height;
+                        const w2 = (bx2 - bx1) * occupancy.frame_width;
+                        const h2 = (by2 - by1) * occupancy.frame_height;
+                        if (pr.chair_id != null) return null;
+                        const colour = "#fbbf24";
+                        return (
+                          <g key={`p${pr.track_id}`}>
+                            <rect x={x} y={y} width={w2} height={h2}
+                                  fill="none" stroke={colour} strokeWidth={2}
+                                  strokeDasharray="8 6" />
+                            <rect x={x} y={y + h2} width={Math.max(104, Math.min(w2, 190))} height={22}
+                                  fill="rgba(0,0,0,0.75)" rx={3} />
+                            <text x={x + 5} y={y + h2 + 16} fill={colour}
+                                  fontSize={14} fontWeight={700}>
+                              trk{pr.track_id} · no seat
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  ) : null}
+
+                  {/* Chair counts, in the same stats-box style the feed
+                      already uses, sitting under V1's box rather than fighting
+                      it for the corner.
+
+                      Values are printed exactly as the API returns them.
+                      Recomputing them in the browser would create a second
+                      source of truth that could disagree with the boxes drawn
+                      above -- and the whole point of putting them on the video
+                      is that the number and the picture agree. */}
+                  {occupancy && occupancy.chairs_total > 0 ? (
+                    <div
+                      style={{
+                        position: "absolute", top: 190, right: 8,
+                        padding: "0.5rem 0.7rem", borderRadius: 6,
+                        background: "rgba(0,0,0,0.72)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#fff", fontSize: "0.82rem", fontWeight: 700,
+                        lineHeight: 1.5, fontFamily: "monospace",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <div>Chairs: {occupancy.chairs_total}</div>
+                      <div style={{ color: "#ef4444" }}>
+                        Occupied: {occupancy.chairs_occupied}
+                      </div>
+                      <div style={{ color: "#22c55e" }}>
+                        Free: {occupancy.chairs_free}
+                      </div>
+                      {/* Shown only when there ARE undecided seats, but shown
+                          then without fail: occupied + free must account for
+                          every chair, and when they do not the missing ones
+                          have to be named. A panel reading "Chairs: 6
+                          Occupied: 2  Free: 0" with no explanation is how this
+                          was first noticed as a bug. */}
+                      {occupancy.chairs_unknown > 0 ? (
+                        <div style={{ color: "#94a3b8" }}>
+                          Undecided: {occupancy.chairs_unknown}
+                        </div>
+                      ) : null}
+                      <div style={{ color: "#fbbf24" }}>
+                        Unassigned: {occupancy.unassigned_people}
+                      </div>
+                      {/* "Chairs" above is what THIS CAMERA OWNS, which is not
+                          the room. Cameras 59 and 60 face each other along one
+                          desk, so the row they both see is owned by one of them
+                          and the two cameras' counts must never be added --
+                          that is how a 13-chair room came to look like 18. The
+                          room total is stated separately for that reason. */}
+                      {occupancy.room_chairs_total != null &&
+                       occupancy.room_chairs_total !== occupancy.chairs_total ? (
+                        <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          this camera owns {occupancy.chairs_total} of{" "}
+                          {occupancy.room_chairs_total} in the room
+                        </div>
+                      ) : (
+                        <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          {occupancy.chairs_auto ? "auto-counted seats" : "mapped seats only"}
+                        </div>
+                      )}
+                      {/* A chair the detector has just started seeing is NOT
+                          ignored, it is accumulating evidence -- saying so stops
+                          "I added a chair and nothing happened" from looking
+                          like a failure during the couple of minutes it takes
+                          to confirm. */}
+                      {occupancy.chairs_auto && (occupancy.chairs_pending ?? 0) > 0 ? (
+                        <div style={{ color: "rgba(250,204,21,0.75)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          {occupancy.chairs_pending} possible new seat
+                          {occupancy.chairs_pending === 1 ? "" : "s"} being confirmed
+                        </div>
+                      ) : null}
+                      {/* A correct-but-old answer must not look current. The
+                          count is only ever as fresh as the last COMPLETED
+                          analysis pass, which on this hardware is seconds ago. */}
+                      {occupancy.observation_age_sec != null ? (
+                        <div style={{ color: "rgba(255,255,255,0.45)", fontWeight: 400, fontSize: "0.7rem" }}>
+                          seen {occupancy.observation_age_sec.toFixed(0)}s ago
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* Fill/fit toggle, INSIDE the feed.
+                      It has to live here rather than in the panel header: only
+                      this element goes fullscreen, so a control outside it is
+                      invisible exactly when it is wanted. */}
+                  {isFullscreen ? (
+                    <button
+                      type="button"
+                      onClick={() => setFeedFill((m) => (m === "fill" ? "fit" : "fill"))}
+                      title={
+                        feedFill === "fill"
+                          ? "Filling the screen: the picture is stretched wider than life, but no part of the room is hidden. Click for the true shape."
+                          : "True shape, so black down the sides -- this camera encodes 960x1080. Click to fill the screen."
+                      }
+                      style={{
+                        position: "absolute", bottom: 12, right: 12, zIndex: 5,
+                        fontSize: "0.78rem", padding: "0.35rem 0.7rem",
+                        borderRadius: 8, cursor: "pointer",
+                        background: "rgba(0,0,0,0.6)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#e2e8f0",
+                      }}
+                    >
+                      {feedFill === "fill" ? "Fill screen" : "True shape"}
+                    </button>
+                  ) : null}
+
                   {/* Real-time status bar overlaid on the feed */}
                   <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
@@ -486,16 +920,44 @@ export default function CctvAttendance() {
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#7aa2ff" }}>
                       {(liveStat?.display_fps ?? 0).toFixed(0)} FPS
                     </span>
+                    {/* THREE numbers, never one.
+                        This chip used to read "Faces: N" off `active_tracks`,
+                        which on a body-tracking camera counts BODIES -- so a
+                        room full of people with their backs to the lens was
+                        labelled as a room where no faces were found, and the
+                        two failures became impossible to tell apart.
+
+                        People is the count of bodies and does not depend on
+                        recognition. Recognised and Unknown split that same
+                        number by whether a usable face was read. Unknown is
+                        NOT an error state and never reduces People. */}
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
-                      Faces: {liveStat?.active_tracks ?? 0}
+                      {liveStat?.person_tracking === false ? "Faces" : "People"}:{" "}
+                      {liveStat?.people_tracked ?? liveStat?.active_tracks ?? 0}
                     </span>
+                    {liveStat?.person_tracking !== false ? (
+                      <>
+                        <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#22c55e" }}>
+                          Recognised: {liveStat?.people_recognised ?? 0}
+                        </span>
+                        <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fbbf24" }}>
+                          Unknown: {liveStat?.people_unknown ?? 0}
+                        </span>
+                      </>
+                    ) : null}
                     <span style={{ padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fbbf24" }}>
                       {liveStat?.recognition_status || "idle"}
                     </span>
                   </div>
                 </div>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>Select a camera to see live preview.</div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>
+                  {selectedCamId === ""
+                    ? "Select a camera to see live preview."
+                    : mediaTokenError
+                      ? "Could not authorise the live feed. Check that your account still has camera access."
+                      : "Authorising live feed…"}
+                </div>
               )}
             </div>
           </div>
@@ -508,7 +970,7 @@ export default function CctvAttendance() {
         </div>
       ) : null}
 
-      <section className="card" style={{ marginTop: "1rem", padding: "1.1rem", borderRadius: 22, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <section className="card" style={{ marginTop: "1rem", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
           <div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.42rem 0.75rem", borderRadius: 999, background: "rgba(122,162,255,0.12)", border: "1px solid rgba(122,162,255,0.18)", color: "#cfe0ff", fontSize: "0.82rem", fontWeight: 700 }}>Recognition output</div>
@@ -634,27 +1096,21 @@ export default function CctvAttendance() {
 
       <section style={{ marginTop: "1rem", display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
         <NavLink to="/attendance" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
             <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Attendance Review</div>
             <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Open the daily and monthly attendance grid.</div>
             <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Open Attendance</div>
           </div>
         </NavLink>
         <NavLink to="/cctv-cameras" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(99,102,241,0.3)" }}>
-            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>📷 Camera Manager</div>
+          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 14, background: "var(--eds-card)", color: "var(--eds-text)", border: "1px solid var(--eds-border)" }}>
+            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Camera Manager</div>
             <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Add, configure, and monitor Hikvision DVR cameras.</div>
             <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Manage Cameras</div>
           </div>
         </NavLink>
-        <NavLink to="/face-detection" style={{ textDecoration: "none" }}>
-          <div className="card" style={{ height: "100%", padding: "1.1rem", borderRadius: 20, background: "linear-gradient(180deg, #111827 0%, #0b1220 100%)", color: "#fff", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div style={{ fontWeight: 800, fontSize: "1.02rem" }}>Webcam Mode</div>
-            <div style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>Switch back to browser webcam recognition.</div>
-            <div style={{ marginTop: "0.9rem", color: "#7aa2ff", fontWeight: 800 }}>Open Webcam UI</div>
-          </div>
-        </NavLink>
       </section>
+      </div>
     </div>
   );
 }

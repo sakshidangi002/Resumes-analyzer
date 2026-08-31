@@ -6,22 +6,84 @@ import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 
+/* 24-box strokes, round caps, currentColor. Size comes from the chip or button
+   that holds them (.eds-chip 16px, .eds-iconbtn 15px, .eds-monthnav 13px). */
 const Icons = {
   Edit: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
+      <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path>
     </svg>
   ),
   Trash: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <line x1="10" y1="11" x2="10" y2="17" />
-      <line x1="14" y1="11" x2="14" y2="17" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  ),
+  Building: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21V8l9-5 9 5v13" />
+      <line x1="3" y1="21" x2="21" y2="21" />
+      <rect x="9" y="13" width="6" height="8" />
+    </svg>
+  ),
+  Person: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 21v-1.5A4.5 4.5 0 0 0 14.5 15h-5A4.5 4.5 0 0 0 5 19.5V21" />
+      <circle cx="12" cy="8" r="4" />
+    </svg>
+  ),
+  UserCheck: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20" />
+      <circle cx="10.5" cy="8" r="3.5" />
+      <polyline points="17 11 19 13 22 9" />
+    </svg>
+  ),
+  Calendar: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4.5" width="18" height="16.5" rx="2.5" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+      <line x1="8" y1="2.5" x2="8" y2="6" />
+      <line x1="16" y1="2.5" x2="16" y2="6" />
+    </svg>
+  ),
+  Tasks: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 11 12 14 20 6" />
+      <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+    </svg>
+  ),
+  ChevronLeft: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
     </svg>
   ),
 };
+
+/** Identity tint for a person avatar, stable per employee. */
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+function initialsOf(name: string): string {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.slice(0, 2).map((p) => p[0]).join("").toUpperCase();
+}
+
+/** Accent for an event type pill: birthdays rose, work anniversaries sky,
+ *  everything else (SPECIAL_DAY, custom types) violet. */
+function eventTone(type: string): string {
+  if (type === "BIRTHDAY") return " eds-type--rose";
+  if (type === "ANNIVERSARY") return " eds-type--sky";
+  return " eds-type--violet";
+}
 
 interface Holiday {
   id: number;
@@ -127,6 +189,30 @@ function compareMonthDayIso(aIso: string, bIso: string): number {
   const b = localDayMonthFromIso(bIso);
   if (!a || !b) return 0;
   return a.monthDaySort - b.monthDaySort;
+}
+
+/**
+ * Weekday that a recurring annual date falls on THIS year ("Mon", "Tue", …).
+ *
+ * The "Day" column used to print the day-of-month number, which just repeated
+ * the date already shown in the next column. What people actually plan around
+ * is the weekday — and it has to be computed for the CURRENT year, not the
+ * stored one: the stored year is the person's birth year or their joining
+ * year, whose weekday is irrelevant. The lists themselves are loaded for the
+ * current year (see loadData).
+ */
+function weekdayForThisYear(iso: string): string {
+  const parsed = localDayMonthFromIso(iso);
+  if (!parsed) return "—";
+  const monthIndex = Math.floor(parsed.monthDaySort / 100) - 1;
+  const year = new Date().getFullYear();
+  // Clamp to the month's real length so 29 Feb in a non-leap year shows the
+  // 28 Feb weekday instead of silently rolling into March and showing that one.
+  const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const day = Math.min(parsed.day, lastDayOfMonth);
+  // Midday avoids any DST/timezone edge shifting the date across midnight.
+  return new Date(year, monthIndex, day, 12, 0, 0)
+    .toLocaleDateString("en-IN", { weekday: "short" });
 }
 
 export default function Calendar() {
@@ -321,259 +407,190 @@ export default function Calendar() {
   const nextMonth = () => setMonth(m => m === 12 ? 1 : m + 1);
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Calendar</h1>
-          <div className="page-subtitle">Holidays, events, birthdays, and anniversaries</div>
+          <h1 className="eds-title">Calendar</h1>
+          <p className="eds-subtitle">Holidays, events, birthdays, and anniversaries</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
       {loading ? (
         <div style={{ padding: "4rem 0" }}><SectionLoader size="md" /></div>
       ) : (
-        <>
-
-          {/* <div className="card">
-            <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-              <label style={{ fontWeight: 700, margin: 0, color: "#fff" }}>Month:</label>
-              <div style={{ width: "200px" }}>
-                <CustomSelect
-                  value={month}
-                  onChange={(val) => setMonth(Number(val))}
-                  options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => ({
-                    value: m,
-                    label: new Date(2000, m - 1).toLocaleString("default", { month: "long" })
-                  }))}
-                />
-              </div>
+        <div className="eds-page">
+          <div className="eds-actionbar">
+            <div className="eds-monthnav">
+              <button type="button" onClick={prevMonth} title="Previous month" aria-label="Previous month">
+                <Icons.ChevronLeft />
+              </button>
+              <span className="eds-monthnav-label">{monthName}</span>
+              <button type="button" onClick={nextMonth} title="Next month" aria-label="Next month">
+                <Icons.ChevronRight />
+              </button>
             </div>
-          </div> */}
-          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: "1rem", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="btn-icon-action"
-              onClick={prevMonth}
-              title="Previous month"
-              style={{ borderRadius: "8px" }}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6"></polyline>
-              </svg>
-            </button>
-            <span style={{ fontWeight: 700, fontSize: "1rem", minWidth: "110px", textAlign: "center", color: "var(--text-primary, #fff)" }}>
-              {monthName}
-            </span>
-            <button
-              type="button"
-              className="btn-icon-action"
-              onClick={nextMonth}
-              title="Next month"
-              style={{ borderRadius: "8px" }}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
-            </button>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-              gap: "1rem",
-              marginBottom: "1.5rem",
-            }}
-          >
 
-
-            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Joining dates</h3>
-                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
-                  {anniversaries.length} this month
-                </span>
+          <div className="eds-cards-3">
+            <section className="eds-card">
+              <div className="eds-card-head">
+                <span className="eds-chip eds-chip--violet"><Icons.Building /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Joining dates</h2>
+                  <p className="eds-card-sub">
+                    Work anniversaries occurring in {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
+                  </p>
+                </div>
+                <span className="eds-count-chip"><b>{anniversaries.length}</b>this month</span>
               </div>
-              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Work anniversaries occurring in {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
-              </p>
               {anniversaries.length === 0 ? (
-                <p className="text-muted">No joining dates in this month.</p>
-              ) : (
-                <div className="table-wrap table-wrap--dark">
-                  <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: '20%', textAlign: 'center' }}>Day</th>
-                        <th style={{ width: '45%', textAlign: 'center' }}>Employee</th>
-                        <th style={{ width: '35%', textAlign: 'center' }}>Date of joining</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...anniversaries]
-                        .sort((a, b) => sortByMonthDay(a.date_of_joining, b.date_of_joining))
-                        .map((a) => (
-                          <tr key={a.employee_id}>
-                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{new Date(a.date_of_joining + "T12:00:00").getDate()}</td>
-                            <td style={{ fontWeight: 500, textAlign: 'center' }}>{a.name}</td>
-                            <td style={{ textAlign: 'center' }}>{formatNiceDate(a.date_of_joining)}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+                <div className="eds-well">
+                  <div className="eds-empty--dashed">
+                    <span className="eds-chip"><Icons.Building /></span>
+                    <span className="eds-empty-title">No joining dates in this month.</span>
+                  </div>
                 </div>
-              )}
-            </div>
-            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Birthdays</h3>
-                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
-                  {birthdays.length} this month
-                </span>
-              </div>
-              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
-              </p>
-              {birthdays.length === 0 ? (
-                <p className="text-muted">No birthdays in this month.</p>
               ) : (
-                <div className="table-wrap table-wrap--dark">
-                  <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: '20%', textAlign: 'center' }}>Day</th>
-                        <th style={{ width: '45%', textAlign: 'center' }}>Employee</th>
-                        <th style={{ width: '35%', textAlign: 'center' }}>Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...birthdays]
-                        .sort((a, b) => sortByMonthDay(a.date, b.date))
-                        .map((b) => (
-                          <tr key={b.employee_id}>
-                            <td style={{ fontWeight: 700, textAlign: 'center' }}>{new Date(b.date + "T12:00:00").getDate()}</td>
-                            <td style={{ fontWeight: 500, textAlign: 'center' }}>{b.name}</td>
-                            <td style={{ textAlign: 'center' }}>{formatBirthdayDate(b.date)}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-            <div className="card" style={{ borderTop: "4px solid #22c55e", margin: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 6 }}>Marriage Anniversary</h3>
-                <span className="text-muted" style={{ fontSize: "0.9rem" }}>
-                  {marriageAnniversaries.length} this month
-                </span>
-              </div>
-              <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
-              </p>
-              {marriageAnniversaries.length === 0 ? (
-                <p className="text-muted">No Marriage Anniversary in this month.</p>
-              ) : (
-                <div className="table-wrap table-wrap--dark">
-                  <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: '20%', textAlign: 'center' }}>Day</th>
-                        <th style={{ width: '45%', textAlign: 'center' }}>Employee</th>
-                        <th style={{ width: '35%', textAlign: 'center' }}>Date of marriage</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...marriageAnniversaries]
-                        .sort((a, b) => sortByMonthDay(a.date_of_marriage, b.date_of_marriage))
-                        .map((mRow) => {
-                          const dm = localDayMonthFromIso(mRow.date_of_marriage);
-                          return (
-                            <tr key={`${mRow.employee_id}-${mRow.date_of_marriage}`}>
-                              <td style={{ textAlign: "center" }}>{dm?.day ?? "—"}</td>
-                              <td style={{ fontWeight: 500, textAlign: "center" }}>{mRow.name}</td>
-                              <td style={{ fontWeight: "500", textAlign: "center" }}>
-                                {formatBirthdayDateSafe(mRow.date_of_marriage)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-
-
-            {/* <div className="card" style={{ borderTop: "4px solid var(--brand-500)", margin: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "baseline" }}>
-            <h3 style={{ marginTop: 0, marginBottom: 6 }}>Joining dates</h3>
-            <span className="text-muted" style={{ fontSize: "0.9rem" }}>
-              {anniversaries.length} this month
-            </span>
-          </div>
-          <p className="text-muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-            Work anniversaries occurring in {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
-          </p>
-          {anniversaries.length === 0 ? (
-            <p className="text-muted">No joining dates in this month.</p>
-          ) : (
-            <div className="table-wrap table-wrap--dark">
-              <table className="table-modern table-modern--dark">
-                <thead>
-                  <tr>
-                    <th style={{ width: 70 }}>Day</th>
-                    <th>Employee</th>
-                    <th style={{ textAlign: "right" }}>Date of joining</th>
-                  </tr>
-                </thead>
-                <tbody>
+                <div className="eds-minitable">
+                  <div className="eds-minitable-head">
+                    <span>Day</span><span>Employee</span><span style={{ textAlign: "right" }}>Date of joining</span>
+                  </div>
                   {[...anniversaries]
                     .sort((a, b) => sortByMonthDay(a.date_of_joining, b.date_of_joining))
                     .map((a) => (
-                      <tr key={a.employee_id}>
-                        <td style={{ fontWeight: 700 }}>{new Date(a.date_of_joining + "T12:00:00").getDate()}</td>
-                        <td style={{ fontWeight: 500 }}>{a.name}</td>
-                        <td style={{ textAlign: "right" }}>{formatNiceDate(a.date_of_joining)}</td>
-                      </tr>
+                      <div className="eds-minitable-row" key={a.employee_id}>
+                        <span className="eds-minitable-day">{weekdayForThisYear(a.date_of_joining)}</span>
+                        <div className="eds-minitable-who">
+                          <span className={`eds-avatar eds-avatar--sm ${AVATAR_TINTS[a.employee_id % AVATAR_TINTS.length]}`}>
+                            {initialsOf(a.name)}
+                          </span>
+                          <span>{a.name}</span>
+                        </div>
+                        <span className="eds-minitable-date">{formatNiceDate(a.date_of_joining)}</span>
+                      </div>
                     ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div> */}
+                </div>
+              )}
+            </section>
+
+            <section className="eds-card">
+              <div className="eds-card-head">
+                <span className="eds-chip eds-chip--rose"><Icons.Person /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Birthdays</h2>
+                  <p className="eds-card-sub">
+                    Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
+                  </p>
+                </div>
+                <span className={`eds-count-chip${birthdays.length > 0 ? " eds-count-chip--rose" : ""}`}>
+                  <b>{birthdays.length}</b>this month
+                </span>
+              </div>
+              {birthdays.length === 0 ? (
+                <div className="eds-well">
+                  <div className="eds-empty--dashed">
+                    <span className="eds-chip"><Icons.Person /></span>
+                    <span className="eds-empty-title">No birthdays in this month.</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="eds-minitable">
+                  <div className="eds-minitable-head">
+                    <span>Day</span><span>Employee</span><span style={{ textAlign: "right" }}>Date</span>
+                  </div>
+                  {[...birthdays]
+                    .sort((a, b) => sortByMonthDay(a.date, b.date))
+                    .map((b) => (
+                      <div className="eds-minitable-row" key={b.employee_id}>
+                        <span className="eds-minitable-day">{weekdayForThisYear(b.date)}</span>
+                        <div className="eds-minitable-who">
+                          <span className={`eds-avatar eds-avatar--sm ${AVATAR_TINTS[b.employee_id % AVATAR_TINTS.length]}`}>
+                            {initialsOf(b.name)}
+                          </span>
+                          <span>{b.name}</span>
+                        </div>
+                        <span className="eds-minitable-date">{formatBirthdayDate(b.date)}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </section>
+
+            <section className="eds-card">
+              <div className="eds-card-head">
+                <span className="eds-chip eds-chip--sky"><Icons.UserCheck /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Marriage Anniversary</h2>
+                  <p className="eds-card-sub">
+                    Automatically synced from employee profiles for {new Date(2000, month - 1).toLocaleString('default', { month: 'long' })}.
+                  </p>
+                </div>
+                <span className="eds-count-chip"><b>{marriageAnniversaries.length}</b>this month</span>
+              </div>
+              {marriageAnniversaries.length === 0 ? (
+                <div className="eds-well">
+                  <div className="eds-empty--dashed">
+                    <span className="eds-chip"><Icons.UserCheck /></span>
+                    <span className="eds-empty-title">No Marriage Anniversary in this month.</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="eds-minitable">
+                  <div className="eds-minitable-head">
+                    <span>Day</span><span>Employee</span><span style={{ textAlign: "right" }}>Date of marriage</span>
+                  </div>
+                  {[...marriageAnniversaries]
+                    .sort((a, b) => sortByMonthDay(a.date_of_marriage, b.date_of_marriage))
+                    .map((mRow) => (
+                      <div className="eds-minitable-row" key={`${mRow.employee_id}-${mRow.date_of_marriage}`}>
+                        <span className="eds-minitable-day">{weekdayForThisYear(mRow.date_of_marriage)}</span>
+                        <div className="eds-minitable-who">
+                          <span className={`eds-avatar eds-avatar--sm ${AVATAR_TINTS[mRow.employee_id % AVATAR_TINTS.length]}`}>
+                            {initialsOf(mRow.name)}
+                          </span>
+                          <span>{mRow.name}</span>
+                        </div>
+                        <span className="eds-minitable-date">{formatBirthdayDateSafe(mRow.date_of_marriage)}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </section>
           </div>
 
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1.5rem" }}>
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Holidays</h3>
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--emerald"><Icons.Calendar /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Holidays</h2>
+              </div>
               {canManageHolidays && (
-                <button type="button" className="btn btn-primary btn-uniform" onClick={openAddHoliday}>
+                <button type="button" className="eds-action eds-action--info" onClick={openAddHoliday}>
                   Add holiday
                 </button>
               )}
             </div>
             {holidays.length > 0 ? (
-              <div className="table-wrap table-wrap--dark">
-                <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <div className="eds-table-wrap">
+                <table className="eds-table eds-table--auto">
                   <thead>
                     <tr>
-                      <th style={{ width: canManageHolidays ? '35%' : '40%', textAlign: 'center' }}>Date</th>
-                      <th style={{ width: canManageHolidays ? '45%' : '60%', textAlign: 'center' }}>Name</th>
-                      {canManageHolidays && <th style={{ width: '20%', textAlign: 'center' }}>Actions</th>}
+                      <th>Date</th>
+                      <th>Name</th>
+                      {canManageHolidays && <th className="is-actions">Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {[...holidays].sort((a, b) => new Date(a.date + "T12:00:00").getTime() - new Date(b.date + "T12:00:00").getTime()).map((h) => (
                       <tr key={h.id}>
-                        <td style={{ textAlign: 'center' }}>{formatNiceDate(h.date)}</td>
-                        <td style={{ textAlign: 'center' }}>{h.name}</td>
+                        <td className="eds-cell-dim">{formatNiceDate(h.date)}</td>
+                        <td className="eds-cell-strong">{h.name}</td>
                         {canManageHolidays && (
-                          <td style={{ textAlign: 'center' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                          <td>
+                            <div className="eds-rowactions">
                               <button
                                 type="button"
-                                className="btn btn-icon-action btn-icon-action--danger"
+                                className="eds-iconbtn eds-iconbtn--del"
                                 onClick={() => deleteHoliday(h)}
                                 title="Delete Holiday"
                                 aria-label="Delete"
@@ -589,31 +606,45 @@ export default function Calendar() {
                 </table>
               </div>
             ) : (
-              <p className="text-muted">No holidays in this month.</p>
+              <div className="eds-well">
+                <div className="eds-empty--dashed">
+                  <span className="eds-chip"><Icons.Calendar /></span>
+                  <span className="eds-empty-title">No holidays in this month.</span>
+                </div>
+              </div>
             )}
-          </div>
-          <div className="card" style={{ marginTop: "1.5rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1.5rem" }}>
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Events & Special Days</h3>
+          </section>
+
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--amber"><Icons.Tasks /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Events &amp; Special Days</h2>
+              </div>
               {canEditEvents && (
-                <button type="button" className="btn btn-primary btn-uniform" onClick={openAddEvent}>
+                <button type="button" className="eds-action eds-action--info" onClick={openAddEvent}>
                   Add Event
                 </button>
               )}
             </div>
             {events.length === 0 ? (
-              <p className="text-muted">No events in this month.</p>
+              <div className="eds-well">
+                <div className="eds-empty--dashed">
+                  <span className="eds-chip"><Icons.Tasks /></span>
+                  <span className="eds-empty-title">No events in this month.</span>
+                </div>
+              </div>
             ) : (
-              <div className="table-wrap table-wrap--dark">
-                <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <div className="eds-table-wrap">
+                <table className="eds-table eds-table--auto">
                   <thead>
                     <tr>
-                      <th style={{ width: canEditEvents ? '15%' : '18%', textAlign: 'center' }}>Date</th>
-                      <th style={{ width: canEditEvents ? '20%' : '22%', textAlign: 'center' }}>Title</th>
-                      <th style={{ width: canEditEvents ? '12%' : '15%', textAlign: 'center' }}>Type</th>
-                      <th style={{ width: canEditEvents ? '18%' : '20%', textAlign: 'center' }}>Employee</th>
-                      <th style={{ width: canEditEvents ? '20%' : '25%', textAlign: 'center' }}>Description</th>
-                      {canEditEvents && <th style={{ width: '15%', textAlign: 'center' }}>Actions</th>}
+                      <th>Date</th>
+                      <th>Title</th>
+                      <th>Type</th>
+                      <th>Employee</th>
+                      <th>Description</th>
+                      {canEditEvents && <th className="is-actions">Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -643,40 +674,27 @@ export default function Calendar() {
                       .sort((a, b) => new Date(b.date + "T12:00:00").getTime() - new Date(a.date + "T12:00:00").getTime())
                       .map((ev) => (
                         <tr key={ev.id}>
-                          <td style={{ color: "inherit", textAlign: 'center' }}>
-                            {formatNiceDate(ev.date)}
-                          </td>
-                          <td style={{ fontWeight: 600, textAlign: 'center' }}>
-                            <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
-                              {ev.title}
-                              {(ev as any).is_auto && (
-                                <span style={{ fontSize: "0.6rem", padding: "2px 6px", background: "rgba(255,255,255,0.06)", borderRadius: "4px", color: "var(--brand-300)", fontWeight: 700 }}>AUTO</span>
-                              )}
-                            </div>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span style={{
-                              fontSize: "0.7rem",
-                              padding: "3px 10px",
-                              borderRadius: "999px",
-                              background: ev.event_type === "BIRTHDAY" ? "rgba(236, 72, 153, 0.1)" : ev.event_type === "ANNIVERSARY" ? "rgba(var(--brand-rgb) / 0.1)" : "rgba(255,255,255,0.05)",
-                              color: ev.event_type === "BIRTHDAY" ? "#f472b6" : ev.event_type === "ANNIVERSARY" ? "var(--brand-300)" : "rgba(255,255,255,0.7)",
-                              border: "1px solid currentColor",
-                              fontWeight: 700,
-                              display: "inline-block"
-                            }}>
-                              {ev.event_type}
+                          <td className="eds-cell-dim">{formatNiceDate(ev.date)}</td>
+                          <td>
+                            <span className="eds-title-inline">
+                              <span>{ev.title}</span>
+                              {(ev as any).is_auto && <span className="eds-auto">AUTO</span>}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'center' }}>{ev.employee_name ?? "—"}</td>
-                          <td style={{ fontSize: "0.85rem", opacity: 0.7, textAlign: 'center' }}>{ev.description}</td>
+                          <td>
+                            <span className={`eds-type${eventTone(ev.event_type)}`}>{ev.event_type}</span>
+                          </td>
+                          <td className="eds-cell-strong">{ev.employee_name ?? "—"}</td>
+                          <td className="eds-cell-dim eds-cell-clip">{ev.description || "—"}</td>
                           {canEditEvents && (
-                            <td style={{ textAlign: 'center' }}>
-                              {!(ev as any).is_auto && (
-                                <div style={{ display: 'inline-flex', gap: '0.5rem', justifyContent: 'center' }}>
+                            <td>
+                              {(ev as any).is_auto ? (
+                                <div className="eds-rowactions"><span className="eds-dash">—</span></div>
+                              ) : (
+                                <div className="eds-rowactions">
                                   <button
                                     type="button"
-                                    className="btn btn-icon-action btn-icon-action--neutral"
+                                    className="eds-iconbtn eds-iconbtn--edit"
                                     onClick={() => openEditEvent(ev)}
                                     title="Edit Event"
                                     aria-label="Edit"
@@ -685,7 +703,7 @@ export default function Calendar() {
                                   </button>
                                   <button
                                     type="button"
-                                    className="btn btn-icon-action btn-icon-action--danger"
+                                    className="eds-iconbtn eds-iconbtn--del"
                                     onClick={() => deleteEvent(ev)}
                                     title="Delete Event"
                                     aria-label="Delete"
@@ -702,10 +720,9 @@ export default function Calendar() {
                 </table>
               </div>
             )}
-          </div>
-        </>
+          </section>
+        </div>
       )}
-
 
       {showHolidayModal && (
         <div className="modal-backdrop" onClick={() => setShowHolidayModal(false)}>
@@ -867,6 +884,6 @@ export default function Calendar() {
         }
         confirmText="Yes, Delete Holiday"
       />
-    </>
+    </div>
   );
 }

@@ -38,13 +38,14 @@ import fnmatch
 import json
 import logging
 import os
-import stat
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 try:
     import paramiko
@@ -281,7 +282,7 @@ def ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
         try:
             sftp.mkdir(current)
         except OSError:
-            pass
+            logger.warning("sftp.mkdir failed", exc_info=True)
 
 
 def upload_file(
@@ -758,13 +759,13 @@ class DebouncedSyncHandler:
             try:
                 self._sftp.close()
             except Exception:
-                pass
+                logger.debug("SFTP connection close failed", exc_info=True)
             self._sftp = None
         if self._ssh:
             try:
                 self._ssh.close()
             except Exception:
-                pass
+                logger.debug("SSH connection close failed", exc_info=True)
             self._ssh = None
 
     def schedule(self, path: str) -> None:

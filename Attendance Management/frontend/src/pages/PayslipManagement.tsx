@@ -35,20 +35,27 @@ interface EmployeeOption {
   full_name: string;
 }
 
-// Premium SVG Icons for Actions
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-chip 16px, .eds-iconbtn 15px, .eds-empty-tile 20px). */
 const Icons = {
   View: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"></path>
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   ),
   Delete: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-      <line x1="10" y1="11" x2="10" y2="17"></line>
-      <line x1="14" y1="11" x2="14" y2="17"></line>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 21 6"></polyline>
+      <path d="M8 6V4h8v2"></path>
+      <path d="M6 6l1 14h10l1-14"></path>
+    </svg>
+  ),
+  Payslip: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path>
+      <polyline points="14 3 14 8 19 8"></polyline>
+      <polyline points="9 14 11 16 15 12"></polyline>
     </svg>
   ),
 };
@@ -161,21 +168,25 @@ export default function PayslipManagement() {
 
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Payslip Management</h1>
-          <div className="page-subtitle">Create, edit, and manage payslips</div>
+          <h1 className="eds-title">Payslip Registry</h1>
+          <p className="eds-subtitle">Create, edit, and manage payslips</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem" }}>
-          <h3 style={{ margin: 0 }}>Payslips</h3>
-          <div style={{ display: "flex", gap: "0.75rem" }}>
-            <div style={{ minWidth: "160px" }}>
+      <div className="eds-page">
+        <section className="eds-card">
+          <div className="eds-card-head">
+            <span className="eds-chip eds-chip--emerald"><Icons.Payslip /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Payslips</h2>
+            </div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: "0.6rem", flexShrink: 0 }}>
               <CustomSelect
+                className="eds-cselect eds-cselect--filter"
                 value={filterMonth}
                 onChange={setFilterMonth}
                 placeholder="All Months"
@@ -187,9 +198,8 @@ export default function PayslipManagement() {
                   }))
                 ]}
               />
-            </div>
-            <div style={{ minWidth: "120px" }}>
               <CustomSelect
+                className="eds-cselect eds-cselect--year"
                 value={filterYear}
                 onChange={setFilterYear}
                 placeholder="All Years"
@@ -202,67 +212,64 @@ export default function PayslipManagement() {
               />
             </div>
           </div>
-        </div>
 
-        {loading ? (
-          <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
-        ) : sortedPayslips.length === 0 ? (
-          <p className="text-muted" style={{ padding: "1.5rem", textAlign: "center", background: "rgba(255,255,255,0.02)", borderRadius: "12px", border: "1px dashed rgba(255,255,255,0.1)" }}>
-            No payslips found for the selected period.
-          </p>
-        ) : (
-          <div className="table-wrap table-wrap--dark">
-            <table className="table-modern table-modern--dark">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th className="hide-sm" style={{ textAlign: 'center' }}>Period</th>
-                  <th style={{ textAlign: 'center' }}>Net Salary</th>
-                  <th className="hide-md" style={{ textAlign: 'center' }}>Paid Days</th>
-                  <th className="hide-md" style={{ textAlign: 'center' }}>LOP Days</th>
-                  <th className="hide-sm" style={{ textAlign: 'center' }}>
-                    <div style={{ display: 'flex', justifyContent: 'center' }}>Generated</div>
-                  </th>
-                  <th className="actions-center">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedPayslips.map((p) => (
-                  <tr key={p.id}>
-                    <td>{employeeLabel(p.employee_id)}</td>
-                    <td className="hide-sm" style={{ textAlign: "center" }}>{periodLabel(p.payroll_period_id)}</td>
-                    <td style={{ textAlign: 'center' }}>{Number(p.net_salary).toFixed(2)}</td>
-                    <td className="hide-md" style={{ textAlign: "center" }}>{p.paid_days}</td>
-                    <td className="hide-md" style={{ textAlign: "center" }}>{p.lop_days}</td>
-                    <td className="hide-sm" style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>{fmtDateTime(p.generated_at)}</div>
-                    </td>
-                    <td className="actions-center">
-                      <div className="actions-stack horizontal">
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-icon btn-sm"
-                          onClick={() => setFormulaPayslip(p)}
-                          title="View Calculation"
-                        >
-                          <Icons.View />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger btn-icon btn-sm"
-                          onClick={() => handleDelete(p)}
-                          title="Delete Payslip"
-                        >
-                          <Icons.Delete />
-                        </button>
-                      </div>
-                    </td>
+          {loading ? (
+            <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
+          ) : sortedPayslips.length === 0 ? (
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.Payslip /></span>
+              <span>No payslips found for the selected period.</span>
+            </div>
+          ) : (
+            <div className="eds-table-wrap">
+              <table className="eds-table eds-table--auto payslip-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th className="hide-sm">Period</th>
+                    <th className="is-actions pay-center">Net Salary</th>
+                    <th className="hide-md is-actions pay-center">Paid Days</th>
+                    <th className="hide-md is-actions pay-center">LOP Days</th>
+                    <th className="hide-sm">Generated</th>
+                    <th className="is-actions">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {sortedPayslips.map((p) => (
+                    <tr key={p.id}>
+                      <td className="eds-cell-strong">{employeeLabel(p.employee_id)}</td>
+                      <td className="hide-sm eds-cell-time">{periodLabel(p.payroll_period_id)}</td>
+                      <td className="eds-money eds-money--net pay-center">{Number(p.net_salary).toFixed(2)}</td>
+                      <td className="hide-md eds-money pay-center">{p.paid_days}</td>
+                      <td className={`hide-md eds-money pay-center${Number(p.lop_days) > 0 ? " eds-money--lop" : " eds-money--zero"}`}>{p.lop_days}</td>
+                      <td className="hide-sm eds-cell-dim">{fmtDateTime(p.generated_at)}</td>
+                      <td>
+                        <div className="eds-rowactions">
+                          <button
+                            type="button"
+                            className="eds-iconbtn eds-iconbtn--view"
+                            onClick={() => setFormulaPayslip(p)}
+                            title="View Calculation"
+                          >
+                            <Icons.View />
+                          </button>
+                          <button
+                            type="button"
+                            className="eds-iconbtn eds-iconbtn--del"
+                            onClick={() => handleDelete(p)}
+                            title="Delete Payslip"
+                          >
+                            <Icons.Delete />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
 
       {formulaPayslip && (
@@ -300,6 +307,6 @@ export default function PayslipManagement() {
         }
         confirmText="Yes, Delete Payslip"
       />
-    </>
+    </div>
   );
 }

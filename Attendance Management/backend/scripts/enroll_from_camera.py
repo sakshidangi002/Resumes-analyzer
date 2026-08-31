@@ -1,0 +1,306 @@
+"""Enrol an employee's face FROM THE CAMERA THAT WILL RECOGNISE THEM.
+
+Why this exists
+---------------
+Recognition compares a live frame against enrolled reference photos. The
+reference photos are studio-quality close-ups; the live frames are 27-45px faces
+from a ceiling camera, downscaled and JPEG-compressed. Those are two different
+image domains, and the model spends its discriminative power on the gap between
+them rather than on identity.
+
+MEASURED on this system's own enrolled photos (same person, same photo, only the
+REFERENCE quality differing):
+
+    reference              genuine   impostor   separation
+    clean close-up           0.715      0.032        0.683
+    degraded to ~30px        0.862      0.048        0.814
+
+The degraded reference wins on BOTH axes — genuine similarity rises sharply
+while impostor similarity barely moves. Matching the domain is worth more than
+reference sharpness.
+
+That is why the normal upload path's 90px minimum (FACE_ENROLL_MIN_FACE_PX)
+rejects exactly the images that would help most here. This tool deliberately
+takes a different path, with a lower but non-zero quality floor.
+
+Deliberately TWO STEPS, because the tool cannot know who it is looking at:
+
+    # 1. grab candidate faces and write them out for you to LOOK at
+    python scripts/enroll_from_camera.py capture --camera 59 --shots 12
+
+    # 2. after eyeballing the crops, attach the good ones to an employee
+    python scripts/enroll_from_camera.py commit --dir <dir> --employee 4 --faces 1,3,5
+
+New embeddings are APPENDED to the employee's existing stack, never replacing
+it. The matcher takes the best over the stack, so adding camera-domain
+references can only help genuine recall — and the enrollment-bias correction in
+services/match.py keeps unequal photo counts from skewing the ranking.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+from app.db.session import SessionLocal  # noqa: E402
+from app.models.camera import CameraConfig  # noqa: E402
+from app.models.employee import Employee  # noqa: E402
+from app.services.camera_service import open_capture_with_timeout  # noqa: E402
+from app.services.embedding_cache import (  # noqa: E402
+    get_employee_candidates,
+)
+from app.services.employee_face_service import enroll_embeddings  # noqa: E402
+from app.services.face_service import extract_faces_from_rgb  # noqa: E402
+from app.services.match import find_best_match  # noqa: E402
+
+REVIEW_ROOT = Path(__file__).resolve().parents[1] / "data" / "enroll_review"
+
+# Quality floor. Far below the upload path's 90px — the whole point is to accept
+# camera-domain faces — but NOT zero: below ~20px an embedding carries no
+# identity at all and would poison the gallery, matching everyone equally.
+MIN_FACE_PX = int(__import__("os").getenv("ENROLL_CAM_MIN_FACE_PX", "20"))
+MIN_DET_SCORE = float(__import__("os").getenv("ENROLL_CAM_MIN_DET_SCORE", "0.30"))
+MAX_STACK = int(__import__("os").getenv("ENROLL_CAM_MAX_STACK", "20"))
+
+
+def _face_px(face) -> float:
+    box = face["box"]
+    return float(box[2] - box[0])
+
+
+def _turn(face) -> tuple[float, str]:
+    """How far the head is turned, from the 5-point landmarks.
+
+    Returns (asymmetry 0..1, label). 0 = nose centred between the eyes
+    (frontal), ~1 = nose aligned with one eye (full profile).
+
+    Reported because ArcFace is POSE-SENSITIVE: a profile probe matched against
+    a frontal reference scores far below a profile matched against a profile.
+    Measured on this camera, a side-view face scored 0.20-0.62 against the
+    frontal enrolled photos, but 0.581 against a same-angle template. So the
+    gallery needs COVERAGE of the angles the camera actually sees — collect a
+    spread, not five copies of one pose.
+
+    The normal upload path REJECTS anything above 0.60 asymmetry
+    (FACE_ENROLL_MAX_FACE_ASYM), which is exactly why profiles cannot be
+    enrolled through the UI and this tool exists.
+    """
+    kps = face.get("kps")
+    if not kps or len(kps) < 3:
+        return -1.0, "unknown"
+    left_eye, right_eye, nose = kps[0], kps[1], kps[2]
+    dl = abs(nose[0] - left_eye[0])
+    dr = abs(right_eye[0] - nose[0])
+    span = dl + dr
+    if span <= 1e-3:
+        return 1.0, "profile"
+    asym = abs(dl - dr) / span
+    if asym < 0.25:
+        label = "frontal"
+    elif asym < 0.60:
+        label = "angled"          # accepted by the UI upload path
+    else:
+        label = "profile"         # REJECTED by the UI; only this tool can enrol it
+    return asym, label
+
+
+def _resolve_source(camera_id: int | None, url: str | None) -> tuple[str, str]:
+    if url:
+        return url, f"url:{url[:40]}"
+    with SessionLocal() as db:
+        cam = db.query(CameraConfig).filter(CameraConfig.id == camera_id).first()
+        if not cam:
+            raise SystemExit(f"camera id {camera_id} not found")
+        return cam.source_url, f"{cam.id} ({cam.name})"
+
+
+def capture(args) -> int:
+    source, label = _resolve_source(args.camera, args.url)
+    cap = open_capture_with_timeout(source, "rtsp", args.camera or 0, timeout_sec=20)
+    if cap is None:
+        raise SystemExit("could not open the camera stream")
+
+    out_dir = REVIEW_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    gallery = get_employee_candidates()
+
+    print(f"camera {label}")
+    print(f"capturing {args.shots} candidate face(s) every ~{args.every:.1f}s")
+    print(f"quality floor: >= {MIN_FACE_PX}px, det_score >= {MIN_DET_SCORE}")
+    print()
+
+    manifest: list[dict] = []
+    index = 0
+    deadline = time.time() + args.shots * args.every + 30
+
+    while len(manifest) < args.shots and time.time() < deadline:
+        frame = None
+        for _ in range(int(max(1, args.every * 10))):
+            ok, f = cap.read()
+            if ok and f is not None:
+                frame = f
+        if frame is None:
+            continue
+
+        faces = extract_faces_from_rgb(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        for face in sorted(faces, key=_face_px, reverse=True):
+            px = _face_px(face)
+            det = float(face.get("confidence", 0.0))
+            if px < MIN_FACE_PX or det < MIN_DET_SCORE:
+                continue
+
+            index += 1
+            x1, y1, x2, y2 = (int(v) for v in face["box"][:4])
+            pad_x, pad_y = int((x2 - x1) * 0.4), int((y2 - y1) * 0.4)
+            h, w = frame.shape[:2]
+            crop = frame[max(0, y1 - pad_y):min(h, y2 + pad_y),
+                         max(0, x1 - pad_x):min(w, x2 + pad_x)]
+            if crop.size == 0:
+                continue
+
+            name = f"face_{index:02d}"
+            cv2.imwrite(str(out_dir / f"{name}.jpg"), crop)
+            np.save(out_dir / f"{name}.npy", face["embedding"])
+
+            # Who does it currently look like? NOT used to assign anything —
+            # only so the operator can sanity-check before committing.
+            best = find_best_match(face["embedding"], gallery, threshold=0.0, min_margin=0.0)
+            asym, pose = _turn(face)
+            manifest.append({
+                "id": index, "file": f"{name}.jpg", "face_px": round(px, 1),
+                "det_score": round(det, 3),
+                "turn": round(asym, 3), "pose": pose,
+                "pose_values": face.get("pose") or {},
+                "camera_id": str(args.camera) if args.camera is not None else None,
+                "captured_at": datetime.now().isoformat(timespec="seconds"),
+                "current_best_match": best["employee_name"],
+                "current_best_score": round(best["score"], 3),
+            })
+            print(f"  [{index:2d}] {px:5.0f}px  det={det:.2f}  {pose:<8} "
+                  f"(turn {asym:.2f})  looks most like: "
+                  f"{best['employee_name']} ({best['score']:.3f})")
+            break     # one face per frame — the largest
+
+    cap.release()
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    poses = {}
+    for m in manifest:
+        poses[m["pose"]] = poses.get(m["pose"], 0) + 1
+
+    print()
+    print(f"wrote {len(manifest)} candidate(s) to:")
+    print(f"  {out_dir}")
+    print()
+    print(f"  angle coverage: {poses or 'none'}")
+    if len(poses) < 2:
+        print("  ^ only ONE pose captured. ArcFace is pose-sensitive, so a gallery")
+        print("    of a single angle will only match that angle. Re-run while the")
+        print("    person turns/works normally to collect frontal AND profile views.")
+    print()
+    print("LOOK AT THE JPEGs, then commit only the ones that are the right person:")
+    print(f"  python scripts/enroll_from_camera.py commit --dir \"{out_dir}\" "
+          f"--employee <ID> --faces 1,2,3")
+    return 0
+
+
+def commit(args) -> int:
+    review_dir = Path(args.dir)
+    if not review_dir.is_dir():
+        raise SystemExit(f"not a directory: {review_dir}")
+
+    wanted = [int(x) for x in args.faces.split(",") if x.strip()]
+    vectors = []
+    manifest_path = review_dir / "manifest.json"
+    try:
+        manifest_rows = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"could not read {manifest_path.name}: {exc}") from exc
+    manifest_by_id = {int(row.get("id")): row for row in manifest_rows}
+    for face_id in wanted:
+        path = review_dir / f"face_{face_id:02d}.npy"
+        if not path.exists():
+            raise SystemExit(f"no such candidate: {path.name}")
+        row = manifest_by_id.get(face_id)
+        if row is None:
+            raise SystemExit(f"manifest has no entry for candidate {face_id}")
+        vector = np.load(path).astype(np.float32)
+        pose_values = row.get("pose_values") or {}
+        vectors.append(
+            {
+                "embedding": vector,
+                "camera_id": row.get("camera_id"),
+                "source": "cctv",
+                "aligned": True,
+                "face_px": row.get("face_px"),
+                "quality_score": row.get("quality_score"),
+                "yaw": pose_values.get("yaw"),
+                "pitch": pose_values.get("pitch"),
+            }
+        )
+
+    with SessionLocal() as db:
+        emp = db.query(Employee).filter(Employee.id == args.employee).first()
+        if not emp:
+            raise SystemExit(f"employee {args.employee} not found")
+
+        print(f"employee {emp.id} — {emp.full_name}")
+        print(f"  adding {len(vectors)} camera-domain embedding(s)"
+              f" (gallery cap {MAX_STACK})")
+
+        if args.dry_run:
+            print("  DRY RUN — nothing written")
+            return 0
+
+    # Persist through the provenance-aware service. It rebuilds the hot matcher
+    # stack from active, model-compatible gallery rows and invalidates the cache.
+    # The database lookup above remains a friendly early validation for the CLI.
+    added = enroll_embeddings(
+        int(args.employee),
+        vectors,
+        source="cctv",
+        detector="insightface",
+        replace=False,
+    )
+
+    print(f"  committed {added} camera-domain embedding(s); embedding cache invalidated")
+    print()
+    print("Recognition uses the BEST match across the stack, so the clean photos")
+    print("still apply — these camera-domain references are additive.")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    cap_p = sub.add_parser("capture", help="grab candidate faces for review")
+    cap_p.add_argument("--camera", type=int, help="camera id from the cameras table")
+    cap_p.add_argument("--url", help="use an RTSP url directly instead")
+    cap_p.add_argument("--shots", type=int, default=10)
+    cap_p.add_argument("--every", type=float, default=2.0, help="seconds between shots")
+    cap_p.set_defaults(func=capture)
+
+    com_p = sub.add_parser("commit", help="attach reviewed faces to an employee")
+    com_p.add_argument("--dir", required=True)
+    com_p.add_argument("--employee", type=int, required=True)
+    com_p.add_argument("--faces", required=True, help="e.g. 1,3,5")
+    com_p.add_argument("--dry-run", action="store_true")
+    com_p.set_defaults(func=commit)
+
+    args = parser.parse_args()
+    if args.cmd == "capture" and not args.camera and not args.url:
+        raise SystemExit("capture needs --camera or --url")
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

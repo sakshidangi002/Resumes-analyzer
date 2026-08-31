@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import logging
 import os
-import threading
 from functools import lru_cache
 
 import numpy as np
@@ -14,7 +13,12 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL_VERSION = "insightface_buffalo_l_v1"
+RECOGNITION_BACKEND = os.getenv("FACE_RECOGNITION_MODEL", "arcface").lower()
+EMBEDDING_MODEL_VERSION = (
+    "adaface_ir50_webface4m_v1"
+    if RECOGNITION_BACKEND == "adaface"
+    else "insightface_buffalo_l_v1"
+)
 DETECTION_THRESHOLD = 0.32
 # Detector input resolution. Larger = finds smaller / more DISTANT faces (a far
 # frontal face keeps enough pixels to be detected) at the cost of speed. 640 (the
@@ -24,7 +28,13 @@ DETECTION_THRESHOLD = 0.32
 # accuracy unchanged). Overridable via FACE_DETECTION_SIZE env if needed.
 DETECTION_SIZE = (int(os.getenv("FACE_DETECTION_SIZE", "1024")),) * 2
 
-_inference_lock = threading.Lock()
+# Inference admission. Was a single exclusive threading.Lock, which serialised
+# ALL detection and embedding process-wide and — worse — served the queue
+# first-come-first-served, so an entrance camera waited behind a monitor
+# camera's ~500ms face-crop pass. The gate bounds concurrency the same way but
+# admits attendance cameras first. See inference_gate.py for why concurrent
+# inference is safe for this stack.
+from app.services.inference_gate import inference_slot  # noqa: E402
 
 
 @lru_cache(maxsize=1)
@@ -94,28 +104,78 @@ def _extract_faces_insightface(rgb_image: np.ndarray) -> list[dict]:
     import cv2
 
     bgr_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
-    with _inference_lock:
+    with inference_slot():
         detected_faces = get_face_analyser().get(bgr_image)
 
     faces: list[dict] = []
+    adaface = None
+    if RECOGNITION_BACKEND == "adaface":
+        from app.services import adaface_service
+        adaface = adaface_service
     for face in detected_faces:
         kps = getattr(face, "kps", None)
+        if adaface is not None and kps is None:
+            # Never silently mix ArcFace and AdaFace vectors when a detector
+            # lacks landmarks. Such a vector is not comparable with the
+            # selected gallery and must be rejected, not downgraded.
+            logger.debug("AdaFace skipped face without five landmarks")
+            continue
+        embedding = (
+            adaface.embed(bgr_image, kps)
+            if adaface is not None and kps is not None
+            else _normalize(face.embedding)
+        )
         faces.append(
             {
                 "box": _bbox_to_list(face.bbox),
                 "confidence": float(face.det_score),
-                "embedding": _normalize(face.embedding),
+                "embedding": embedding,
                 # 5-point landmarks (eyes, nose, mouth corners). Used by the
-                # enrollment quality gate to reject side-profile photos.
+                # quality gate to reject side-profile faces.
                 "kps": kps.astype(float).tolist() if kps is not None else None,
-                "pose": {
-                    "yaw": float(getattr(face, "yaw", 0.0) or 0.0),
-                    "pitch": float(getattr(face, "pitch", 0.0) or 0.0),
-                    "roll": float(getattr(face, "roll", 0.0) or 0.0),
-                },
+                "pose": _read_pose(face),
+                # SCRFD always aligns via landmarks before ArcFace. Flagged
+                # explicitly so consumers can distinguish these from the YOLO
+                # fallback's unaligned crops without knowing which backend ran.
+                "aligned": True,
             }
         )
     return faces
+
+
+def _read_pose(face) -> dict:
+    """Head pose in degrees as {'yaw','pitch','roll'}, or zeros if unavailable.
+
+    InsightFace does NOT expose yaw/pitch/roll as attributes. The landmark_3d_68
+    model writes a single ``pose`` entry on the Face dict, ordered
+    (pitch, yaw, roll) — see insightface/model_zoo/landmark.py.
+
+    This was previously read as ``getattr(face, "yaw", 0.0)``, an attribute that
+    never exists, so EVERY face in the system reported 0/0/0. The consequence was
+    not cosmetic: pose is the strongest available signal that an embedding is
+    untrustworthy on ceiling-mounted cameras that mostly capture profiles and
+    downward-tilted heads, and it was silently switched off. Any face — including
+    a full profile — passed the pose check and could name an employee.
+
+    Written defensively because the pose entry only exists when the analyser pack
+    includes the 3D-landmark model. Missing pose degrades to zeros, which the
+    quality gate reads as "pose unknown, do not enforce" rather than
+    "perfectly frontal" (see face_quality.assess).
+    """
+    pose = getattr(face, "pose", None)
+    if pose is None:
+        try:
+            pose = face["pose"]          # Face subclasses dict in some versions
+        except Exception:
+            pose = None
+    if pose is None:
+        return {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+    try:
+        pitch, yaw, roll = (float(v) for v in list(pose)[:3])
+        return {"yaw": yaw, "pitch": pitch, "roll": roll}
+    except Exception:
+        logger.debug("unreadable pose value %r", pose, exc_info=True)
+        return {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
 
 
 def _extract_faces_yolo(rgb_image: np.ndarray) -> list[dict]:
@@ -133,7 +193,7 @@ def _extract_faces_yolo(rgb_image: np.ndarray) -> list[dict]:
     model = _get_yolo_model()
     recognizer = _get_recognizer()
 
-    with _inference_lock:
+    with inference_slot():
         results = model.predict(bgr_image, conf=float(settings.yolo_conf), verbose=False)
 
     faces: list[dict] = []
@@ -153,44 +213,82 @@ def _extract_faces_yolo(rgb_image: np.ndarray) -> list[dict]:
     if kpts is not None and getattr(kpts, "xy", None) is not None:
         all_kps = kpts.xy.cpu().numpy()  # (N, K, 2)
 
-    for i in range(len(xyxy)):
-        bbox = xyxy[i].astype(np.float32)
-        conf = float(confs[i])
+    # ONE admission for all of this frame's embeddings, not one per face.
+    # Previously each face acquired the global lock separately, so a frame with
+    # four faces queued four times — and every other camera interleaved between
+    # them. Holding a single slot for the batch keeps the frame's work together
+    # and cuts the queueing to a quarter.
+    with inference_slot():
+        for i in range(len(xyxy)):
+            bbox = xyxy[i].astype(np.float32)
+            conf = float(confs[i])
 
-        kps = None
-        if all_kps is not None and i < len(all_kps) and all_kps[i].shape[0] >= 5:
-            kps = all_kps[i][:5].astype(np.float32)
+            kps = None
+            if all_kps is not None and i < len(all_kps) and all_kps[i].shape[0] >= 5:
+                kps = all_kps[i][:5].astype(np.float32)
 
-        try:
-            if kps is not None:
-                # Aligned embedding via landmarks (preferred, best accuracy).
-                face = Face(bbox=bbox, kps=kps, det_score=conf)
-                with _inference_lock:
+            aligned_embedding = True
+            try:
+                if kps is not None:
+                    # Aligned embedding via landmarks (preferred, best accuracy).
+                    face = Face(bbox=bbox, kps=kps, det_score=conf)
                     recognizer.get(bgr_image, face)
-                embedding = face.normed_embedding if getattr(face, "normed_embedding", None) is not None else face.embedding
-            else:
-                # No landmarks from this model: fall back to a resized crop.
-                x1, y1, x2, y2 = (int(max(0, v)) for v in bbox[:4])
-                crop = bgr_image[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-                aligned = cv2.resize(crop, (112, 112))
-                with _inference_lock:
+                    embedding = face.normed_embedding if getattr(face, "normed_embedding", None) is not None else face.embedding
+                else:
+                    # No landmarks from this model: fall back to a resized crop.
+                    #
+                    # This produces an embedding in a MEASURABLY DIFFERENT space
+                    # from the aligned ones — ArcFace is trained on similarity-
+                    # transformed 112x112 crops, and a raw resize skips the
+                    # rotation/scale normalisation entirely. Mixing the two in one
+                    # gallery quietly depresses every comparison. It is kept as a
+                    # last resort (better a weak identity than none) but is now
+                    # flagged so callers can exclude it and so it shows up in the
+                    # logs instead of being invisible.
+                    aligned_embedding = False
+                    x1, y1, x2, y2 = (int(max(0, v)) for v in bbox[:4])
+                    crop = bgr_image[y1:y2, x1:x2]
+                    if crop.size == 0:
+                        continue
+                    aligned = cv2.resize(crop, (112, 112))
                     embedding = recognizer.get_feat(aligned).flatten()
-        except Exception as exc:
-            logger.warning("YOLO embedding failed for one face: %s", exc)
-            continue
+                    if not _UNALIGNED_WARNED:
+                        _warn_unaligned()
+            except Exception as exc:
+                logger.warning("YOLO embedding failed for one face: %s", exc)
+                continue
 
-        faces.append(
-            {
-                "box": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
-                "confidence": conf,
-                "embedding": _normalize(embedding),
-                "pose": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0},
-            }
-        )
+            faces.append(
+                {
+                    "box": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
+                    "confidence": conf,
+                    "embedding": _normalize(embedding),
+                    # Carry the landmarks through: the quality gate uses them for
+                    # its side-profile check, which is the only pose signal
+                    # available on this detector path (YOLOv8-face has no 3D pose
+                    # model, so `pose` stays zeroed = "unknown, do not enforce").
+                    "kps": kps.astype(float).tolist() if kps is not None else None,
+                    "pose": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0},
+                    "aligned": aligned_embedding,
+                }
+            )
 
     return faces
+
+
+_UNALIGNED_WARNED = False
+
+
+def _warn_unaligned() -> None:
+    """Warn ONCE per process that unaligned embeddings are being produced."""
+    global _UNALIGNED_WARNED
+    _UNALIGNED_WARNED = True
+    logger.warning(
+        "YOLO face detector returned no landmarks — falling back to UNALIGNED "
+        "embeddings. These are not directly comparable with the landmark-aligned "
+        "vectors in the enrolled gallery and will match worse. Use a "
+        "keypoint-capable yolov8-face weight, or set FACE_DETECTOR=insightface."
+    )
 
 
 def extract_faces_from_rgb(rgb_image: np.ndarray) -> list[dict]:

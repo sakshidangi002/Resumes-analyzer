@@ -322,13 +322,15 @@ export default function Leave() {
 
   return (
     <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Leave Management</h1>
-          <div className="page-subtitle">Apply for leave, check balance, and track status.</div>
+          <h1 className="eds-title">Leave Management</h1>
+          <p className="eds-subtitle">Apply for leave, check balance, and track status.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
+      <div className="eds-page">
       {loading ? (
         <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
       ) : (
@@ -745,6 +747,8 @@ export default function Leave() {
         </>
       )}
 
+      </div>
+      </div>
 
       {showBalanceDialog && (
         <div className="modal-backdrop" onClick={() => setShowBalanceDialog(false)}>

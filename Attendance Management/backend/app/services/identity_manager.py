@@ -28,7 +28,6 @@ IN/OUT camera may do that (enforced in camera_service / recognition).
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from datetime import date
 from typing import Optional
@@ -120,26 +119,31 @@ class GlobalIdentityManager:
         code: Optional[str] = None,
     ) -> None:
         """Teach the gallery: 'on THIS camera, employee X currently looks like this'.
-        Called only after a positive FACE match, so the label is trustworthy."""
-        if embedding is None:
-            return
+        Called only after a positive FACE match, so the label is trustworthy.
+
+        `embedding` is OPTIONAL. Body Re-ID (the appearance gallery) is disabled
+        because OSNet could not separate these people — true and false matches
+        both landed in 0.71-0.82. Seat anchoring is a completely different and
+        far more reliable signal, so it must be learnable on its own: passing
+        embedding=None records only where this person sits.
+        """
         today = date.today()
+        persist = False
         with self._lock:
             self._ensure_loaded(today)
             if name:
                 self._names[int(employee_id)] = (name, code)
-            key = (int(employee_id), str(camera_id))
-            slot = self._gallery.setdefault(key, [])
 
-            # Skip near-duplicates — keep the gallery diverse rather than 8 copies
-            # of the same pose.
-            if any(float(np.dot(embedding, e)) > 0.97 for e in slot):
-                persist = False
-            else:
-                slot.append(np.asarray(embedding, dtype=np.float32))
-                if len(slot) > _MAX_PER_SLOT:
-                    slot.pop(0)
-                persist = True
+            if embedding is not None:
+                key = (int(employee_id), str(camera_id))
+                slot = self._gallery.setdefault(key, [])
+                # Skip near-duplicates — keep the gallery diverse rather than 8
+                # copies of the same pose.
+                if not any(float(np.dot(embedding, e)) > 0.97 for e in slot):
+                    slot.append(np.asarray(embedding, dtype=np.float32))
+                    if len(slot) > _MAX_PER_SLOT:
+                        slot.pop(0)
+                    persist = True
 
             if centroid is not None:
                 self._remember_seat(str(camera_id), centroid, int(employee_id))

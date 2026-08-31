@@ -160,7 +160,6 @@ class HikvisionDiscoveryService:
     def _get_channel_name(self, login_id: int, channel_num: int) -> str:
         """Get the name of a specific channel from DVR configuration."""
         try:
-            from app.services.hcnetsdk_wrapper import _sdk_wrapper
             
             # Try to get channel name using NET_DVR_GetDVRConfig
             # This requires the channel configuration command

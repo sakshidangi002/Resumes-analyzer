@@ -5,13 +5,12 @@ const apiBase = (rawBase == null || rawBase === "" ? "/api" : String(rawBase).re
 
 const api = axios.create({
   baseURL: apiBase,
+  withCredentials: true,
   headers: { "Content-Type": "application/json" },
   timeout: 15000, // 15 second timeout — prevents login from hanging indefinitely
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = "Bearer " + token;
   // For file uploads (FormData), drop the default application/json header so the
   // browser sets multipart/form-data with the correct boundary; otherwise the
   // backend can't parse the form fields (HTTP 422).
@@ -29,6 +28,17 @@ api.interceptors.request.use((config) => {
 // real navigation (/auth/me, /employees, …) and log out normally.
 const BACKGROUND_POLL_PATHS = ["/dvr/", "/recognize-", "/live/"];
 
+// Endpoints that ASK whether there is a session. A 401 from these is the normal
+// answer for a logged-out visitor, not an expired session, so it must never
+// trigger the redirect below.
+//
+// This matters because the session token is an HttpOnly cookie: JavaScript
+// cannot read it, so AuthContext has to probe /auth/me on every mount to find
+// out whether anyone is logged in. Treating that probe's 401 as "session lost"
+// meant: mount -> /auth/me -> 401 -> window.location.href -> full page reload
+// -> mount -> ... an endless refresh that never let the login form be used.
+const SESSION_PROBE_PATHS = ["/auth/me", "/auth/can-signup"];
+
 api.interceptors.response.use(
   (r) => r,
   (err) => {
@@ -37,16 +47,19 @@ api.interceptors.response.use(
       // Don't redirect if it's a login attempt, otherwise error message in Login.tsx disappears on refresh
       const isLoginRequest = url.includes("/auth/login");
       const isBackgroundPoll = BACKGROUND_POLL_PATHS.some((p) => url.includes(p));
+      const isSessionProbe = SESSION_PROBE_PATHS.some((p) => url.includes(p));
 
-      if (isBackgroundPoll) {
-        // Let the individual poller handle/ignore it; keep the session.
+      if (isBackgroundPoll || isSessionProbe) {
+        // Let the caller handle it; do not tear the page down.
         return Promise.reject(err);
       }
 
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-
-      if (!isLoginRequest) {
+      // Assigning window.location.href while already ON /login still performs a
+      // navigation, so any 401 raised from the login page would reload it — and
+      // reload it again on the next mount. Second line of defence against the
+      // loop above: only leave the page if we are not already there.
+      const alreadyOnLogin = window.location.pathname === "/login";
+      if (!isLoginRequest && !alreadyOnLogin) {
         window.location.href = "/login";
       }
     }
@@ -58,12 +71,18 @@ export default api;
 
 export const auth = {
   login: (username: string, password: string) =>
-    api.post("/auth/login", { username, password }),
+    api.post<{ access_token: string; token_type: string; user_id: number; username: string; roles: string[]; employee_id: number | null; employee_code?: string | null; designation?: string | null; must_change_password?: boolean }>("/auth/login", { username, password }),
   signup: (username: string, password: string, official_email?: string) =>
     api.post("/auth/signup", { username, password, official_email }),
   canSignup: () => api.get<{ allowed: boolean }>("/auth/can-signup"),
   me: () => api.get("/auth/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    api.post<{ detail: string; access_token: string; token_type: string }>(
+      "/auth/change-password",
+      { current_password, new_password },
+    ),
   forgotPassword: (username: string) => api.post("/auth/forgot-password", { username }),
+  logout: () => api.post("/auth/logout"),
 };
 
 export const users = {
@@ -253,6 +272,8 @@ export const leave = {
     allocated_days: number;
     financial_year_id?: number;
   }) => api.post("/leave/allocations", null, { params: { ...params } }),
+  deleteAllocation: (allocation_id: number) =>
+    api.delete(`/leave/allocations/${allocation_id}`),
   requests: (params?: { employee_id?: number; status?: string }) =>
     api.get("/leave/requests", { params }),
   approvals: (params?: { status?: string }) =>
@@ -407,6 +428,45 @@ export const activity = {
   markRead: (id: number) => api.patch<AppNotificationRow>("/activity/notifications/" + id + "/read"),
   markAllRead: () => api.post("/activity/notifications/read-all"),
   delete: (id: number) => api.delete("/activity/notifications/" + id),
+};
+
+// Government IDs and bank account numbers arrive MASKED from the normal
+// employee endpoints. These two return the full value, are Admin/HR-only, and
+// write an audit row on every call — so only fetch them on explicit user action.
+export const sensitiveData = {
+  identifiers: (employeeId: number) =>
+    api.post<{
+      pan_number: string | null;
+      aadhar_number: string | null;
+      passport_number: string | null;
+      driving_license_number: string | null;
+    }>(`/employees/${employeeId}/sensitive`),
+  bankAccount: (employeeId: number) =>
+    api.post<{ account_number: string }>(`/employees/${employeeId}/bank/reveal`),
+};
+
+export type AuditLogRow = {
+  id: number;
+  user_id: number | null;
+  username: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  details: string | null;
+  ip_address: string | null;
+  created_at: string;
+};
+
+export const audit = {
+  // from_date/to_date are naive ISO strings ("2026-08-01T00:00:00"), matching the
+  // naive UTC `created_at` column. Sending an offset or a trailing Z would make
+  // FastAPI hand SQLAlchemy an aware datetime and the comparison would fail.
+  list: (params?: {
+    limit?: number;
+    action?: string;
+    from_date?: string;
+    to_date?: string;
+  }) => api.get<AuditLogRow[]>("/audit", { params }),
 };
 
 export type OnboardingTaskRow = {
@@ -596,8 +656,75 @@ export const cameras = {
   stop: (id: number) => api.post(`/cameras/${id}/stop`),
   restart: (id: number) => api.post(`/cameras/${id}/restart`),
   status: (id: number) => api.get(`/cameras/${id}/status`),
-  previewUrl: (id: number) => `/api/cameras/${id}/preview`,
-  streamUrl: (id: number) => `/api/cameras/${id}/stream.mjpg`,
+  // Live camera media is rendered by <img src>, which cannot send an
+  // Authorization header. Mint a short-lived scoped token and pass it as ?t=.
+  mediaToken: () =>
+    api.post<{ token: string; expires_in: number }>("/cameras/media-token"),
+  previewUrl: (id: number, token: string, nonce?: string | number) =>
+    `/api/cameras/${id}/preview?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
+  streamUrl: (id: number, token: string, nonce?: string | number) =>
+    `/api/cameras/${id}/stream.mjpg?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
+  // Chair occupancy for a room camera. Computed by the CCTV V2 occupancy layer
+  // from the person boxes V1 has ALREADY produced, so polling this runs no
+  // extra inference and cannot slow the feed. Coordinates come back normalised
+  // with the frame size, because the <img> is object-fit: contain and pixel
+  // coordinates would be wrong as soon as it is resized.
+  occupancy: (id: number) =>
+    api.get<{
+      camera_id: number;
+      people_count: number;
+      chairs_total: number;
+      chairs_occupied: number;
+      chairs_free: number;
+      // Seats not yet decided. Without this the panel's numbers do not sum to
+      // the total and an undecided seat looks like a missing one.
+      chairs_unknown: number;
+      unassigned_people: number;
+      frame_width: number;
+      frame_height: number;
+      chairs: {
+        id: string;
+        occupied: boolean;
+        state: string;
+        occupant_track_id: number | null;
+        track_visible: boolean;
+        // Where the seat is, normalised 0..1, sent WITH its state. The page
+        // used to keep its own copy of the chair map, so any seat the backend
+        // gained but the copy lacked was counted and never drawn.
+        zone: [number, number, number, number];
+      }[];
+      people: {
+        track_id: number;
+        bbox: [number, number, number, number];
+        // Person-detector score. `confidence` is a deprecated alias with the
+        // same value; both previously carried the face-match score.
+        detection_confidence?: number;
+        confidence: number;
+        chair_id: string | null;
+      }[];
+      // Chairs this camera can SEE but another camera controls. They carry no
+      // state because they take no part in this camera's occupancy -- a chair
+      // has exactly one owner. Drawn so three people at a desk this camera does
+      // not own do not read as a detection failure.
+      observed_elsewhere?: {
+        id: string;
+        zone: [number, number, number, number];
+        owned_by_camera: number | null;
+      }[];
+      // Physical chairs in the ROOM, each counted once. `chairs_total` is this
+      // camera's share; the two cameras' shares must never be added, because
+      // the row they both see would be counted twice.
+      room_chairs_total?: number;
+      // Four separate freshness facts. A room settled for ten minutes has a
+      // FRESH observation and an OLD state change; a caller that cannot tell
+      // those apart reads "steady" as "stuck".
+      observation_updated_at?: number | null;   // when V1 last completed a pass
+      state_updated_at?: number;                // when a chair last CHANGED
+      observation_age_sec?: number | null;
+      from_new_observation?: boolean;
+    }>(`/cameras/${id}/occupancy`),
   testConnection: (data: { source_url: string; source_type?: string }) =>
     api.post("/cameras/test-connection", data),
   stats: () => api.get("/cameras/stats"),
@@ -616,8 +743,11 @@ export const dvr = {
     api.post(`/dvr/cameras/${channelId}/recognition`, null, { params: { enabled } }),
   startAll: () => api.post("/dvr/cameras/start-all"),
   stopAll: () => api.post("/dvr/cameras/stop-all"),
-  previewUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/preview`,
-  streamUrl: (channelId: number) => `/api/dvr/cameras/${channelId}/stream`,
+  previewUrl: (channelId: number, token: string, nonce?: string | number) =>
+    `/api/dvr/cameras/${channelId}/preview?t=${encodeURIComponent(token)}` +
+    (nonce != null ? `&n=${nonce}` : ""),
+  streamUrl: (channelId: number, token: string) =>
+    `/api/dvr/cameras/${channelId}/stream?t=${encodeURIComponent(token)}`,
 };
 
 // ---- Employee ↔ HR Queries (Feature 2) ----
@@ -721,3 +851,71 @@ export const queries = {
 
 
 
+
+// ---------------------------------------------------------------------------
+// Face enrolment coverage
+// ---------------------------------------------------------------------------
+// Which employees the recognition matcher can actually identify, and the face
+// photo enrolled for each. Both were previously invisible: exclusions from the
+// gallery are silent (the query simply does not SELECT them) and the uploaded
+// enrolment photos had no endpoint serving them back.
+export type CoverageEntry = {
+  employee_id: number;
+  employee_code: string | null;
+  name: string;
+  active_embeddings: number;
+  model_matched: number;
+  has_photo: boolean;
+  reason?: string;
+  detail?: string;
+};
+
+export type CoverageReport = {
+  model_version: string;
+  active_employees: number;
+  in_gallery: number;
+  gallery_vectors: number;
+  coverage_pct: number;
+  reasons: Record<string, number>;
+  recognisable: CoverageEntry[];
+  excluded: CoverageEntry[];
+};
+
+export const faceEnrolment = {
+  coverage: () => api.get<CoverageReport>("/recognition/coverage"),
+  // Rendered by <img src>, which cannot send an Authorization header. This app
+  // authenticates with an HttpOnly cookie (withCredentials), and the endpoint's
+  // role check accepts that cookie, so no media token is needed here.
+  photoUrl: (employeeId: number) => `/api/employees/${employeeId}/face/photo`,
+};
+
+// ---------------------------------------------------------------------------
+// Live people count
+// ---------------------------------------------------------------------------
+// BODY tracks, not faces: someone with their back to the lens is counted. The
+// face pipeline reports zero for them, which is indistinguishable from an empty
+// room unless the body count is surfaced on its own.
+export type CameraPeopleRow = {
+  camera_id: number | string;
+  name: string;
+  purpose: string;
+  people: number;
+  body_tracking: boolean;
+  status: string;
+  // Seconds since this camera last COMPLETED an analysis pass. A pass costs
+  // seconds on this hardware, so a count can be badly out of date; the UI must
+  // show that rather than present a stale number as current.
+  analysis_age_sec: number | null;
+};
+
+export type PeopleCountReport = {
+  people_detected: number;
+  cameras_body_tracking: number;
+  total_cameras: number;
+  running_cameras: number;
+  people_by_camera: CameraPeopleRow[];
+};
+
+export const peopleCount = {
+  get: () => api.get<PeopleCountReport>("/cameras/stats"),
+};

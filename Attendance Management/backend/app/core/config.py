@@ -1,10 +1,10 @@
-﻿"""
+"""
 Application configuration. Database is PostgreSQL; email uses simple SMTP.
 """
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # App
     app_name: str = "Attendance & HRMS"
     debug: bool = False
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        if isinstance(value, str) and value.strip().lower() in {"release", "production", "prod", "0", "false", "no"}:
+            return False
+        return value
 
     # PostgreSQL (override via .env on each system)
     postgres_host: str = "localhost"
@@ -51,6 +58,21 @@ class Settings(BaseSettings):
     # Long-lived session: the user stays logged in until they explicitly log
     # out (default 30 days). Override with ACCESS_TOKEN_EXPIRE_MINUTES.
     access_token_expire_minutes: int = 60 * 24 * 30
+
+    # Key used to encrypt stored face embeddings (see core/encrypted_types.py).
+    #
+    # SEPARATE from secret_key on purpose. These two keys have opposite
+    # lifecycles: a JWT secret SHOULD be rotated (the startup check nags about
+    # it, and rotating only forces users to log in again), whereas this one can
+    # never be rotated without re-enrolling every employee's face, because the
+    # embeddings already in the database can only be decrypted with the key that
+    # wrote them. Sharing one value silently turns routine JWT hygiene into
+    # destruction of biometric data.
+    #
+    # Empty falls back to secret_key so existing installations keep reading the
+    # rows they already have. Set EMBEDDING_ENCRYPTION_KEY before rotating
+    # SECRET_KEY: pin it to the OLD secret_key value and the embeddings survive.
+    embedding_encryption_key: str = ""
 
     # SMTP (simple SMTP for all email)
     smtp_host: str = "localhost"
@@ -92,12 +114,45 @@ class Settings(BaseSettings):
     # dropping them entirely. Prevents "recognised but marked Absent".
     attendance_checkin_on_missing_in: bool = True
 
+    # ---- Attendance business day -------------------------------------------
+    # Attendance days start at this hour (IST). An event BEFORE it belongs to
+    # the PREVIOUS day, so a shift running past midnight stays on one record.
+    #
+    # Why this exists: events used to be keyed on the plain calendar date, so
+    # someone leaving at 00:30 was evaluated against a brand-new day where they
+    # had no check-in. resolve_camera_event() sees state=ABSENT and — with
+    # attendance_checkin_on_missing_in above — turns their EXIT into a CHECK_IN
+    # for the new day, while the real day was left open forever.
+    #
+    # Set to 0 to restore the old pure-calendar-date behaviour. Deploy with 0,
+    # confirm no report shifts, then raise it. It must be LOWER than the
+    # earliest shift start in the company, or an early starter's check-in lands
+    # on the previous day.
+    attendance_day_start_hour: int = 5
+
+    # Hour (IST) by which an unclosed attendance day is force-closed by the
+    # nightly closeout job. See services/attendance_closeout.py.
+    attendance_closeout_hour: int = 23
+
     # ---- Face detector backend -------------------------------------------
     # "insightface" -> SCRFD detector from buffalo_l (default, no extra deps)
     # "yolo"        -> YOLOv8-face for DETECTION; ArcFace (buffalo_l) still
     #                  produces the recognition embedding.
     # Enabling "yolo" requires `pip install ultralytics` and a face weights
     # file (with 5 landmarks) at FACE_YOLO_MODEL_PATH, e.g. yolov8n-face.pt.
+    # Concurrent FACE inference slots (detection + embedding). 0 = auto.
+    #
+    # Was effectively 1, via a single exclusive lock that also served the queue
+    # first-come-first-served — so entrance cameras waited behind monitor
+    # cameras. See services/inference_gate.py: the gate now admits attendance
+    # cameras first, which matters far more than the slot count.
+    #
+    # Keep this LOW. bytetrack_engine records a measurement from this same
+    # 4-physical-core box: two concurrent inferences were ~10% WORSE than one,
+    # because a single inference already saturates the cores. Raise only with
+    # spare physical cores or a GPU.
+    face_max_concurrent_inference: int = 0
+
     face_detector: str = "insightface"
     yolo_face_model_path: str = "models/yolov8n-face.pt"
     yolo_conf: float = 0.35
@@ -133,11 +188,69 @@ class Settings(BaseSettings):
     # faster way to execute the same network.
     # Re-export after swapping models:
     #   YOLO('models/yolo11m.pt').export(format='onnx', imgsz=960, simplify=True)
+    # Which CCTV pipeline runs: "v1" (the existing camera_service) or "v2"
+    # (app/cctv_v2). Defaults to v1 and MUST stay there until V2 has been
+    # compared against V1 on the same footage.
+    #
+    # V2 is an architecture and scheduling change, not a CV change: four camera
+    # grabbers with latest-frame slots feeding ONE fair scheduler and ONE
+    # inference worker, replacing four workers contending on an unfair
+    # semaphore. The CV parameters are identical in both, deliberately, so a
+    # measured difference can be attributed to scheduling rather than to
+    # somebody having moved a threshold at the same time.
+    #
+    # This is the rollback switch. If V2 misbehaves, set it back to v1 and
+    # restart - no code change, no revert.
+    cctv_pipeline: str = "v1"
+
+    # How many inference workers the V2 pool runs. EACH worker builds its OWN
+    # YOLO instance -- that is the whole point, not an implementation detail.
+    #
+    # Measured on this box (4 physical / 8 logical cores), independent
+    # instances against one shared one:
+    #
+    #     workers   passes/s   vs 1     latency   cores busy
+    #        1        0.403    1.00x      2.48s   1.73 of 8
+    #        2        0.587    1.46x      3.40s   2.35 of 8
+    #        3        0.733    1.82x      3.99s   2.83 of 8
+    #        4        0.811    2.01x      4.81s   3.21 of 8
+    #     2 (SHARED)  0.280    0.93x      6.88s   1.35 of 8   <- slower than 1
+    #
+    # The shared-instance row is why this is a pool of models and not a pool of
+    # threads. Concurrent calls into one ultralytics model contend badly enough
+    # to be worse than not parallelising at all, which reads as "the CPU is
+    # saturated" and is not.
+    #
+    # 3 is the default because throughput keeps rising to 4 but per-pass latency
+    # rises with it (2.48s -> 4.81s), and a doorway cares about latency: a
+    # person is in shot for a few seconds and then gone.
+    cctv_v2_inference_workers: int = 3
     yolo_person_model_path: str = "models/yolo11m.onnx"
     # Inference size. After the dev-room camera was re-aimed, people are ~250px
     # tall (was 120-180), and 960 was measured to detect them just as well as 1600
     # (0.67/0.61/0.37 vs 0.65/0.60/0.36) at roughly HALF the cost. Smaller = faster
     # analysis = names appear on screen sooner.
+    #
+    # TUNING THIS: benchmark at the camera's REAL frame size (960x1080 here),
+    # never on a crop of a dashboard screenshot. A crop makes the subject fill
+    # far more of the frame, so it flatters small input sizes. Measured on the
+    # Exit hallway at true geometry, best person score per frame against a 0.20
+    # track threshold:
+    #
+    #     frame      imgsz=480       imgsz=640   imgsz=960
+    #     person A   0.254           0.493       0.458
+    #     person B   0.148 DROPPED   0.475       0.314
+    #     person C   0.742           0.320       0.260
+    #     empty x2   0.000           0.010       0.000
+    #
+    # 480 looked fine on a cropped pane and put a walking person UNDER the
+    # threshold in the live feed - the corridor reporting "People: 0" with
+    # somebody plainly in it. Bigger is not automatically better either: 640
+    # beat 960 on all three.
+    #
+    # Doorway and room cameras want DIFFERENT values (see yolo_monitor_imgsz);
+    # a wide room with distant seated people needs the pixels, a close walking
+    # subject does not. Do not collapse them into one number.
     yolo_person_imgsz: int = 960
     # NMS IoU. Ultralytics defaults to 0.7, which is too permissive for this
     # ceiling view: two overlapping boxes on ONE person (e.g. a tight box on the
@@ -155,6 +268,30 @@ class Settings(BaseSettings):
     # another's, and the rule silently deleted real people (3 detections collapsed
     # to 1 track). Confidence (new_track_thresh) is the safe guard instead.
     # Set to e.g. 0.9 only if bloated duplicate boxes ever return.
+    #
+    # ---- 2026-08-26: they DID return, and re-enabling is still wrong. ----
+    #
+    # Lowering the room detection floor to 0.015 brought the bloated boxes back:
+    # over 16 labelled frames, 4 of the 7 unmatched detections are oversized
+    # duplicates swallowing a real person at 0.99-1.00 containment. That is
+    # exactly the condition this filter was written for, so it was re-measured
+    # against the labelled set rather than switched back on:
+    #
+    #     contain   boxes dropped   real people left with NO box
+    #       0.85          7                     2
+    #       0.90          7                     2
+    #       0.95          6                     2
+    #       0.99          5                     2
+    #       1.01 (off)    0                     0
+    #
+    # It costs two real people AT EVERY THRESHOLD, because the "bloated" box is
+    # sometimes the ONLY box covering somebody -- one large box spanning a
+    # standing person and the seated person behind them is a single detection of
+    # two people, and dropping it loses the one who had nothing else.
+    #
+    # So it stays off. Duplicate boxes are handled downstream by track
+    # association and the dedupe in person_tracker (see test_track_dedupe.py),
+    # which merge without deleting.
     person_nested_contain: float = 1.01
     person_nested_area_ratio: float = 1.6
     # Draw ONLY people detected in the latest analysis cycle.
@@ -285,7 +422,20 @@ class Settings(BaseSettings):
     # (or someone moves seats), they silently inherit the other person's identity.
     # A wrong name is worse than "Person #N", so identity must come only from a
     # real face match or a high-confidence body Re-ID.
+    # Seat anchoring: once a face confirms who someone is, remember WHERE they
+    # were, and reuse that position to name them later when no face is visible.
+    #
+    # On by default now. It was off because it lived inside the body Re-ID path,
+    # so disabling the unreliable appearance matching (OSNet could not separate
+    # these people) also disabled this, which is a completely different and much
+    # stronger signal in a fixed-desk room. The two are now independent.
+    #
+    # MONITOR cameras only, and it can never mark attendance. A seat-derived
+    # name is drawn in amber and labelled "by seat" so it is never mistaken for
+    # a face identification.
     seat_anchor_enabled: bool = False
+    # How close a track must be to a remembered seat, in pixels. Too large and
+    # neighbouring desks bleed into each other.
     seat_anchor_radius_px: int = 120
 
     # ---- DVR auto-start on application boot -------------------------------
@@ -313,6 +463,21 @@ class Settings(BaseSettings):
     dvr_line_orientation: str = "horizontal"
     dvr_line_position: float = 0.5
     dvr_entry_direction: str = "down"
+
+    # Which Hikvision stream to pull for DVR dashboard previews.
+    #   "main" -> .../Streaming/Channels/{ch}01   full resolution  (default)
+    #   "sub"  -> .../Streaming/Channels/{ch}02   low resolution
+    #
+    # Defaults to "main" because these streams exist to be LOOKED AT. Sub-stream
+    # decodes 4-9x fewer pixels, which is a real CPU saving, but a Hikvision
+    # sub-stream is often left at CIF (352x288) — upscaled into a dashboard tile
+    # that is unusably soft, and far too low for a face to be recognisable.
+    #
+    # Set to "sub" ONLY after checking what your DVR actually serves on channel
+    # {ch}02. If it is configured at D1/720p or better, sub is the cheaper
+    # choice and costs nothing visible; at CIF it is a false economy.
+    # (Camera > Video > Sub-Stream in the DVR's own settings.)
+    dvr_stream_profile: str = "main"
     # Crossing direction for OUT cameras (people leaving usually move the
     # opposite way in-frame). Leave blank to reuse dvr_entry_direction.
     dvr_out_entry_direction: str = ""

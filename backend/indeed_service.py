@@ -231,11 +231,11 @@ def download_indeed_resume_from_view_url(
             try:
                 context.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
             try:
                 browser.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
 
 
 async def download_resume_via_playwright_public_async(
@@ -274,7 +274,7 @@ async def download_resume_via_playwright_public_async(
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
             await _raise_if_indeed_auth_or_blocked(page)
 
             download_btn = page.get_by_role("button", name=re.compile(r"download", re.I))
@@ -290,7 +290,7 @@ async def download_resume_via_playwright_public_async(
                 try:
                     title = await page.title()
                 except Exception:
-                    pass
+                    logger.warning("page.title failed", exc_info=True)
                 raise RuntimeError(f"Download button not found. url={page.url!r} title={title!r}")
 
             async with page.expect_download(timeout=90000) as dl_info:
@@ -315,11 +315,11 @@ async def download_resume_via_playwright_public_async(
             try:
                 await context.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
             try:
                 await browser.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
 
 
 async def download_indeed_resume_from_view_url_async(
@@ -361,7 +361,7 @@ async def download_indeed_resume_from_view_url_async(
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
             await _raise_if_indeed_auth_or_blocked(page)
 
             download_btn = page.get_by_role("button", name=re.compile(r"download", re.I))
@@ -377,7 +377,7 @@ async def download_indeed_resume_from_view_url_async(
                 try:
                     title = await page.title()
                 except Exception:
-                    pass
+                    logger.warning("page.title failed", exc_info=True)
                 raise RuntimeError(f"Download button not found. url={page.url!r} title={title!r}")
 
             async with page.expect_download(timeout=90000) as dl_info:
@@ -401,9 +401,9 @@ async def download_indeed_resume_from_view_url_async(
             try:
                 await context.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
             try:
                 await browser.close()
             except Exception:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
 

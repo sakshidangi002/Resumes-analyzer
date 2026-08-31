@@ -7,12 +7,32 @@ Each track maintains recognition state with cooldown to prevent flickering.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Tuple
 import numpy as np
 
+from app.services.embedding_fusion import EmbeddingFuser
+
 logger = logging.getLogger(__name__)
+
+# Association bounds for _find_best_match.
+#
+# A fixed centroid radius loses a WALKING person: face inference on this
+# hardware runs seconds apart, and someone crossing a doorway moves far more
+# than 100px between cycles, so they were handed a brand-new track (and a fresh,
+# empty fused template) every cycle. Predicting from track velocity fixes that.
+#
+# The bounds exist because looser association cuts the other way: merging two
+# people into one track is how a fused template ends up representing neither of
+# them. The fuser's outlier rejection is the primary defence (see
+# attendance_gate), but it works best when association does not hand it obvious
+# mismatches. These are the knobs to tighten if ID switches are ever observed on
+# an IN/OUT camera, where a merged track feeds payroll.
+_MAX_PREDICTED_DISTANCE = float(os.getenv("CCTV_TRACK_MAX_PREDICTED_PX", "280"))
+_MIN_ASSOC_OVERLAP = float(os.getenv("CCTV_TRACK_MIN_ASSOC_IOU", "0.10"))
+_SPEED_RADIUS_GAIN = float(os.getenv("CCTV_TRACK_SPEED_GAIN", "1.5"))
 
 
 @dataclass
@@ -43,6 +63,15 @@ class FaceTrack:
     pending_employee_id: Optional[int] = None
     confirm_count: int = 0
     attendance_marked: bool = False  # attendance already recorded for this track
+    # Recognition provenance from the last successful match (score, margin,
+    # snapshot path). Captured at match time — that is the only moment the frame
+    # and the match result coexist, since attendance is written asynchronously.
+    last_evidence: Optional[dict] = None
+    unknown_event_marked: bool = False
+
+    # ── Embedding fusion ────────────────────────────────────────────────────
+    # Shared with PersonTrack — see services/embedding_fusion.py.
+    fuser: EmbeddingFuser = field(default_factory=EmbeddingFuser)
     
     # Track lifecycle
     age: int = 0  # number of frames tracked
@@ -103,6 +132,38 @@ class FaceTrack:
         """Check if recognition can be performed (respecting cooldown)."""
         return time.time() - self.last_recognition_time >= self.recognition_cooldown
     
+    def add_observation(self, embedding, quality: float) -> bool:
+        """Fold one frame's embedding into this track's fused template.
+
+        `quality` is the FaceQuality soft score in (0, 1] — NOT a pixel count.
+        Returns False when the fuser rejected it as an outlier (which is how a
+        tracker ID-switch onto a different person is caught).
+        """
+        return self.fuser.add(embedding, quality)
+
+    def fused_embedding(self) -> Optional[np.ndarray]:
+        """Quality-weighted mean embedding for this track, or None."""
+        return self.fuser.fused()
+
+    @property
+    def observations(self) -> int:
+        return self.fuser.observations
+
+    @property
+    def consensus(self) -> float:
+        """How much this track's observations agree with each other, in [-1, 1]."""
+        return self.fuser.consensus()
+
+    @property
+    def best_quality(self) -> float:
+        return self.fuser.best_quality
+
+    @property
+    def best_face_px(self) -> float:
+        # Retained for backwards compatibility with existing callers/tests. The
+        # underlying value is now a quality score, not a pixel width.
+        return self.fuser.best_quality
+
     def update_recognition(
         self,
         employee_id: Optional[int],
@@ -119,31 +180,25 @@ class FaceTrack:
         self.confidence = confidence
         self.last_recognition_time = time.time()
 
-    def register_identification(
-        self, employee_id: Optional[int], matched: bool, confirm_frames: int
-    ) -> bool:
-        """Track consecutive identifications and decide when to mark attendance.
+    # NOTE: the old `register_identification(emp_id, matched, confirm_frames)`
+    # lived here and returned True as soon as the same employee had been matched
+    # `confirm_frames` times in a row — a value that shipped as 1, so a single
+    # frame wrote attendance. The decision now lives in services/attendance_gate,
+    # which weighs the whole track (observations, quality, self-consensus,
+    # identity agreement) instead of a consecutive-frame counter. See that
+    # module for why the consecutive-frame axis was the wrong one.
 
-        Returns True EXACTLY ONCE per track lifetime — on the frame where the
-        same employee has been confirmed `confirm_frames` times in a row and
-        attendance has not yet been recorded. Any mismatch/unknown frame resets
-        the counter, so a transient wrong match never reaches the threshold.
+    def needs_reverify(self, interval_sec: float) -> bool:
+        """Whether this track should be re-matched.
+
+        A recognised track used to be skipped forever once attendance was
+        recorded (``if track.attendance_marked and track.matched: continue``).
+        That permanently welded an identity onto a track, so a single wrong
+        match owned the box for its entire life and a tracker ID-switch handed
+        that name to whoever inherited the track. Re-verifying periodically lets
+        the fused template keep improving and lets a wrong label correct itself.
         """
-        if not matched or employee_id is None:
-            self.pending_employee_id = None
-            self.confirm_count = 0
-            return False
-
-        if self.pending_employee_id == employee_id:
-            self.confirm_count += 1
-        else:
-            self.pending_employee_id = employee_id
-            self.confirm_count = 1
-
-        if self.confirm_count >= confirm_frames and not self.attendance_marked:
-            self.attendance_marked = True
-            return True
-        return False
+        return (time.time() - self.last_recognition_time) >= interval_sec
 
     def get_display_info(self) -> dict:
         """Get display information for overlay rendering."""
@@ -222,7 +277,7 @@ class FaceTracker:
             if track.is_expired():
                 continue
 
-            best_idx = self._find_best_match(track.centroid, detection_centroids, used_detection_indices)
+            best_idx = self._find_best_match(track, detection_centroids, detection_boxes, used_detection_indices)
             if best_idx is not None:
                 # Update track with new detection
                 track.update(detection_centroids[best_idx], detection_boxes[best_idx])
@@ -260,27 +315,54 @@ class FaceTracker:
     
     def _find_best_match(
         self,
-        centroid: Tuple[float, float],
+        track: FaceTrack,
         detection_centroids: List[Tuple[float, float]],
+        detection_boxes: List[Tuple[int, int, int, int]],
         used_indices: set
     ) -> Optional[int]:
-        """Find the best matching detection for a track centroid."""
+        """Find the next detection for a moving face track.
+
+        A fixed centroid radius caused a walking person to receive a new track
+        whenever they moved more than 100 px between slow face-inference
+        cycles. Predict from the track velocity and allow a bounded, speed-aware
+        radius; IoU remains the strongest signal when boxes overlap.
+        """
         best_idx = None
-        best_distance = float('inf')
-        
+        best_score = float("inf")
+        vx, vy = track.velocity
+        predicted = (track.centroid[0] + vx, track.centroid[1] + vy)
+        speed = float(np.sqrt(vx * vx + vy * vy))
+        # speed is a magnitude (>= 0), so this is monotonically >= max_distance;
+        # the previous max() against max_distance could never bind.
+        allowed = min(
+            _MAX_PREDICTED_DISTANCE, self.max_distance + speed * _SPEED_RADIUS_GAIN
+        )
+
+        tx1, ty1, tx2, ty2 = track.box
+
         for idx, det_centroid in enumerate(detection_centroids):
             if idx in used_indices:
                 continue
-            
+
             distance = np.sqrt(
-                (centroid[0] - det_centroid[0]) ** 2 +
-                (centroid[1] - det_centroid[1]) ** 2
+                (predicted[0] - det_centroid[0]) ** 2 +
+                (predicted[1] - det_centroid[1]) ** 2
             )
-            
-            if distance < self.max_distance and distance < best_distance:
-                best_distance = distance
-                best_idx = idx
-        
+            dx1, dy1, dx2, dy2 = detection_boxes[idx]
+            ix1, iy1 = max(tx1, dx1), max(ty1, dy1)
+            ix2, iy2 = min(tx2, dx2), min(ty2, dy2)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            area_a = max(1, (tx2 - tx1) * (ty2 - ty1))
+            area_b = max(1, (dx2 - dx1) * (dy2 - dy1))
+            overlap = inter / float(area_a + area_b - inter) if inter else 0.0
+
+            if distance <= allowed or overlap >= _MIN_ASSOC_OVERLAP:
+                # Prefer overlap, then the closest predicted position.
+                score = distance - overlap * allowed
+                if score < best_score:
+                    best_score = score
+                    best_idx = idx
+
         return best_idx
     
     def get_track(self, track_id: int) -> Optional[FaceTrack]:

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { users as usersApi } from "../api/client";
 import { employees as employeesApi } from "../api/client";
@@ -41,6 +41,13 @@ export default function ManageUsers() {
   const { hasRole } = useAuth();
   const [list, setList] = useState<UserRow[]>([]);
   const [employees, setEmployees] = useState<Array<{ id: number; employee_code: string; first_name: string; last_name: string }>>([]);
+  // Employee-code lookup for the table below. Built once per employees change
+  // instead of scanning the whole employee list for every user row rendered.
+  const employeeCodeById = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const e of employees) byId.set(e.id, e.employee_code);
+    return byId;
+  }, [employees]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: number; username: string } | null>(null);
@@ -232,7 +239,7 @@ export default function ManageUsers() {
                     <td style={{ color: "#fff", fontWeight: 700 }}>{u.username}</td>
                     <td style={{ color: "#fff" }}>{u.official_email || "-"}</td>
                     <td style={{ color: "#fff" }}>{u.roles.join(", ")}</td>
-                    <td style={{ color: "#fff", textAlign: "center" }}>{u.employee_id ? employees.find((e) => e.id === u.employee_id)?.employee_code || u.employee_id : "-"}</td>
+                    <td style={{ color: "#fff", textAlign: "center" }}>{u.employee_id ? employeeCodeById.get(u.employee_id) || u.employee_id : "-"}</td>
                     <td style={{ color: "#fff", textAlign: "center" }}>{u.is_active ? "Yes" : "No"}</td>
                     <td className="actions-center">
                       <div className="actions-stack">

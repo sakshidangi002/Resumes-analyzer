@@ -473,42 +473,25 @@ export default function DSR() {
   // Render
   // -------------------------------------------------------------------------
   return (
-    <div>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Daily Status Report</h1>
-          <div className="page-subtitle">Track your daily work, progress, and plan for tomorrow.</div>
+          <h1 className="eds-title">Daily Status Report</h1>
+          <p className="eds-subtitle">Track your daily work, progress, and plan for tomorrow.</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
+      <div className="eds-page">
       {banner && (
-        <div
-          className="card"
-          style={{
-            marginBottom: "1rem",
-            padding: "0.8rem 1rem",
-            borderColor: banner.kind === "ok" ? "rgb(16 185 129 / 0.4)" : "rgb(239 68 68 / 0.4)",
-            background: banner.kind === "ok" ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
-            color: banner.kind === "ok" ? "#a7f3d0" : "#fecaca",
-            fontSize: "0.875rem",
-            fontWeight: 600,
-          }}
-        >
+        <div className={`alert ${banner.kind === "ok" ? "alert-success" : "alert-error"}`}>
           {banner.text}
         </div>
       )}
 
       {/* Tabs (only visible to Admin/HR/Manager) */}
       {canSeeAll && (
-        <div
-          style={{
-            display: "flex",
-            gap: "0.4rem",
-            marginBottom: "1rem",
-            borderBottom: "1px solid rgba(255,255,255,0.08)",
-          }}
-        >
+        <div className="eds-utabs">
           {canMutateDsr && (
             <TabButton
               active={view === "mine"}
@@ -540,28 +523,21 @@ export default function DSR() {
       )}
 
       {/* Filter & Add toolbar */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.75rem",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "1rem",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="eds-controls">
         {/* Left side: month / year / extra filters */}
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
           {/* <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.55)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             View
           </span> */}
           <CustomSelect
+            className="eds-cselect"
             value={String(month)}
             onChange={(v) => setMonth(Number(v))}
             options={monthOptions}
             style={{ width: 150 }}
           />
           <CustomSelect
+            className="eds-cselect"
             value={String(year)}
             onChange={(v) => setYear(Number(v))}
             options={yearOptions}
@@ -659,7 +635,7 @@ export default function DSR() {
 
         {/* Right side: action buttons */}
         {view === "mine" && (
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <div className="eds-controls-end">
             {/* <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -675,19 +651,17 @@ export default function DSR() {
             {canMutateDsr && isAdminOrHR && (
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
-                style={{ padding: "0.55rem 1.0rem" }}
+                className="eds-action"
                 onClick={() => setShowReminderSettings(true)}
                 title="Configure when the daily DSR reminder is sent"
               >
-                <Icons.Clock /> &nbsp; Reminder
+                <Icons.Clock /> Reminder
               </button>
             )}
             {canMutateDsr && (
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                style={{ padding: "0.55rem 1.2rem" }}
+                className="eds-action eds-action--go"
                 onClick={() => {
                   if (showForm) {
                     if (!editingId) {
@@ -700,7 +674,7 @@ export default function DSR() {
                   requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
                 }}
               >
-                <Icons.Plus /> &nbsp; {showForm && !editingId ? "Close" : "Add DSR"}
+                <Icons.Plus /> {showForm && !editingId ? "Close" : "Add DSR"}
               </button>
             )}
           </div>
@@ -732,25 +706,15 @@ export default function DSR() {
           />
 
           {/* Recent DSRs table */}
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "1rem 1.25rem",
-                borderBottom: "1px solid rgba(255,255,255,0.06)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Icons.Document />
-                <h3 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 800, color: "#fff" }}>
-                  Recent DSRs
-                </h3>
+          <section className="eds-card">
+            <div className="eds-card-head">
+              <span className="eds-chip eds-chip--grey"><Icons.Document /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Recent DSRs</h2>
               </div>
-              <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.55)", fontWeight: 600 }}>
+              <span className="eds-tally" style={{ marginLeft: "auto" }}>
                 {MONTHS[month - 1]} {year}
-              </div>
+              </span>
             </div>
 
             {loading ? (
@@ -758,8 +722,9 @@ export default function DSR() {
                 <SectionLoader size="md" />
               </div>
             ) : recent.length === 0 ? (
-              <div style={{ padding: "2.5rem 1.25rem", textAlign: "center", color: "rgba(255,255,255,0.6)" }}>
-                No DSRs filed yet for {MONTHS[month - 1]} {year}. Use the form above to create one.
+              <div className="eds-empty--card">
+                <span className="eds-empty-tile"><Icons.Document /></span>
+                <span>No DSRs filed yet for {MONTHS[month - 1]} {year}. Use the form above to create one.</span>
               </div>
             ) : (
               <div className="table-wrap table-wrap--dark dsr-recent-table">
@@ -832,26 +797,22 @@ export default function DSR() {
                 </table>
               </div>
             )}
-          </div>
 
-          {user && (
-            <div
-              style={{
-                marginTop: "0.75rem",
-                fontSize: "0.72rem",
-                color: "rgba(255,255,255,0.5)",
-                textAlign: "right",
-              }}
-            >
-              Filing as{" "}
-              {/* <span style={{ color: "rgba(255,255,255,0.85)", fontWeight: 700 }}>
-                {user.username}
-              </span> */}
-              {user.employee_code ? ` (${user.employee_code})` : ""}
-            </div>
-          )}
+            {user && (
+              <div className="eds-card-foot" style={{ textAlign: "right" }}>
+                <span className="eds-tally">
+                  Filing as{" "}
+                  {/* <span style={{ color: "rgba(255,255,255,0.85)", fontWeight: 700 }}>
+                    {user.username}
+                  </span> */}
+                  {user.employee_code ? ` (${user.employee_code})` : ""}
+                </span>
+              </div>
+            )}
+          </section>
         </div>
       )}
+      </div>
 
       {/* Add / Edit DSR popup */}
       {showForm && (
@@ -1428,9 +1389,7 @@ function DsrSummaryStrip({
   const cards: Array<{
     label: string;
     value: number;
-    iconTint: string;
-    iconBg: string;
-    iconBorder: string;
+    tone: string;
     icon: React.ReactNode;
     onClick?: () => void;
     hint?: string;
@@ -1438,26 +1397,22 @@ function DsrSummaryStrip({
     {
       label: "Total DSRs",
       value: summary?.total ?? 0,
-      iconTint: "#60a5fa",
-      iconBg: "rgba(59, 130, 246, 0.14)",
-      iconBorder: "rgba(96, 165, 250, 0.28)",
+      tone: "eds-vtile--sky",
       icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5" />
+          <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z" />
         </svg>
       ),
     },
     {
       label: "Submitted",
       value: summary?.submitted ?? 0,
-      iconTint: "#34d399",
-      iconBg: "rgba(16, 185, 129, 0.14)",
-      iconBorder: "rgba(52, 211, 153, 0.28)",
+      tone: "eds-vtile--emerald",
       icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 3 14 8 19 8" />
           <polyline points="9 14 11 16 15 12" />
         </svg>
       ),
@@ -1466,17 +1421,14 @@ function DsrSummaryStrip({
       ? [{
           label: "Draft",
           value: summary?.draft ?? 0,
-          iconTint: "#c084fc",
-          iconBg: "rgba(168, 85, 247, 0.14)",
-          iconBorder: "rgba(192, 132, 252, 0.28)",
+          tone: "eds-vtile--violet",
           onClick: onDraftClick,
           hint: onDraftClick ? "Click to open" : undefined,
           icon: (
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 3 14 8 19 8" />
+              <line x1="9" y1="14" x2="15" y2="14" />
             </svg>
           ),
         }]
@@ -1484,188 +1436,57 @@ function DsrSummaryStrip({
   ];
 
   return (
-    <div
-      className="card dsr-summary-card"
-      style={{
-        marginBottom: "1rem",
-        padding: "1rem 1.1rem 1.05rem",
-        borderRadius: 14,
-      }}
-    >
-      {/* Title row */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "0.85rem",
-          gap: "0.75rem",
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
-          <span style={{ color: "rgba(255,255,255,0.85)", display: "inline-flex" }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-            </svg>
-          </span>
-          <span
-            style={{
-              fontSize: "0.98rem",
-              fontWeight: 800,
-              color: "#fff",
-              letterSpacing: "0.01em",
-            }}
-          >
-            DSR Summary
-          </span>
+    <section className="eds-card dsr-summary-card" style={{ marginBottom: "1rem" }}>
+      <div className="eds-card-head">
+        <span className="eds-chip eds-chip--grey">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 3 14 8 19 8" />
+          </svg>
+        </span>
+        <div className="eds-card-titles">
+          <h2 className="eds-card-title">DSR Summary</h2>
         </div>
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.45rem",
-            padding: "0.38rem 0.75rem",
-            borderRadius: 10,
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            fontSize: "0.78rem",
-            fontWeight: 600,
-            color: "rgba(255,255,255,0.85)",
-          }}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
-            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-            <line x1="16" y1="2" x2="16" y2="6" />
-            <line x1="8" y1="2" x2="8" y2="6" />
+        <span className="eds-count-pill">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}>
+            <rect x="3" y="4.5" width="18" height="16.5" rx="2.5" />
             <line x1="3" y1="10" x2="21" y2="10" />
           </svg>
           {monthLabel} {year}
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.55 }}>
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </div>
+        </span>
       </div>
 
-      {/* Stat tiles */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: "0.85rem",
-        }}
-        className="dsr-summary-strip"
-      >
+      <div className="eds-vtiles dsr-summary-strip">
         {cards.map((c) => {
           const isClickable = typeof c.onClick === "function";
+          const Tag = isClickable ? "button" : "div";
           return (
-            <div
+            <Tag
               key={c.label}
-              role={isClickable ? "button" : undefined}
-              tabIndex={isClickable ? 0 : undefined}
+              type={isClickable ? "button" : undefined}
+              className={`eds-vtile ${c.tone}`}
               onClick={isClickable ? c.onClick : undefined}
-              onKeyDown={
-                isClickable
-                  ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        c.onClick?.();
-                      }
-                    }
-                  : undefined
-              }
-              style={{
-                padding: "0.95rem 1.1rem",
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.025)",
-                border: "1px solid rgba(255,255,255,0.07)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.7rem",
-                minWidth: 0,
-                cursor: isClickable ? "pointer" : "default",
-                transition: "background 0.15s, border-color 0.15s, transform 0.1s",
-              }}
-              onMouseEnter={
-                isClickable
-                  ? (e) => {
-                      (e.currentTarget as HTMLDivElement).style.background =
-                        "rgba(255,255,255,0.05)";
-                      (e.currentTarget as HTMLDivElement).style.borderColor =
-                        c.iconBorder;
-                    }
-                  : undefined
-              }
-              onMouseLeave={
-                isClickable
-                  ? (e) => {
-                      (e.currentTarget as HTMLDivElement).style.background =
-                        "rgba(255,255,255,0.025)";
-                      (e.currentTarget as HTMLDivElement).style.borderColor =
-                        "rgba(255,255,255,0.07)";
-                    }
-                  : undefined
-              }
+              title={c.hint}
             >
-              <span
-                style={{
-                  width: 38,
-                  height: 38,
-                  display: "inline-grid",
-                  placeItems: "center",
-                  borderRadius: 10,
-                  background: c.iconBg,
-                  color: c.iconTint,
-                  border: `1px solid ${c.iconBorder}`,
-                  flexShrink: 0,
-                }}
-              >
-                {c.icon}
-              </span>
-              <div style={{ display: "flex", flexDirection: "column", minWidth: 0, gap: 4 }}>
-                <span
-                  style={{
-                    fontSize: "0.78rem",
-                    color: "rgba(255,255,255,0.6)",
-                    fontWeight: 500,
-                    letterSpacing: "0.01em",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {c.label}
-                </span>
-                <span
-                  style={{
-                    fontSize: "1.6rem",
-                    fontWeight: 800,
-                    color: "#fff",
-                    fontVariantNumeric: "tabular-nums",
-                    lineHeight: 1,
-                  }}
-                >
-                  {c.value}
-                </span>
+              <span className="eds-vtile-chip">{c.icon}</span>
+              <div className="eds-vtile-body">
+                <span className="eds-vtile-figure">{c.value}</span>
+                <span className="eds-vtile-label">{c.label}</span>
                 {c.hint && (
-                  <span
-                    style={{
-                      fontSize: "0.7rem",
-                      color: c.iconTint,
-                      fontWeight: 600,
-                      marginTop: 2,
-                    }}
-                  >
-                    {c.hint} →
+                  <span className="eds-vtile-cue">
+                    {c.hint}
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="4" y1="12" x2="19" y2="12" />
+                      <polyline points="13 6 19 12 13 18" />
+                    </svg>
                   </span>
                 )}
               </div>
-            </div>
+            </Tag>
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1839,19 +1660,8 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      style={{
-        background: "transparent",
-        border: "none",
-        cursor: "pointer",
-        padding: "0.7rem 1.1rem",
-        fontSize: "0.85rem",
-        fontWeight: 700,
-        color: active ? "#fff" : "rgba(255,255,255,0.6)",
-        borderBottom: active
-          ? "2px solid var(--brand-400, #60a5fa)"
-          : "2px solid transparent",
-        marginBottom: -1,
-      }}
+      className={`eds-utab${active ? " is-active" : ""}`}
+      style={{ marginBottom: -1 }}
     >
       {label}
     </button>
@@ -1942,22 +1752,15 @@ function AllDsrsView({
     <div>
       <DsrSummaryStrip summary={allSummary} year={year} month={month} showDraft={false} />
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "1rem 1.25rem",
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
-        }}
-      >
-        <h3 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 800, color: "#fff" }}>
-          All Employee DSRs
-        </h3>
-        <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.55)", fontWeight: 600 }}>
-          {monthName} {year} &middot; {rows.length} record{rows.length === 1 ? "" : "s"}
+      <section className="eds-card">
+      <div className="eds-card-head">
+        <span className="eds-chip eds-chip--grey"><Icons.Document /></span>
+        <div className="eds-card-titles">
+          <h2 className="eds-card-title">All Employee DSRs</h2>
         </div>
+        <span className="eds-tally" style={{ marginLeft: "auto" }}>
+          {monthName} {year} &middot; <b>{rows.length}</b> record{rows.length === 1 ? "" : "s"}
+        </span>
       </div>
 
       {loading ? (
@@ -1965,8 +1768,9 @@ function AllDsrsView({
           <SectionLoader size="md" />
         </div>
       ) : rows.length === 0 ? (
-        <div style={{ padding: "2.5rem 1.25rem", textAlign: "center", color: "rgba(255,255,255,0.6)" }}>
-          No DSRs found for the current filters.
+        <div className="eds-empty--card">
+          <span className="eds-empty-tile"><Icons.Document /></span>
+          <span>No DSRs found for the current filters.</span>
         </div>
       ) : (
         <div style={{ padding: "0 0 1rem 0" }}>
@@ -2096,7 +1900,7 @@ function AllDsrsView({
           </div>
         </div>
       )}
-      </div>
+      </section>
     </div>
   );
 }

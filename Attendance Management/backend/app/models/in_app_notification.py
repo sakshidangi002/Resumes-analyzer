@@ -15,6 +15,6 @@ class AppNotification(Base):
     kind = Column(String(50), nullable=False, default="GENERAL")  # LEAVE, LETTER, ONBOARDING, SYSTEM
     link_path = Column(String(255), nullable=True)
     read_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now, index=True)
 
     user = relationship("User", backref="app_notifications")

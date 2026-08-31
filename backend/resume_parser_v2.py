@@ -20,7 +20,6 @@ Usage from api.py or main.py:
 import logging
 import re
 import unicodedata
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +266,7 @@ _TECH_KEYWORDS = {
     "microservices", "restful", "graphql", "html", "css", "bootstrap", "jquery",
     "android", "ios", "swift", "kotlin", "flutter", "react native",
     "tensorflow", "pytorch", "machine learning", "deep learning", "nlp",
-    "opencv", "opencv", "data science", "scikit-learn", "pandas", "numpy",
+    "opencv", "data science", "scikit-learn", "pandas", "numpy",
     "uipath", "rpa", "power bi", "tableau", "hadoop", "spark", "kafka",
     "elasticsearch", "devops", "ci/cd", "jenkins", "terraform", "ansible",
     "fastapi", "express", "laravel", "rails", "hibernate", "spring boot",

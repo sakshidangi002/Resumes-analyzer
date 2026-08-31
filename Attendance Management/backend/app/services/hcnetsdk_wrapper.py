@@ -414,7 +414,7 @@ class HCNetSDKWrapper:
             if login_id <= 0:  # LoginID must be positive, 0 or negative is invalid
                 error_code = self.get_last_error()
                 if login_id == 0:
-                    logger.error(f"NET_DVR_Login returned LoginID=0 (invalid), treating as failure")
+                    logger.error("NET_DVR_Login returned LoginID=0 (invalid), treating as failure")
                 # Common HCNetSDK error codes
                 error_messages = {
                     1: "Password error",

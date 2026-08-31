@@ -18,7 +18,7 @@ from app.schemas.attendance import (
     AttendanceDetailsResponse,
     DailyAttendanceReportRow,
 )
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.services.attendance_service import (
     sign_in,
     sign_out,
@@ -33,7 +33,7 @@ from app.services.attendance_event_service import (
     recalculate_attendance_summary,
     calculate_intervals_from_events,
     count_attendance_events,
-    format_duration,
+    sync_manual_boundary_event,
 )
 
 router = APIRouter()
@@ -64,6 +64,10 @@ def attendance_sign_in(
     if d == date.today() and sign_in_time > datetime.now().time():
         raise HTTPException(status_code=400, detail="Cannot record future Sign-In time for today")
     rec = sign_in(db, employee_id, d, sign_in_time)
+    rec.sign_in_manual = True
+    sync_manual_boundary_event(db, employee_id, d, "IN", sign_in_time)
+    db.commit()
+    db.refresh(rec)
     return rec
 
 
@@ -81,6 +85,10 @@ def attendance_sign_out(
     if d == date.today() and sign_out_time > datetime.now().time():
         raise HTTPException(status_code=400, detail="Cannot record future Sign-Out time for today")
     rec = sign_out(db, employee_id, d, sign_out_time)
+    rec.sign_out_manual = True
+    sync_manual_boundary_event(db, employee_id, d, "OUT", sign_out_time)
+    db.commit()
+    db.refresh(rec)
     return rec
 
 
@@ -120,15 +128,22 @@ def auto_mark_attendance(
                 return rec
             return rec
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail="Unable to record attendance event.") from exc
 
     rec = get_or_create_attendance(db, data.employee_id, data.date)
 
     if sign_in_time is not None:
         rec.sign_in_time = sign_in_time
         rec.is_late = False
+        # Publish the manual boundary to the event timeline. Without this the
+        # camera state machine sees no events, reads the employee as ABSENT and
+        # records the next recognition as another CHECK_IN instead of the
+        # BREAK_OUT/BREAK_IN it actually is -- which is why break counts stayed
+        # at 0 for a manually checked-in employee.
+        sync_manual_boundary_event(db, data.employee_id, data.date, "IN", sign_in_time)
     if sign_out_time is not None:
         rec.sign_out_time = sign_out_time
+        sync_manual_boundary_event(db, data.employee_id, data.date, "OUT", sign_out_time)
 
     if sign_in_time is not None and sign_out_time is None:
         rec.total_work_hours = None
@@ -191,7 +206,7 @@ def create_attendance_event(
             )
         return event
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Unable to record attendance event.") from exc
 
 
 @router.get("/events", response_model=list[AttendanceEventResponse])
@@ -312,7 +327,12 @@ def daily_attendance_report(
                 sign_out_time=rec.sign_out_time if rec else None,
                 total_work_hours=float(rec.total_work_hours) if rec and rec.total_work_hours is not None else None,
                 total_break_hours=float(rec.total_break_hours) if rec and rec.total_break_hours is not None else None,
-                expected_working_hours=float(emp.expected_working_hours or 9.0),
+                # 0 is a real value -- "no fixed hours" -- and must reach the UI
+                # as 0 so it can say so, rather than being rewritten to 9 here.
+                expected_working_hours=(
+                    0.0 if emp.expected_working_hours == 0
+                    else float(emp.expected_working_hours or 9.0)
+                ),
                 status=rec.status if rec else "ABSENT",
                 is_late=rec.is_late if rec else False,
                 is_early_exit=rec.is_early_exit if rec else False,
@@ -380,6 +400,12 @@ def admin_set_attendance(
     # camera.
     rec.sign_in_manual = data.sign_in_time is not None
     rec.sign_out_manual = data.sign_out_time is not None
+    sync_manual_boundary_event(
+        db, data.employee_id, data.date, "IN", data.sign_in_time,
+    )
+    sync_manual_boundary_event(
+        db, data.employee_id, data.date, "OUT", data.sign_out_time,
+    )
     if data.break_hours is not None:
         if data.break_hours < 0:
             raise HTTPException(status_code=400, detail="Break time cannot be negative")
@@ -458,10 +484,15 @@ def get_today_attendance(
 ):
     """Get today's attendance for all employees (or filtered by department)."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_events_for_day, recalculate_attendance_summary
-    
-    today = get_ist_now().date()
-    
+    from app.services.attendance_event_service import (
+        business_date, get_events_for_day, recalculate_attendance_summary,
+    )
+
+    # Business day, not calendar day — must match where add_attendance_event
+    # files events, or between midnight and the day-start hour this view shows
+    # an empty day while a night shift is still inside.
+    today = business_date(get_ist_now())
+
     q = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only())
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
@@ -509,10 +540,13 @@ def get_live_attendance_status(
 ):
     """Get real-time attendance status for all active employees today."""
     from app.core.datetime_utils import get_ist_now
-    from app.services.attendance_event_service import get_latest_event_for_day, _normalize_event_type
+    from app.services.attendance_event_service import (
+        business_date, get_latest_event_for_day, _normalize_event_type,
+    )
 
-    today = get_ist_now().date()
-    
+    # Business day — see the note in /today.
+    today = business_date(get_ist_now())
+
     # Get all active employees
     employees = db.query(Employee).filter(Employee.employment_status == "Active", _employees_only()).all()
     
@@ -752,7 +786,6 @@ def get_monthly_attendance_summary(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     from calendar import monthrange
-    from datetime import timedelta
 
     first_day = date(year, month, 1)
     last_day = date(year, month, monthrange(year, month)[1])
@@ -862,8 +895,14 @@ def approve_correction_request(
         rec = get_or_create_attendance(db, req.employee_id, req.attendance_date)
         if req.requested_sign_in_time:
             rec.sign_in_time = req.requested_sign_in_time
+            sync_manual_boundary_event(
+                db, req.employee_id, req.attendance_date, "IN", req.requested_sign_in_time,
+            )
         if req.requested_sign_out_time:
             rec.sign_out_time = req.requested_sign_out_time
+            sync_manual_boundary_event(
+                db, req.employee_id, req.attendance_date, "OUT", req.requested_sign_out_time,
+            )
         rec.total_work_hours = calculate_work_hours(rec.sign_in_time, rec.sign_out_time)
         if req.requested_status:
             rec.status = req.requested_status

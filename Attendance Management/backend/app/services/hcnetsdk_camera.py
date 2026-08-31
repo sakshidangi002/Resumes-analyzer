@@ -21,7 +21,6 @@ import numpy as np
 
 from app.services.hcnetsdk_wrapper import (
     _sdk_wrapper,
-    NET_DVR_PREVIEWINFO,
     REALDATA_CALLBACK,
 )
 from app.services.face_tracker import FaceTracker
@@ -34,12 +33,15 @@ logger = logging.getLogger(__name__)
 _RECONNECT_INIT_DELAY = 2.0
 _RECONNECT_MAX_DELAY = 30.0
 _STALE_TIMEOUT = 15.0
-import os
 
 _JPEG_QUALITY = 80
 _FPS_WINDOW = 30
-# Consecutive confirmations before attendance is recorded (see camera_service).
-_CONFIRM_FRAMES = int(os.getenv("CCTV_CONFIRM_FRAMES", "3"))
+
+# NOTE: _CONFIRM_FRAMES used to live here as a SECOND, independent copy of the
+# attendance rule (default 3, while camera_service used 1). Whichever worker a
+# camera happened to run therefore governed how much evidence its attendance
+# needed, and nothing surfaced which one that was. Both paths now call
+# services/attendance_gate with the camera's own profile.
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +208,13 @@ class HCNetSDKCameraWorker:
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._frame_counter = 0  # For frame skipping
+        # Last time a browser requested this camera's preview. Mirrors
+        # CameraWorker so the DVR idle-reaper can cull unwatched streams.
+        self._last_view_ts = 0.0
+        # When True the AI analysis is skipped but the video keeps streaming.
+        # Mirrors CameraWorker.analysis_paused so the DVR dashboard's
+        # recognition toggle works identically on both worker types.
+        self.analysis_paused: bool = False
         
         # Face tracking for multi-face recognition
         self.face_tracker = FaceTracker(
@@ -417,8 +426,18 @@ class HCNetSDKCameraWorker:
         """Main worker loop with reconnection logic."""
         reconnect_delay = _RECONNECT_INIT_DELAY
         consecutive_failures = 0
-        
-        logger.info(f"Camera {self.camera_id}: HCNetSDK worker thread started")
+
+        # Same priority rule as CameraWorker: attendance cameras are admitted to
+        # the shared inference gate ahead of display-only MONITOR cameras.
+        from app.services.inference_gate import set_inference_priority
+
+        set_inference_priority(self.camera_purpose != "MONITOR")
+
+        logger.info(
+            "Camera %s: HCNetSDK worker thread started (inference priority=%s)",
+            self.camera_id,
+            "high" if self.camera_purpose != "MONITOR" else "low",
+        )
         
         while not self._stop_evt.is_set():
             # Login if not logged in
@@ -489,13 +508,42 @@ class HCNetSDKCameraWorker:
             f"Total frames: {self.state.total_frames}, Reconnects: {self.state.reconnect_count}"
         )
     
+    def _encode_preview(self, frame: np.ndarray) -> None:
+        """Publish a plain (un-annotated) preview JPEG.
+
+        Unlike CameraWorker, this class has no separate display thread — the
+        JPEG is produced inside _process_frame_for_recognition. So any path
+        that skips recognition must still publish a frame here, otherwise the
+        live video freezes whenever analysis is skipped.
+        """
+        try:
+            ok_enc, buf = cv2.imencode(
+                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY]
+            )
+            if ok_enc:
+                with self._frame_lock:
+                    self.state.latest_jpeg = buf.tobytes()
+                self.state.updated_at = time.time()
+        except Exception as exc:
+            logger.error("Camera %s: preview encode failed: %s", self.camera_id, exc)
+
     def _process_frame_for_recognition(self, frame: np.ndarray) -> None:
         """Process frame for face recognition with tracking (mirrors CameraWorker behavior)."""
         try:
+            # Analysis paused (DVR dashboard recognition toggle) -> keep the
+            # video flowing, skip the expensive AI.
+            if self.analysis_paused:
+                self._encode_preview(frame)
+                return
+
             # Check if frame is blurry
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < 80.0:
                 logger.debug(f"Camera {self.camera_id}: Skipping blurry frame")
+                # Blurry frames are unsuitable for face recognition, but they
+                # are still valid camera frames. Publish them so a low-light or
+                # motion-blurred stream does not look frozen in the dashboard.
+                self._encode_preview(frame)
                 return
             
             # Convert to RGB for recognition
@@ -513,29 +561,65 @@ class HCNetSDKCameraWorker:
             detections = [{"box": face.get("box"), "face": face} for face in faces]
 
             # Step 2: Update face tracker (always update for smooth tracking)
-            tracks = self.face_tracker.update(detections)
+            tracks = self.face_tracker.update(detections, frame_shape=rgb.shape[:2])
 
             # Frame skipping for recognition only (not tracking)
             self._frame_counter += 1
             skip_recognition = self.frame_skip > 0 and self._frame_counter % (self.frame_skip + 1) != 0
 
             # Step 3: Identify tracks seen in THIS frame (fresh embedding).
-            # Identification is side-effect free — attendance is only marked
-            # after the same employee is CONFIRMED across _CONFIRM_FRAMES.
+            # Identification is side-effect free — attendance is decided by
+            # services/attendance_gate from the whole track's evidence, using
+            # this camera's own profile.
             if not skip_recognition:
+                from app.services import attendance_gate, camera_profile, face_quality
+
+                profile = camera_profile.get_profile(self.camera_id, self.camera_purpose)
+
                 for track in tracks:
                     if track.consecutive_misses != 0 or track.face is None:
                         continue
 
-                    # Match from the already-computed embedding (no re-detect,
-                    # no attendance side effect).
+                    # Quality gate — this path had none at all. Any detected
+                    # face, at any size, pose or sharpness, went straight into a
+                    # match and could write attendance on a single frame.
+                    quality = face_quality.assess(
+                        track.face, rgb, limits=profile.limits,
+                    )
+                    if not quality.ok:
+                        logger.debug(
+                            "QUALITY camera=%s track=%s rejected=%s %s",
+                            self.camera_id, track.track_id, quality.reason,
+                            quality.as_log_fields(),
+                        )
+                        continue
+
+                    # Combine observations across the track before matching, so
+                    # the decision rests on the whole approach rather than on one
+                    # noisy frame (see services/embedding_fusion).
+                    match_face = track.face
+                    if not track.add_observation(
+                        track.face.get("embedding"), quality=quality.score
+                    ):
+                        logger.info(
+                            "FUSION camera=%s track=%s observation rejected as "
+                            "outlier — likely a track switch",
+                            self.camera_id, track.track_id,
+                        )
+                        continue
+                    fused = track.fused_embedding()
+                    if fused is not None:
+                        match_face = dict(track.face)
+                        match_face["embedding"] = fused
+
                     result = recognize_face(
-                        track.face,
-                        threshold=self.threshold,
+                        match_face,
+                        threshold=profile.threshold,
                         source="cctv",
                         camera_id=str(self.camera_id),
                         camera_purpose=self.camera_purpose,
                         mark_attendance=False,
+                        min_margin=profile.margin,
                     )
                     faces_data = result.get("faces", [])
                     face_data = faces_data[0] if faces_data else {}
@@ -549,26 +633,34 @@ class HCNetSDKCameraWorker:
                         confidence=face_data.get("score", 0.0),
                     )
 
-                    # Stable confirmation → mark attendance exactly once.
-                    should_mark = track.register_identification(
-                        emp_id, matched, _CONFIRM_FRAMES
+                    decision = attendance_gate.evaluate(
+                        track,
+                        employee_id=emp_id,
+                        matched=matched,
+                        score=float(face_data.get("score") or 0.0),
+                        margin=float(face_data.get("margin") or 0.0),
+                        profile=profile,
                     )
-                    if should_mark:
-                        logger.info(
-                            f"Camera {self.camera_id} [{self.camera_purpose}]: track={track.track_id} "
-                            f"CONFIRMED {track.employee_name} (id={emp_id}, conf={track.confidence * 100:.1f}%) "
-                            f"after {track.confirm_count} frames -> marking attendance"
-                        )
+                    logger.info(
+                        "DECISION camera=%s [%s] track=%s employee=%s(%s) "
+                        "allowed=%s reason=%s %s %s",
+                        self.camera_id, self.camera_purpose, track.track_id,
+                        face_data.get("employee_name") or "Unknown", emp_id,
+                        decision.allowed, decision.reason or "allowed",
+                        quality.as_log_fields(), decision.as_log_fields(),
+                    )
+
+                    if decision.allowed and profile.marks_attendance:
+                        track.attendance_marked = True
                         mark_cctv_attendance(
                             int(emp_id),
                             camera_id=str(self.camera_id),
                             camera_purpose=self.camera_purpose,
-                        )
-                    elif not matched:
-                        logger.debug(
-                            f"Camera {self.camera_id}: track={track.track_id} REJECTED "
-                            f"score={face_data.get('score', 0.0):.4f} "
-                            f"reason={face_data.get('state', 'no_match_or_below_threshold')}"
+                            evidence={
+                                "match_score": decision.score,
+                                "match_margin": decision.margin,
+                                "track_id": track.track_id,
+                            },
                         )
             
             # Step 4: Always annotate frame with enhanced overlay (shows persistent boxes)
@@ -659,7 +751,7 @@ class HCNetSDKCameraWorker:
                     cv2.LINE_AA,
                 )
         
-        # Draw camera info overlay (top-left)
+        # Draw camera info overlay (top-right)
         from datetime import datetime
         overlay_lines = [
             f"Camera: {camera_name}",
@@ -671,17 +763,20 @@ class HCNetSDKCameraWorker:
         # Draw overlay background
         overlay_height = 24 * len(overlay_lines) + 8
         overlay_width = 220
+        frame_height, frame_width = annotated.shape[:2]
+        panel_x1 = max(0, frame_width - overlay_width - 10)
+        panel_x2 = min(frame_width - 1, panel_x1 + overlay_width)
         cv2.rectangle(
             annotated,
-            (10, 10),
-            (10 + overlay_width, 10 + overlay_height),
+            (panel_x1, 10),
+            (panel_x2, min(frame_height - 1, 10 + overlay_height)),
             (0, 0, 0),
             -1,
         )
         cv2.rectangle(
             annotated,
-            (10, 10),
-            (10 + overlay_width, 10 + overlay_height),
+            (panel_x1, 10),
+            (panel_x2, min(frame_height - 1, 10 + overlay_height)),
             (255, 255, 255),
             1,
         )
@@ -692,7 +787,7 @@ class HCNetSDKCameraWorker:
             cv2.putText(
                 annotated,
                 line,
-                (20, y_pos),
+                (panel_x1 + 10, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 255),
@@ -746,7 +841,21 @@ class HCNetSDKCameraWorker:
         """Get the latest frame (thread-safe)."""
         with self._frame_lock:
             return self._latest_frame.copy() if self._latest_frame is not None else None
-    
+
+    def get_latest_jpeg(self) -> Optional[bytes]:
+        """Latest annotated JPEG frame.
+
+        Mirrors CameraWorker.get_latest_jpeg so both worker types satisfy the
+        same interface — the DVR preview/stream routes call this without
+        knowing which class they are holding. This method was MISSING, so
+        those routes raised AttributeError (HTTP 500) for any camera
+        configured with source_type="hcnetsdk".
+        """
+        self._last_view_ts = time.time()   # keeps the DVR idle-reaper from culling us
+        with self._frame_lock:
+            return self.state.latest_jpeg
+
+
     def serialize_state(self) -> dict:
         """Serialize camera state for API responses."""
         s = self.state
@@ -769,6 +878,5 @@ class HCNetSDKCameraWorker:
             "last_result_faces": len(s.latest_result.get("faces", [])),
         }
 
-
-# Import ctypes for callback
-import ctypes
+# `ctypes` is already imported at the top of this module; the second import here
+# was a no-op shadowing it.

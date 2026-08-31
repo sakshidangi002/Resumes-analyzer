@@ -21,6 +21,9 @@ from app.models.dsr import DailyStatusReport
 from app.models.push_subscription import PushSubscription
 from app.models.camera import CameraConfig
 from app.models.body_embedding import BodyEmbedding
+from app.models.employee_face import EmployeeFaceEmbedding
+from app.models.unknown_face import UnknownFace
+from app.models.unknown_attendance_event import UnknownAttendanceEvent
 
 __all__ = [
     "Base",
@@ -61,4 +64,7 @@ __all__ = [
     "PushSubscription",
     "CameraConfig",
     "BodyEmbedding",
+    "EmployeeFaceEmbedding",
+    "UnknownFace",
+    "UnknownAttendanceEvent",
 ]

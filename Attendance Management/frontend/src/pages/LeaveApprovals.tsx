@@ -6,7 +6,8 @@ import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import { formatDate } from "../utils/dateFormatter";
 import { SectionLoader } from "../components/LoadingState";
 import CustomSelect from "../components/CustomSelect";
-import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import { useTableControls } from "../components/dataTable";
+import type { SortState } from "../components/dataTable";
 
 interface ApprovalRow {
   id: number;
@@ -63,10 +64,84 @@ function PaidLeaveBreakdown({ r }: { r: ApprovalRow }) {
   );
 }
 
-// Premium SVG Icons for Actions
+/** Identity tint for a requester avatar, stable per request. */
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+function initialsOf(name: string): string {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.slice(0, 2).map((x) => x[0]).join("").toUpperCase();
+}
+
+/** Approved settles emerald, rejected rose, pending amber. */
+function leaveStatusTone(status: string): string {
+  const s = (status || "").toUpperCase();
+  if (s === "APPROVED") return " eds-status--present";
+  if (s === "REJECTED") return " eds-status--absent";
+  if (s === "PENDING") return " eds-status--warn";
+  return "";
+}
+
+/** Column header for the approvals table. Sorting stays in useTableControls. */
+function SortTh({
+  label,
+  columnKey,
+  sort,
+  onToggle,
+  notSortable,
+  className,
+}: {
+  label: string;
+  columnKey: string;
+  sort: SortState;
+  onToggle: (key: string) => void;
+  notSortable?: boolean;
+  className?: string;
+}) {
+  if (notSortable) return <th className={`is-actions ${className || ""}`}>{label}</th>;
+  const active = sort.key === columnKey;
+  return (
+    <th className={className}>
+      <button
+        type="button"
+        className={`eds-sort${active ? " is-active" : ""}`}
+        onClick={() => onToggle(columnKey)}
+        title={`Sort by ${label}`}
+      >
+        {label}
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+          {sort.direction !== "asc" || !active ? <polyline points="7 15 12 20 17 15" /> : null}
+          {sort.direction !== "desc" || !active ? <polyline points="7 9 12 4 17 9" /> : null}
+        </svg>
+      </button>
+    </th>
+  );
+}
+
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-iconbtn 15px, .eds-action 13px, .eds-search 15px). */
 const Icons = {
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5" />
+      <line x1="21" y1="21" x2="16.7" y2="16.7" />
+    </svg>
+  ),
+  Refresh: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" />
+      <polyline points="20.5 4 20.5 9.5 15 9.5" />
+    </svg>
+  ),
+  Leave: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20" />
+      <circle cx="10.5" cy="8" r="3.5" />
+      <polyline points="17 11 19 13 22 9" />
+    </svg>
+  ),
   Check: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12"></polyline>
     </svg>
   ),
@@ -113,14 +188,6 @@ export default function LeaveApprovals() {
     if (!d) return "-";
     const dt = new Date(d);
     return Number.isFinite(dt.getTime()) ? formatDate(d) + " " + dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d;
-  };
-
-  const statusPillClass = (s: string) => {
-    const v = String(s || "").toUpperCase();
-    if (v === "APPROVED") return "leave-status-pill leave-status-pill--approved";
-    if (v === "REJECTED") return "leave-status-pill leave-status-pill--rejected";
-    if (v === "PENDING") return "leave-status-pill leave-status-pill--pending";
-    return "leave-status-pill";
   };
 
   const load = () => {
@@ -216,79 +283,94 @@ export default function LeaveApprovals() {
 
   if (!canView) {
     return (
-      <div className="card">
-        <p>Access denied. HR/Admin only.</p>
+      <div className="eds">
+        <div className="eds-page">
+          <section className="eds-card">
+            <div className="eds-empty--card">
+              <span className="eds-empty-tile"><Icons.X /></span>
+              <span>Access denied. HR/Admin only.</span>
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
 
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Leave Approvals</h1>
-          <div className="page-subtitle">Approve or reject employee leave requests</div>
+          <h1 className="eds-title">Leave Approvals</h1>
+          <p className="eds-subtitle">Approve or reject employee leave requests</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
+
+      <div className="eds-page">
       {success && <div className="alert alert-success">{success}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div className="card">
-        <TableToolbar
-          search={approvalSearch}
-          onSearchChange={setApprovalSearch}
-          placeholder="Search by employee, type, status, reason..."
-          showClear={approvalHasActive}
-          onClear={clearApprovalControls}
-          count={{ shown: displayedRows.length, total: rows.length }}
-          leftControls={
-            <div className="form-group" style={{ marginBottom: 0, minWidth: 160 }}>
-              <CustomSelect
-                value={statusFilter}
-                onChange={(val) => setStatusFilter(val)}
-                style={{ minWidth: "140px" }}
-                options={[
-                  { value: "PENDING", label: "Pending" },
-                  { value: "APPROVED", label: "Approved" },
-                  { value: "REJECTED", label: "Rejected" }
-                ]}
-              />
-            </div>
-          }
-          rightControls={
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={load}
-              style={{ width: "140px", minWidth: "140px", height: "42px", backgroundColor: "var(--brand-500)" }}
-            >
-              Refresh
-            </button>
-          }
+      <div className="eds-controls">
+        <CustomSelect
+          className="eds-cselect eds-cselect--filter"
+          value={statusFilter}
+          onChange={(val) => setStatusFilter(val)}
+          options={[
+            { value: "PENDING", label: "Pending" },
+            { value: "APPROVED", label: "Approved" },
+            { value: "REJECTED", label: "Rejected" }
+          ]}
         />
+        <label className="eds-search" style={{ width: 360 }}>
+          <Icons.Search />
+          <input
+            type="search"
+            value={approvalSearch}
+            onChange={(e) => setApprovalSearch(e.target.value)}
+            placeholder="Search by employee, type, status, reason..."
+          />
+        </label>
+        <span className="eds-tally">
+          <b>{displayedRows.length}</b> of <b>{rows.length}</b>
+        </span>
+        {approvalHasActive && (
+          <button type="button" className="eds-action" onClick={clearApprovalControls} title="Clear search and sort">
+            Clear filters
+          </button>
+        )}
+        <div className="eds-controls-end">
+          <button type="button" className="eds-action" onClick={load}>
+            <Icons.Refresh />
+            Refresh
+          </button>
+        </div>
+      </div>
 
+      <section className="eds-card">
         {loading ? (
           <SectionLoader rows={5} />
         ) : rows.length === 0 ? (
-          <p className="text-muted">No requests.</p>
+          <div className="eds-empty--card">
+            <span className="eds-empty-tile"><Icons.Leave /></span>
+            <span>No requests.</span>
+          </div>
         ) : (
-          <div className="table-wrap table-wrap--dark">
-            <table className="table-modern table-modern--dark leave-approvals-table">
+          <div className="eds-table-wrap">
+            <table className="eds-table eds-table--auto leave-approvals-table">
               <thead>
                 <tr>
-                  <SortableHeader label="Employee" columnKey="employee" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '15%', whiteSpace: 'nowrap' }} />
-                  <SortableHeader label="Type & Kind" columnKey="type" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '20%', whiteSpace: 'nowrap' }} />
-                  <SortableHeader label="Dates" columnKey="start_date" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '22%', whiteSpace: 'nowrap' }} />
-                  <SortableHeader label="Status" columnKey="status" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '10%', whiteSpace: 'nowrap' }} />
-                  <SortableHeader className="hide-xl" label="Applied" columnKey="applied_at" sort={approvalSort} onToggle={toggleApprovalSort} style={{ width: '18%', whiteSpace: 'nowrap' }} />
-                  <SortableHeader label="Actions" columnKey="__actions" sort={approvalSort} onToggle={toggleApprovalSort} notSortable className="actions-center" style={{ width: '15%', whiteSpace: 'nowrap' }} />
+                  <SortTh label="Employee" columnKey="employee" sort={approvalSort} onToggle={toggleApprovalSort} />
+                  <SortTh label="Type & Kind" columnKey="type" sort={approvalSort} onToggle={toggleApprovalSort} />
+                  <SortTh label="Dates" columnKey="start_date" sort={approvalSort} onToggle={toggleApprovalSort} />
+                  <SortTh label="Status" columnKey="status" sort={approvalSort} onToggle={toggleApprovalSort} />
+                  <SortTh label="Applied" columnKey="applied_at" sort={approvalSort} onToggle={toggleApprovalSort} className="hide-xl" />
+                  <SortTh label="Actions" columnKey="__actions" sort={approvalSort} onToggle={toggleApprovalSort} notSortable />
                 </tr>
               </thead>
               <tbody>
                 {displayedRows.length === 0 && (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
+                    <td colSpan={6} className="eds-table-empty">
                       No requests match your search.
                     </td>
                   </tr>
@@ -316,60 +398,56 @@ export default function LeaveApprovals() {
 
                   return (
                     <tr key={r.id}>
-                      <td data-label="Employee" style={{ textAlign: 'left', paddingLeft: '1.5rem', whiteSpace: 'nowrap' }}>
-                        <div className="leave-emp-cell">
-                          <div className="leave-emp-name" style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <td data-label="Employee">
+                        <div className="eds-member">
+                          <span className={`eds-avatar eds-avatar--lg ${AVATAR_TINTS[r.id % AVATAR_TINTS.length]}`}>
+                            {initialsOf(r.employee_name)}
+                          </span>
+                          <span className="eds-member-name">
                             {r.employee_name}
-                            {isHrLeave && <span className="leave-emp-hr" style={{ marginLeft: '6px' }}>HR</span>}
-                          </div>
+                            {isHrLeave && <span className="eds-auto" style={{ marginLeft: 6 }}>HR</span>}
+                          </span>
                         </div>
                       </td>
-                      <td data-label="Type & Kind" style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', justifyContent: 'left', alignItems: 'center', width: '100%', whiteSpace: 'nowrap', gap: '0.6rem' }}>
-                          <div className="leave-type-pill" style={{ width: 'fit-content' }}>
-                            {r.leave_type_name}
-                          </div>
-                          {showKind && (
-                            <span className="text-muted" style={{ fontSize: '0.8rem', opacity: 0.8 }}>
-                              ({kindLabel})
-                            </span>
-                          )}
+                      <td data-label="Type & Kind">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', whiteSpace: 'nowrap' }}>
+                          <span className="eds-type eds-type--sky">{r.leave_type_name}</span>
+                          {showKind && <span className="eds-cell-dim">({kindLabel})</span>}
                         </div>
                       </td>
-                      <td data-label="Dates" style={{ whiteSpace: 'nowrap', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', justifyContent: 'left', width: '100%', fontWeight: 500 }}>
-                          {formatDate(r.start_date)} to {formatDate(r.end_date)}
-                        </div>
+                      <td data-label="Dates" className="eds-cell-time">
+                        {formatDate(r.start_date)} to {formatDate(r.end_date)}
                       </td>
-                      <td data-label="Status" style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', justifyContent: 'left', width: '100%' }}>
-                          <span className={statusPillClass(r.status)}>{String(r.status || "-")}</span>
-                        </div>
+                      <td data-label="Status">
+                        <span className={`eds-status${leaveStatusTone(r.status)}`}>
+                          <i></i>
+                          {String(r.status || "-")}
+                        </span>
                       </td>
-                      <td data-label="Applied" className="leave-applied hide-xl" title={r.applied_at} style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', justifyContent: 'left', width: '100%' }}>{fmtDateTime(r.applied_at)}</div>
+                      <td data-label="Applied" className="hide-xl eds-cell-dim" title={r.applied_at}>
+                        {fmtDateTime(r.applied_at)}
                       </td>
-                      <td data-label="Actions" className="actions-center" style={{ whiteSpace: 'nowrap' }}>
-                        <div className="actions-stack" style={{ justifyContent: 'left', display: 'flex', gap: '0.6rem', flexWrap: 'nowrap' }}>
-                          <button type="button" className="btn btn-secondary btn-icon btn-sm" onClick={() => setViewDetail(r)} title="View Details">
+                      <td data-label="Actions">
+                        <div className="eds-rowactions">
+                          <button type="button" className="eds-iconbtn eds-iconbtn--view" onClick={() => setViewDetail(r)} title="View Details">
                             <Icons.Eye />
                           </button>
                           {statusFilter === "PENDING" && canApproveThis && (
                             <>
-                              <button type="button" className="btn btn-success btn-icon btn-sm" onClick={() => openDecision(r.id, true)} title="Approve Leave">
+                              <button type="button" className="eds-iconbtn eds-iconbtn--edit" onClick={() => openDecision(r.id, true)} title="Approve Leave">
                                 <Icons.Check />
                               </button>
-                              <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => openDecision(r.id, false)} title="Reject Leave">
+                              <button type="button" className="eds-iconbtn eds-iconbtn--del" onClick={() => openDecision(r.id, false)} title="Reject Leave">
                                 <Icons.X />
                               </button>
                             </>
                           )}
                           {(statusFilter === "PENDING" && !canApproveThis) ? (
-                            <span className="text-muted" style={{ fontSize: '0.65rem', whiteSpace: 'nowrap' }}>
+                            <span className="eds-cell-dim" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                               {isHrLeave ? "Admin only" : "HR only"}
                             </span>
                           ) : statusFilter !== "PENDING" ? (
-                            <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => deleteRequest(r.id)} title="Delete Request">
+                            <button type="button" className="eds-iconbtn eds-iconbtn--del" onClick={() => deleteRequest(r.id)} title="Delete Request">
                               <Icons.Delete />
                             </button>
                           ) : null}
@@ -382,6 +460,7 @@ export default function LeaveApprovals() {
             </table>
           </div>
         )}
+      </section>
       </div>
       {decision && (
         <div className="modal-backdrop">
@@ -496,6 +575,6 @@ export default function LeaveApprovals() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

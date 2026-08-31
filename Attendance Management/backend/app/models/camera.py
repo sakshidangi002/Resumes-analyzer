@@ -36,6 +36,31 @@ class CameraConfig(Base):
     tracking_cooldown = Column(Float, nullable=False, default=3.0)  # Seconds between recognitions
     enabled = Column(Boolean, nullable=False, default=False)
 
+    # --- Per-camera recognition profile ---------------------------------------
+    # Everything below was previously a PROCESS-WIDE constant read from an env
+    # var, which made a single fleet-wide compromise unavoidable: a value strict
+    # enough for the check-in camera (whose matches become payroll rows) blinded
+    # the ceiling-mounted room cameras, and a value permissive enough for the
+    # room cameras let the attendance cameras accept near-random faces.
+    #
+    # These are nullable on purpose. NULL means "inherit the purpose default"
+    # (see services/camera_profile.py), so an untouched camera keeps behaving
+    # exactly as its role implies and an operator only overrides what they
+    # actually measured. Changes take effect without a restart.
+    match_margin = Column(Float, nullable=True)        # best - runner_up required
+    min_face_px = Column(Integer, nullable=True)       # real (de-scaled) face width
+    min_det_score = Column(Float, nullable=True)       # detector confidence floor
+    max_yaw_deg = Column(Float, nullable=True)         # |left/right head turn|
+    max_pitch_deg = Column(Float, nullable=True)       # |up/down head tilt|
+    max_landmark_asym = Column(Float, nullable=True)   # nose-between-eyes, 0..1
+    min_blur_var = Column(Float, nullable=True)        # face-crop Laplacian var
+    min_observations = Column(Integer, nullable=True)  # frames before attendance
+    min_quality = Column(Float, nullable=True)         # best observation quality
+    min_consensus = Column(Float, nullable=True)       # track self-agreement
+    analysis_interval = Column(Float, nullable=True)   # seconds between AI passes
+    face_crop_scale = Column(Integer, nullable=True)   # head-zoom upscale factor
+    attendance_cooldown = Column(Float, nullable=True) # per-employee, this camera
+
     # --- Doorway line-crossing (entry/exit detection) ---
     # When enabled, a virtual line is drawn across the frame; a person crossing
     # it in `entry_direction` fires this camera's event (IN/OUT). Works from an
@@ -50,6 +75,6 @@ class CameraConfig(Base):
     updated_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=datetime.utcnow,
+        onupdate=__import__("app.core.datetime_utils", fromlist=["get_utc_now"]).get_utc_now,
         nullable=False,
     )

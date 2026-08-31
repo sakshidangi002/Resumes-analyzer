@@ -72,6 +72,156 @@ def _auto_concurrency() -> int:
 _MAX_CONCURRENT = _auto_concurrency()
 _slots = threading.BoundedSemaphore(_MAX_CONCURRENT)
 
+# Minimum box HEIGHT, in pixels, for a detection to be treated as a person.
+#
+# A SIZE floor, not a score floor, and the two reject different things. The room
+# cameras have to run at a very low confidence to reach a person seated with
+# their back to the lens (measured: 0.035-0.057), and at that floor the detector
+# also emits fragments a few pixels tall on frame edges and on decode-corruption
+# bands. Camera 60 produced seven of them in ONE frame, all about 10x7 px --
+# and several outscored a real seated person, so no confidence threshold can
+# separate them. Size can: over 41 labelled people on these two cameras the
+# SMALLEST real person is 46 px tall.
+#
+# 30 leaves a clear margin under that 46 and a wide one over the junk. It is
+# deliberately not tighter: a person further from the lens than anyone in the
+# measured set must still get through.
+_MIN_PERSON_PX = float(os.getenv("CCTV_MIN_PERSON_PX", "30"))
+
+# How close to the frame border counts as "at the edge" (fraction of width or
+# height). A person leaves a room through an edge; a person hidden by a chair
+# does not move. See the expiry logic in ByteTrackEngine.update.
+_EDGE_FRACTION = float(os.getenv("CCTV_TRACK_EDGE_FRACTION", "0.12"))
+
+# How long a no-longer-detected track is kept, expressed in ANALYSIS CYCLES
+# rather than seconds.
+#
+# An earlier version used absolute seconds (1s at the edge) — which was shorter
+# than a monitor camera's analysis interval, so a track missed even ONCE near an
+# edge was deleted instantly. Detection on this view is intermittent by nature:
+# a seated person flickers in and out between cycles, and people at the edges of
+# the frame are exactly the ones most often missed. The result was worse recall,
+# not better.
+#
+# Cycles are converted to seconds using the engine's OWN measured update
+# interval, so this self-calibrates whatever the analysis rate or inference
+# queue contention happens to be.
+_EDGE_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_EDGE_HOLD_CYCLES", "2"))
+_INTERIOR_HOLD_CYCLES = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_CYCLES", "6"))
+# Floors, so a fast camera still holds a track for a usable length of time.
+_EDGE_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_EDGE_HOLD_MIN_SEC", "2.0"))
+
+
+# Cameras that ALSO run a close overlapping crop through YOLO, on top of the
+# full-frame pass.
+#
+# MEASURED on this box (yolo11m @960, one Exit-camera frame, model warm):
+#
+#     full frame only          4131 ms   1 track
+#     full frame + crop pass   8581 ms   1 track
+#
+# The second pass doubled the per-frame cost and found nothing the full-frame
+# pass had not already tracked. Paying that on every feed is what put analysis
+# seconds behind the live picture, which is why a plainly visible person still
+# read "People: 0" on the dashboard.
+#
+# It can still earn its cost on a room camera where people sit behind desks and
+# monitors, so the capability stays -- but opt-in per camera, not billed to all.
+# Comma-separated ids, e.g. CCTV_CROP_ASSIST_CAMERAS=59,60
+_CROP_ASSIST_CAMERAS = {
+    c.strip() for c in os.getenv("CCTV_CROP_ASSIST_CAMERAS", "").split(",") if c.strip()
+}
+
+# Adopt a confident detection that ByteTrack has NOT yet turned into a track.
+#
+# ByteTrack only assigns an id once a detection has been matched across TWO
+# passes; until then Ultralytics returns the box with id=None and this engine
+# used to drop it. That rule assumes passes are close together. They are not:
+# measured on the live Exit camera, consecutive passes were 5-42s apart, while
+# a person crosses the corridor in about 2s. So somebody walking through is
+# seen on exactly ONE pass, never gets an id, and the camera reports
+#
+#     detections=1 scores=[0.784] tracks=0 ids=[]
+#
+# - a plainly visible person, detected at 0.784, counted as nobody.
+#
+# Above this confidence the detection is adopted immediately as a provisional
+# track. The bar is deliberately well clear of noise: empty corridor frames
+# score 0.00-0.01, real people 0.43-0.78. Set to 0 to restore the old
+# id-only behaviour.
+#
+# Safe for attendance: a body track cannot mark attendance on its own. That
+# requires a face match clearing services/attendance_gate.
+_ADOPT_UNTRACKED_MIN_CONF = float(os.getenv("CCTV_ADOPT_UNTRACKED_MIN_CONF", "0.35"))
+
+# The same rule, for ROOM cameras, where 0.35 is roughly ten times too high.
+#
+# The bar above was set from DOORWAY evidence -- "empty corridor frames score
+# 0.00-0.01, real people 0.43-0.78" -- and it is correct there. It is wrong for
+# a room, where the people are seated with their backs to the lens and score
+# 0.02-0.20. Every one of them fails it.
+#
+# That combination is severe, because the two halves reinforce each other. A
+# room detection is intermittent, so ByteTrack rarely gets the two consecutive
+# sightings it needs to assign an id; the adoption path exists precisely to
+# rescue that case; and its bar excluded every person a room camera can see. Run
+# over ten labelled camera-59 frames containing 3-4 people each, the engine
+# produced tracks on 5 of them and NONE AT ALL on the other 5.
+#
+# 0.02 matches the room tracker's new_track_thresh: a detection good enough to
+# create a track through ByteTrack is good enough to be adopted when ByteTrack
+# is too slow to do it. Safe for attendance because a room camera cannot mark
+# any -- and a body track cannot mark attendance on its own regardless.
+_STEEP_ADOPT_UNTRACKED_MIN_CONF = float(
+    os.getenv("CCTV_STEEP_ADOPT_UNTRACKED_MIN_CONF", "0.02")
+)
+
+# How far an adopted detection may be from an existing track and still be judged
+# the same person, as a multiple of that track's box size.
+#
+# IoU alone cannot associate a WALKER across passes. At ~2.5s per pass a person
+# crosses more than their own body width, so consecutive boxes do not overlap at
+# all and IoU is exactly 0. Each pass therefore adopted a NEW provisional id:
+#
+#     pass 0 id=1000000   pass 1 id=1000001   pass 2 id=1000002 ...
+#
+# The count looked right - one track per pass - but identity churned, and that
+# is what actually broke attendance. Evidence (the fused template and the
+# identity-agreement counter) lives ON the track, so a fresh id every pass means
+# observations reset to 1 every pass and min_observations can never be reached,
+# no matter how long the person is in view.
+#
+# Distance is scaled by the track's own box because a box 300px tall is a person
+# near the camera, who covers more ground per pass than a distant one.
+#
+# Safety: this associates BODIES, never identities. A wrong merge cannot mislabel
+# attendance - identity still comes from a face match, and attendance_gate still
+# demands agreeing employee ids, so a merged track reads as `unstable_identity`
+# and is refused rather than attributed to the wrong person.
+# Scaled by box WIDTH, not max(width, height): a standing person's box is ~3x
+# taller than wide, so using height gave a 600px reach for a 100px-wide person
+# and merged two people standing 600px apart into one track. Width is the right
+# scale for horizontal displacement, which is how people cross a doorway.
+_ADOPT_MATCH_DIST_FACTOR = float(os.getenv("CCTV_ADOPT_MATCH_DIST_FACTOR", "2.5"))
+_INTERIOR_HOLD_MIN_SEC = float(os.getenv("CCTV_TRACK_INTERIOR_HOLD_MIN_SEC", "6.0"))
+
+# Absolute ceiling on how long a track may be published after it stopped being
+# detected.
+#
+# The hold windows below are expressed in CYCLES, which is right in principle --
+# a camera analysing every 0.12s and one analysing every 4s should not use the
+# same wall-clock grace. But cycles-only has no upper bound, and it scales the
+# WRONG way under load: the busier the box, the longer stale people linger.
+#
+# MEASURED on the running system, median analysis gaps of 5-10s turned a 6s
+# floor into a 30-60s hold, and 55% of passes published more tracks than the
+# detector found -- including an empty corridor reporting five people.
+_HOLD_MAX_SEC = float(os.getenv("CCTV_TRACK_HOLD_MAX_SEC", "10.0"))
+
+# Two published boxes overlapping by at least this fraction of the SMALLER box
+# are treated as the same person and merged. See _dedupe_overlapping.
+_DEDUPE_OVERLAP = float(os.getenv("CCTV_TRACK_DEDUPE_OVERLAP", "0.55"))
+
 # Cap the threads each inference session may use. Without this ONNX Runtime /
 # torch take every core for EVERY concurrent session (2 x 8 threads on 8 cores),
 # which thrashes and makes the parallel version SLOWER than the serial one.
@@ -89,7 +239,7 @@ def _cap_threads() -> None:
         import torch  # noqa
         torch.set_num_threads(per)
     except Exception:
-        pass
+        logger.warning("torch.set_num_threads failed", exc_info=True)
     logger.info(
         "Person inference: max_concurrent=%d threads_per_session=%d (cores=%s)",
         _MAX_CONCURRENT, per, os.cpu_count(),
@@ -162,6 +312,38 @@ def is_available() -> bool:
     return _model_path() is not None
 
 
+def _static_onnx_size(path: str) -> int | None:
+    """The fixed square input size of an ONNX export, or None if it is dynamic.
+
+    Exists because a mismatch here does not degrade gracefully -- it kills the
+    camera outright. models/yolo11m.onnx is exported with a STATIC
+    [1,3,960,960] input, so running it at any other imgsz makes onnxruntime
+    reject EVERY frame with
+
+        INVALID_ARGUMENT : Got invalid dimensions for input: images
+        index: 2 Got: 480 Expected: 960
+
+    which surfaces only as a per-frame traceback while the camera detects
+    nothing at all, indefinitely. That happened on the Exit camera: a
+    YOLO_PERSON_IMGSZ tuned against the .pt build was applied to the .onnx one.
+    """
+    if not path.lower().endswith(".onnx"):
+        return None
+    try:
+        import onnx
+
+        model = onnx.load(path, load_external_data=False)
+        dims = model.graph.input[0].type.tensor_type.shape.dim
+        h = dims[2].dim_value if dims[2].HasField("dim_value") else 0
+        w = dims[3].dim_value if dims[3].HasField("dim_value") else 0
+        return int(h) if h and h == w else None
+    except Exception:
+        # Never let a probe stop a camera starting; the mismatch will simply
+        # surface as it did before.
+        logger.debug("could not read ONNX input shape for %s", path, exc_info=True)
+        return None
+
+
 class ByteTrackEngine:
     """Per-camera YOLO11+ByteTrack tracker keeping PersonTrack identity state."""
 
@@ -174,6 +356,7 @@ class ByteTrackEngine:
         camera_id: str = "?",
         tracker_cfg: str | None = None,
         model_path: str | None = None,
+        adopt_min_conf: float | None = None,
     ):
         s = get_settings()
         # MONITOR cameras may run a lighter/faster model than the IN/OUT
@@ -195,9 +378,139 @@ class ByteTrackEngine:
         # well-aimed one (its people score 0.11 instead of 0.36-0.67), so the
         # caller can hand this engine its own config.
         self.tracker_cfg = (_resolve(tracker_cfg) or _tracker_cfg()) if tracker_cfg else _tracker_cfg()
+        # Per-camera, because a doorway and a room disagree about it by a factor
+        # of ten -- see _STEEP_ADOPT_UNTRACKED_MIN_CONF.
+        self.adopt_min_conf = (_ADOPT_UNTRACKED_MIN_CONF if adopt_min_conf is None
+                               else float(adopt_min_conf))
         self.tracks: dict[int, PersonTrack] = {}
         self._model = None            # own model  ⇒ own predictor ⇒ own ByteTrack state
         self._last_sig: tuple | None = None   # for change-based logging (no spam)
+        self._last_update_ts: float = 0.0
+        self._cycle_sec: float = 0.0          # smoothed interval between update() calls
+        # Monitor-only supplemental detections use a closer overlapping crop for
+        # the far/right workstation. They are merged into the same body-track
+        # table after the normal full-frame ByteTrack pass.
+        self._next_aux_id: int = 1_000_000
+
+    @staticmethod
+    def _iou(a, b) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+        return inter / union if union > 0 else 0.0
+
+    def _add_crop_assist_tracks(self, model, frame_bgr, seen: set[int]) -> list[float]:
+        """Recover people too small/occluded for the full-frame pass.
+
+        Opt-in per camera (see _CROP_ASSIST_CAMERAS): this runs a SECOND full
+        YOLO inference, which on this hardware doubles the per-frame cost.
+
+        The Dev-room camera puts the lower-right workstation far from the
+        optical centre and behind monitors/chairs. A closer overlapping crop
+        gives YOLO more pixels for that region. This is body detection only;
+        face recognition still happens later in camera_service.
+        """
+        import cv2
+
+        height, width = frame_bgr.shape[:2]
+        # Use a broad overlapping crop for every body-tracking camera. The
+        # hallway/Exit view puts people at the far end of the frame, while the
+        # room view hides them behind desks; both benefit from giving YOLO more
+        # pixels without changing the full-frame detector's geometry.
+        crop_x1 = int(width * 0.15)
+        crop_y1 = int(height * 0.10)
+        crop = frame_bgr[crop_y1:height, crop_x1:width]
+        if crop.size == 0:
+            return []
+
+        try:
+            _slots.acquire()
+            try:
+                result = model.predict(
+                    crop,
+                    classes=[0],
+                    conf=max(0.02, self.conf * 0.5),
+                    iou=self.iou,
+                    imgsz=self.imgsz,
+                    verbose=False,
+                )[0]
+            finally:
+                _slots.release()
+        except Exception:
+            logger.exception("Camera %s: supplemental body crop failed", self.camera_id)
+            return []
+
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            return []
+
+        scores: list[float] = []
+        for score, local_box in zip(
+            boxes.conf.cpu().tolist(), boxes.xyxy.cpu().tolist()
+        ):
+            score = float(score)
+            x1, y1, x2, y2 = local_box
+            box = (
+                int(x1 + crop_x1), int(y1 + crop_y1),
+                int(x2 + crop_x1), int(y2 + crop_y1),
+            )
+            if box[2] <= box[0] or box[3] <= box[1]:
+                continue
+            # Same size floor as the full-frame pass. The crop runs at HALF the
+            # already-low confidence, so it is the likelier source of few-pixel
+            # fragments, not the less likely one.
+            if (box[3] - box[1]) < _MIN_PERSON_PX:
+                continue
+
+            # Associate with an existing full-frame track when possible.
+            matched_id = None
+            best_iou = 0.0
+            for tid, track in self.tracks.items():
+                overlap = self._iou(box, track.box)
+                if overlap > best_iou:
+                    best_iou, matched_id = overlap, tid
+            if matched_id is not None and best_iou >= 0.15:
+                self.tracks[matched_id].update_box(box)
+                seen.add(matched_id)
+                scores.append(round(score, 3))
+                continue
+
+            aux_id = self._next_aux_id
+            self._next_aux_id += 1
+            self.tracks[aux_id] = PersonTrack(
+                track_id=aux_id, box=box, max_misses=self.max_misses,
+                provisional=True, detection_confidence=float(score),
+            )
+            seen.add(aux_id)
+            scores.append(round(score, 3))
+            logger.info(
+                "YOLO camera=%s supplemental body track=%d score=%.3f box=%s",
+                self.camera_id, aux_id, score, box,
+            )
+        return scores
+
+    def _measured_cycle_sec(self) -> float:
+        """Smoothed seconds between update() calls.
+
+        Track hold windows are expressed in cycles and converted with this, so
+        they stay correct whether this camera is analysing every 0.12s or every
+        4s under inference-queue contention.
+        """
+        now = time.time()
+        if self._last_update_ts:
+            delta = now - self._last_update_ts
+            if 0.0 < delta < 60.0:
+                self._cycle_sec = (
+                    delta if self._cycle_sec <= 0 else 0.7 * self._cycle_sec + 0.3 * delta
+                )
+        self._last_update_ts = now
+        return self._cycle_sec if self._cycle_sec > 0 else 1.0
 
     def _get_model(self):
         """Lazily build this camera's OWN YOLO instance (isolated tracker state)."""
@@ -214,6 +527,19 @@ class ByteTrackEngine:
             except Exception:
                 logger.exception("Camera %s: failed to load YOLO11 model", self.camera_id)
                 return None
+            # A static-input ONNX model cannot run at any other size. Correct it
+            # loudly instead of letting every frame raise INVALID_ARGUMENT and
+            # the camera silently see nothing.
+            required = _static_onnx_size(path)
+            if required and required != self.imgsz:
+                logger.error(
+                    "Camera %s: %s has a STATIC %dx%d input but imgsz=%d was "
+                    "requested — forcing %d. Set imgsz to %d for this model, or "
+                    "point the camera at a .pt build, which accepts any size.",
+                    self.camera_id, os.path.basename(path), required, required,
+                    self.imgsz, required, required,
+                )
+                self.imgsz = required
             logger.info(
                 "Camera %s: YOLO11 loaded path=%s imgsz=%d conf=%.2f tracker=%s device=%s",
                 self.camera_id, path, self.imgsz, self.conf,
@@ -265,25 +591,142 @@ class ByteTrackEngine:
             )
 
         detections = 0
+        det_scores: list[float] = []
         seen: set[int] = set()
         if results:
             r = results[0]
             boxes = getattr(r, "boxes", None)
             if boxes is not None:
                 detections = int(len(boxes))          # after conf + class + NMS
+                # Raw per-detection confidences. THE diagnostic for "the room
+                # has 4 people but shows 1": if the scores are there but low,
+                # it is the tracker's new_track_thresh discarding them; if the
+                # detections themselves are missing, no threshold will help and
+                # the model or input resolution is the problem.
+                try:
+                    if getattr(boxes, "conf", None) is not None:
+                        det_scores = [round(float(c), 3) for c in boxes.conf.cpu().tolist()]
+                except Exception:
+                    det_scores = []
+                xyxy = boxes.xyxy.cpu().numpy() if getattr(boxes, "xyxy", None) is not None else []
+                ids = None
                 if getattr(boxes, "id", None) is not None:
                     ids = boxes.id.int().cpu().tolist()
-                    xyxy = boxes.xyxy.cpu().numpy()
-                    for tid, box in zip(ids, xyxy):
+
+                for idx, box in enumerate(xyxy):
+                    b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                    if (b[3] - b[1]) < _MIN_PERSON_PX:
+                        continue          # too small to be a person -- see above
+                    tid = ids[idx] if (ids is not None and idx < len(ids)) else None
+                    # The DETECTOR's score for this box. It was already computed
+                    # for the log line above and then thrown away, which is why
+                    # nothing downstream could answer "how sure are we somebody
+                    # is there" without reaching for the face-match score.
+                    det_conf = det_scores[idx] if idx < len(det_scores) else 0.0
+
+                    if tid is not None:
                         seen.add(int(tid))
-                        b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
                         pt = self.tracks.get(int(tid))
                         if pt is None:
                             self.tracks[int(tid)] = PersonTrack(
-                                track_id=int(tid), box=b, max_misses=self.max_misses
+                                track_id=int(tid), box=b, max_misses=self.max_misses,
+                                detection_confidence=det_conf,
                             )
                         else:
                             pt.update_box(b)
+                            pt.detection_confidence = det_conf
+                            # The tracker has now confirmed it; it is no longer
+                            # provisional and may be coasted normally.
+                            pt.provisional = False
+                        continue
+
+                    # No id: ByteTrack has seen this detection once and is
+                    # waiting for a second pass to confirm it. At this cadence
+                    # that second pass may never see the person. Adopt it now if
+                    # it is confidently a person -- see _ADOPT_UNTRACKED_MIN_CONF.
+                    score = det_scores[idx] if idx < len(det_scores) else 0.0
+                    if self.adopt_min_conf <= 0 or score < self.adopt_min_conf:
+                        continue
+
+                    # Do not double-count, and do not churn the id.
+                    #
+                    # First try IoU, which is the reliable signal when the person
+                    # has barely moved. Fall back to a size-scaled centroid
+                    # distance, because a walker's consecutive boxes do not
+                    # overlap at all at this cadence -- see
+                    # _ADOPT_MATCH_DIST_FACTOR for why that matters far more than
+                    # the count suggests.
+                    # A track already claimed by another detection THIS pass is
+                    # not a candidate. Without this, two people standing a couple
+                    # of body-widths apart both match the nearest track and
+                    # collapse into one - two people reported as one.
+                    bcx, bcy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+                    matched_id, best_iou = None, 0.0
+                    for known_id, known in self.tracks.items():
+                        if known_id in seen:
+                            continue
+                        overlap = self._iou(b, known.box)
+                        if overlap > best_iou:
+                            best_iou, matched_id = overlap, known_id
+
+                    if matched_id is None or best_iou < 0.30:
+                        nearest, nearest_d = None, None
+                        for known_id, known in self.tracks.items():
+                            if known_id in seen:
+                                continue
+                            kx1, ky1, kx2, ky2 = known.box
+                            kcx, kcy = (kx1 + kx2) / 2.0, (ky1 + ky2) / 2.0
+                            reach = _ADOPT_MATCH_DIST_FACTOR * max(
+                                1.0, float(kx2 - kx1)
+                            )
+                            d = ((bcx - kcx) ** 2 + (bcy - kcy) ** 2) ** 0.5
+                            if d <= reach and (nearest_d is None or d < nearest_d):
+                                nearest, nearest_d = known_id, d
+                        if nearest is not None:
+                            matched_id, best_iou = nearest, 1.0   # accept below
+
+                    if matched_id is not None and best_iou >= 0.30:
+                        self.tracks[matched_id].update_box(b)
+                        seen.add(matched_id)
+                        continue
+
+                    aux_id = self._next_aux_id
+                    self._next_aux_id += 1
+                    # NOTE max_misses is NOT what retires this track. Retention
+                    # in this engine is TIME based -- see the edge/interior hold
+                    # windows below -- so a provisional track lives for
+                    # max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+                    # like any other. It is passed for consistency only.
+                    #
+                    # Consequence worth knowing on a doorway: a walker who has
+                    # left keeps their box until that window elapses, so the
+                    # count decays rather than dropping instantly. That hold
+                    # exists for room cameras, where a seated person vanishes
+                    # behind a chair back and must not blink out. Shorten it with
+                    # CCTV_TRACK_INTERIOR_HOLD_CYCLES / _MIN_SEC if a lingering
+                    # doorway count matters more than steady room boxes.
+                    self.tracks[aux_id] = PersonTrack(
+                        track_id=aux_id, box=b, max_misses=self.max_misses,
+                        provisional=True, detection_confidence=float(score),
+                    )
+                    seen.add(aux_id)
+                    logger.info(
+                        "YOLO camera=%s adopted untracked detection score=%.3f as "
+                        "provisional track=%d (ByteTrack had not confirmed it yet)",
+                        self.camera_id, score, aux_id,
+                    )
+
+        # Full-frame inference is the primary detector and is enough for almost
+        # every view. A camera listed in CCTV_CROP_ASSIST_CAMERAS additionally
+        # gets one overlapping close crop, for rooms where people sit behind
+        # desks and monitors. It costs a SECOND full YOLO inference per frame --
+        # see _CROP_ASSIST_CAMERAS for the measurement -- so it is never paid by
+        # default, and never by an IN/OUT camera unless explicitly listed.
+        if str(self.camera_id) in _CROP_ASSIST_CAMERAS:
+            supplemental_scores = self._add_crop_assist_tracks(model, frame_bgr, seen)
+            if supplemental_scores:
+                detections += len(supplemental_scores)
+                det_scores.extend(supplemental_scores)
 
         # Drop "nested" duplicates: on this ceiling view YOLO often emits a tight
         # box on a seated person AND a second, bloated box running down over their
@@ -295,11 +738,73 @@ class ByteTrackEngine:
             self.tracks.pop(tid, None)
 
         # Age / expire tracks ByteTrack no longer reports.
+        #
+        # A track that stops being detected means one of two very different
+        # things, and the old frame-count expiry conflated them:
+        #
+        #   * OCCLUDED  — a seated person hidden by a high-backed chair. They
+        #     have not moved, so holding their box is correct.
+        #   * DEPARTED  — they walked out. Holding their box leaves a ghost
+        #     hovering over an empty room.
+        #
+        # Position separates the cases: you leave a room through an EDGE of the
+        # frame. A track last seen against an edge is treated as departed and
+        # dropped quickly; one in the interior is held.
+        #
+        # The hold is also capped in WALL-CLOCK seconds rather than analysis
+        # frames. Frame counting was unreliable because the analysis interval
+        # varies with inference-queue contention — the same 3-frame hold could
+        # mean 4 seconds or 15.
+        frame_h, frame_w = frame_bgr.shape[:2]
+        edge_x = frame_w * _EDGE_FRACTION
+        edge_y = frame_h * _EDGE_FRACTION
+        now = time.time()
+
+        # Hold windows scale with how fast this engine is actually being called,
+        # so an intermittent detection is never dropped after a single miss.
+        cycle = self._measured_cycle_sec()
+        edge_limit = min(
+            _HOLD_MAX_SEC, max(_EDGE_HOLD_MIN_SEC, _EDGE_HOLD_CYCLES * cycle)
+        )
+        interior_limit = min(
+            _HOLD_MAX_SEC, max(_INTERIOR_HOLD_MIN_SEC, _INTERIOR_HOLD_CYCLES * cycle)
+        )
+
         for tid in list(self.tracks.keys()):
-            if tid not in seen:
-                self.tracks[tid].mark_missed()
-                if self.tracks[tid].is_expired():
-                    del self.tracks[tid]
+            if tid in seen:
+                continue
+            track = self.tracks[tid]
+            track.mark_missed()
+
+            # A provisional track was never confirmed by the tracker. One missed
+            # pass is the whole of its evidence expiring, so it goes now rather
+            # than being coasted.
+            #
+            # This is what stops a WALKER accumulating ids. They are somewhere
+            # else on every pass, so they can never be matched to their own held
+            # box by IoU; without this, each pass adopts another id and the count
+            # climbs 1,2,3,4,5 for a single person -- reproduced in
+            # test_track_lifecycle.test_a_walker_does_not_accumulate_ids.
+            if getattr(track, "provisional", False):
+                del self.tracks[tid]
+                continue
+
+            cx, cy = track.centroid()
+            at_edge = (
+                cx <= edge_x or cx >= frame_w - edge_x
+                or cy <= edge_y or cy >= frame_h - edge_y
+            )
+            held_for = now - track.last_seen
+            limit = edge_limit if at_edge else interior_limit
+
+            if held_for > limit:
+                logger.debug(
+                    "Camera %s: dropping track %d after %.1fs (%s, limit %.1fs)",
+                    self.camera_id, tid, held_for,
+                    "left via frame edge" if at_edge else "occluded too long",
+                    limit,
+                )
+                del self.tracks[tid]
 
         # Which tracks get DRAWN.
         #
@@ -321,17 +826,111 @@ class ByteTrackEngine:
         else:
             live = [self.tracks[tid] for tid in seen if tid in self.tracks]
 
+        # ONE PERSON, ONE BOX.
+        #
+        # A permissive new_track_thresh (needed so seated people are detected at
+        # all) makes ByteTrack spawn a fresh id rather than re-associating when a
+        # detection is weak. Combined with publishing held tracks, one person
+        # ends up wearing several overlapping boxes with different ids — observed
+        # live as "#36" stacked with "2" and "3", and a People count of 6 in a
+        # room of 4.
+        #
+        # It is not merely cosmetic: each duplicate track accumulates its OWN
+        # embedding fusion, so the observations that should combine into one
+        # confident identity are split across fragments that each stay too weak
+        # to match. Deduplicating is a prerequisite for recognition working at
+        # all here.
+        live = self._dedupe_overlapping(live, seen)
+
         # Log only when the picture CHANGES (detections / tracks / ids) so a
         # steady scene doesn't spam the log every analysis tick.
         sig = (detections, len(live), tuple(sorted(seen)))
         if sig != self._last_sig:
             self._last_sig = sig
             logger.info(
-                "YOLO camera=%s detections=%d tracks=%d ids=%s",
-                self.camera_id, detections, len(live), sorted(seen),
+                "YOLO camera=%s detections=%d scores=%s tracks=%d ids=%s "
+                "new_track_thresh=%s",
+                self.camera_id, detections, det_scores, len(live), sorted(seen),
+                os.path.basename(self.tracker_cfg),
             )
+            # Detections that will never become tracks. If this fires
+            # repeatedly the tracker config is discarding real people.
+            if det_scores and len(live) < detections:
+                # The advice used to be "add its id to CCTV_STEEP_CAMERAS",
+                # which is stale and actively misleading on a room camera:
+                # `steep = self.is_monitor or id in _STEEP_CAMERAS`, so MONITOR
+                # cameras are already permissive and listing them changes
+                # nothing. Following it wastes a diagnosis on a lever that is
+                # already pulled.
+                logger.info(
+                    "YOLO camera=%s %d detection(s) did NOT become tracks "
+                    "(lowest kept vs dropped: %s) — if these are real people, "
+                    "this camera needs more PIXELS on them, not a lower bar "
+                    "(CCTV_CROP_ASSIST_CAMERAS); the permissive tracker is "
+                    "already on for monitor cameras",
+                    self.camera_id, detections - len(live), sorted(det_scores),
+                )
 
         return live
+
+    def _dedupe_overlapping(self, live: list, seen: set) -> list:
+        """Collapse overlapping tracks so each person is published once.
+
+        Overlap is measured as intersection / smaller-area rather than IoU: a
+        tight box on a torso sitting inside a bloated full-body box has low IoU
+        but is obviously the same person.
+
+        When two tracks collide the survivor is chosen by evidence — detected
+        this frame beats merely held, then longer-lived, then lower id (older).
+        The loser's IDENTITY AND FUSED EMBEDDINGS ARE MERGED INTO THE SURVIVOR,
+        which is the valuable part: ByteTrack changes a person's id constantly on
+        this view, and without the merge every id change threw away both their
+        name and every face observation collected so far.
+        """
+        if len(live) < 2:
+            return live
+
+        # Best evidence first, so earlier entries win collisions.
+        ordered = sorted(
+            live,
+            key=lambda t: (t.track_id in seen, t.age, -t.track_id),
+            reverse=True,
+        )
+
+        kept: list = []
+        for track in ordered:
+            duplicate_of = None
+            for survivor in kept:
+                if _overlap_ratio(track.box, survivor.box) >= _DEDUPE_OVERLAP:
+                    duplicate_of = survivor
+                    break
+
+            if duplicate_of is None:
+                kept.append(track)
+                continue
+
+            # Merge upward, then drop.
+            if duplicate_of.employee_id is None and track.employee_id is not None:
+                duplicate_of.employee_id = track.employee_id
+                duplicate_of.employee_name = track.employee_name
+                duplicate_of.employee_code = track.employee_code
+                duplicate_of.matched = track.matched
+                duplicate_of.confidence = track.confidence
+                duplicate_of.identity_source = track.identity_source
+            if track.fuser.observations > duplicate_of.fuser.observations:
+                duplicate_of.fuser = track.fuser
+            # Keep the stronger detection evidence of the two boxes that turned
+            # out to be one person.
+            duplicate_of.detection_confidence = max(
+                duplicate_of.detection_confidence, track.detection_confidence)
+            self.tracks.pop(track.track_id, None)
+
+        if len(kept) != len(live):
+            logger.debug(
+                "Camera %s: merged %d duplicate box(es) -> %d people",
+                self.camera_id, len(live) - len(kept), len(kept),
+            )
+        return kept
 
     def _nested_ids(self, seen: set) -> list:
         """Ids of bloated boxes that swallow another box (same person, twice).
@@ -367,6 +966,18 @@ class ByteTrackEngine:
     def reset(self) -> None:
         self.tracks.clear()
         self._last_sig = None
+
+
+def _overlap_ratio(a, b) -> float:
+    """Intersection over the SMALLER box's area.
+
+    Deliberately not IoU: on this view a tight torso box often sits fully inside
+    a bloated full-body box of the same person, which scores low IoU but 1.0
+    here — which is the answer we want.
+    """
+    inter = _intersection(a, b)
+    smaller = min(_area(a), _area(b))
+    return (inter / smaller) if smaller > 0 else 0.0
 
 
 def _area(box) -> float:

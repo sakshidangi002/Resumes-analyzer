@@ -1,7 +1,6 @@
 import re
 from datetime import datetime
-from typing import Dict, List, Set, Tuple
-from collections import Counter
+from typing import Dict, List, Set
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -69,7 +68,7 @@ GENERIC_WORDS = {
     "should", "may", "might", "must", "can", "this", "that", "these", "those",
     "best", "good", "better", "well", "very", "much", "many", "more", "most",
     "some", "any", "all", "each", "every", "both", "either", "neither",
-    "make", "made", "make", "making", "used", "use", "using", "project",
+    "make", "made", "making", "used", "use", "project",
     "projects", "work", "working", "worked", "team", "teams", "group",
     "groups", "company", "companies", "organization", "organizations",
     "business", "businesses", "client", "clients", "customer", "customers",
@@ -131,11 +130,10 @@ TECHNICAL_CATEGORIES = {
     "git", "github", "gitlab", "bitbucket", "svn", "mercurial",
     
     # Mobile
-    "react native", "flutter", "android", "ios", "swift", "kotlin", "dart",
-    "xamarin", "ionic", "cordova",
+    "react native", "flutter", "android", "ios", "xamarin", "ionic", "cordova",
     
     # Message Queues
-    "rabbitmq", "kafka", "activemq", "redis streams", "aws sqs", "aws sns",
+    "rabbitmq", "activemq", "redis streams", "aws sqs", "aws sns",
     
     # API
     "rest", "restful", "graphql", "grpc", "soap", "openapi", "swagger",
@@ -154,7 +152,7 @@ TECHNICAL_CATEGORIES = {
     
     # Operating Systems
     "linux", "ubuntu", "debian", "centos", "rhel", "fedora", "windows", "macos",
-    "unix", "bsd", "android", "ios"
+    "unix", "bsd"
 }
 
 
@@ -345,7 +343,7 @@ Return JSON only:
         import os
         sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
         
-        from backend.main import _get_extract_model, _get_extract_tokenizer, EXTRACT_MODEL
+        from backend.main import _get_extract_model, _get_extract_tokenizer
         
         model = _get_extract_model()
         tokenizer = _get_extract_tokenizer()
@@ -1084,7 +1082,7 @@ def extract_experience_years(experience_text: str) -> float:
                 clean_str = re.sub(r'[^a-z0-9\s/]', '', date_str).strip()
                 return datetime.strptime(clean_str, fmt)
             except ValueError:
-                pass
+                logger.debug("ignored, non-critical", exc_info=True)
         return None
 
     visited_ranges = []
@@ -1631,7 +1629,6 @@ def _normalize_skill_spelling(skill: str) -> str:
         "flask": "Flask",
         "springboot": "Spring Boot",
         "spring boot": "Spring Boot",
-        "springboot": "Spring Boot",
         "laravel": "Laravel",
         "rails": "Rails",
         "ruby on rails": "Rails",

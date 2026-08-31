@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.routes import (
+    assistant,
     auth,
     employees,
     attendance,
@@ -11,6 +12,7 @@ from app.api.routes import (
     users,
     company,
     activity,
+    audit,
     onboarding,
     dsr,
     dsr_reminder,
@@ -21,6 +23,7 @@ from app.api.routes import (
     policies,
     interview_questions,
     live_identify,
+    face_review,
 )
 
 api_router = APIRouter()
@@ -35,6 +38,7 @@ api_router.include_router(letters.router, prefix="/letters", tags=["letters"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(activity.router, prefix="/activity", tags=["activity"])
+api_router.include_router(audit.router, prefix="/audit", tags=["audit"])
 api_router.include_router(onboarding.router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(dsr.router, prefix="/dsr", tags=["dsr"])
 api_router.include_router(
@@ -44,8 +48,10 @@ api_router.include_router(push.router, prefix="/push", tags=["push"])
 api_router.include_router(recognition.router, prefix="", tags=["recognition"])
 api_router.include_router(cameras.router, prefix="", tags=["cameras"])
 api_router.include_router(queries.router, prefix="/queries", tags=["queries"])
+api_router.include_router(assistant.router, prefix="/assistant", tags=["assistant"])
 api_router.include_router(policies.router, prefix="/policies", tags=["policies"])
 api_router.include_router(
     interview_questions.router, prefix="/interview-questions", tags=["interview-questions"]
 )
 api_router.include_router(live_identify.router, prefix="/live", tags=["live-identify"])
+api_router.include_router(face_review.router, prefix="", tags=["face-review"])

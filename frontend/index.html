@@ -5,48 +5,119 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Resume Analyzer & AI Recruiter</title>
-    <!-- Google Fonts -->
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;800&display=swap"
-        rel="stylesheet">
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                        outfit: ['Outfit', 'sans-serif'],
-                    },
-                    colors: {
-                        brand: {
-                            50: '#eff6ff',
-                            100: '#dbeafe',
-                            200: '#bfdbfe',
-                            300: '#93c5fd',
-                            400: '#60a5fa',
-                            500: '#3b82f6', // Blue accent
-                            600: '#2563eb',
-                            700: '#1d4ed8',
-                            800: '#1e40af',
-                            900: '#1e3a8a', // Deep blue (active nav)
-                            950: '#0b0f19', // Deep dark space background
-                        }
-                    }
-                }
-            }
-        }
-    </script>
+    <!-- Fonts: system stack only.
+         The Google Fonts <link> that used to sit here was already dead: the
+         app's Content-Security-Policy allows style-src/font-src 'self' only, so
+         the browser blocked the request and fell back to these anyway. Keeping
+         it just cost a failed request and a console error on every page load.
+         To use Inter/Outfit again, self-host the .woff2 files under assets/ and
+         @font-face them — do NOT re-add a third-party origin, that is the CDN
+         dependency (S-20) this page was cleaned up to remove. -->
+    <!-- Tailwind CSS — SELF-HOSTED, built from this file.
+         This page uses ~475 Tailwind utility classes, and 64 elements rely on
+         Tailwind's .hidden to stay hidden. It used to get them from
+         cdn.tailwindcss.com, which was removed as a third-party-script
+         dependency (S-20) on a page that displays candidate PII. Removing the
+         CDN without replacing the stylesheet left `tailwind` undefined (the
+         inline tailwind.config threw a ReferenceError) and nothing styled —
+         every hidden panel rendered at once, so the page looked broken.
+
+         Rebuild after changing any class in this file:
+           npx tailwindcss@3 -c tailwind.resume.config.js \
+             -o frontend/assets/tailwind.css --minify
+         The brand palette and font stack that used to live in the inline
+         tailwind.config now live in tailwind.resume.config.js.
+
+         Served from /resume/assets/, which the auth guard leaves public on
+         purpose so styling loads before the session is checked. -->
+    <link rel="stylesheet" href="assets/tailwind.css">
     <style>
+        /* ==========================================================================
+           Resume Analyzer — dark theme tokens.
+
+           This page used to be half-converted: a dark-authored markup layer
+           (bg-white/[0.02], text-slate-400, brand-*) with light-mode cards bolted
+           on top (bg-white, border-slate-200, bg-blue-50), plus a "LIGHT THEME
+           OVERRIDES" layer at the bottom of this <style> block that forced the
+           whole thing light. Both halves now resolve to one dark system that
+           matches the HRMS shell.
+
+           Accents are semantic, never decorative:
+             emerald  positive / primary action
+             sky      informational
+             amber    warning
+             violet   AI / chat
+             rose     negative / destructive
+           ========================================================================== */
+        :root {
+            /* Surfaces */
+            --ra-ground: #07090b;
+            --ra-shell: #0b0d10;
+            --ra-card: #14171c;
+            --ra-rail: #07090b;
+            --ra-border: rgba(255, 255, 255, 0.07);
+            --ra-divider: rgba(255, 255, 255, 0.06);
+            /* Inset tiles sitting inside a card. */
+            --ra-inset: rgba(0, 0, 0, 0.16);
+            /* Disabled fill. Disabled state is a recess, never lowered opacity. */
+            --ra-recess: rgba(0, 0, 0, 0.42);
+            --ra-scrim: rgba(0, 0, 0, 0.62);
+
+            /* Text. #8b93a1 is the dimmest grey permitted on these surfaces —
+               nothing fainter, and no opacity tricks on text runs. */
+            --ra-text: #e7e9ee;
+            --ra-dim: #8b93a1;
+
+            /* Semantic accents */
+            --ra-emerald: #34d399;
+            --ra-emerald-rgb: 52, 211, 153;
+            --ra-sky: #60a5fa;
+            --ra-sky-rgb: 96, 165, 250;
+            --ra-amber: #fbbf24;
+            --ra-amber-rgb: 251, 191, 36;
+            --ra-violet: #c084fc;
+            --ra-violet-rgb: 192, 132, 252;
+            --ra-rose: #fb7185;
+            --ra-rose-rgb: 251, 113, 133;
+
+            /* The only shadow in the app: the workspace frame. Cards are flat. */
+            --ra-frame: 0 32px 64px -28px rgba(0, 0, 0, 0.7);
+
+            /* System sans. Inter/Outfit were never actually loaded — the CSP
+               allows font-src 'self' only — so naming them just cost a font
+               fallback hop. */
+            --ra-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            --ra-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+            /* Legacy --hrms-* aliases. ~40 rules further down still read these,
+               so they are remapped rather than removed. brand-* becomes sky,
+               the informational accent. */
+            --hrms-brand-300: #60a5fa;
+            --hrms-brand-400: #60a5fa;
+            --hrms-brand-500: #60a5fa;
+            --hrms-brand-rgb: 96 165 250;
+            --hrms-text: #e7e9ee;
+            --hrms-card: #14171c;
+            --hrms-border: rgba(255, 255, 255, 0.07);
+            --hrms-shadow-lg: none;
+            --hrms-header-height: 70px;
+        }
+
+        html {
+            color-scheme: dark;
+        }
+
         body {
-            background-color: #eef2f7;
-            color: #000000;
-            background-image:
-                radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.10) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(37, 99, 235, 0.08) 0%, transparent 40%);
+            background-color: var(--ra-ground);
+            color: var(--ra-text);
+            font-family: var(--ra-font);
+            font-size: 14px;
+            /* Set once here rather than per-widget: this page prints numbers in
+               KPI figures, table cells, scores, counts, dates and pagination, and
+               they all need to line up column-to-column and not jitter as they
+               update. */
+            font-variant-numeric: tabular-nums;
         }
 
         /* Custom scrollbar */
@@ -56,33 +127,30 @@
         }
 
         ::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.01);
+            background: transparent;
         }
 
         ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.10);
             border-radius: 999px;
         }
 
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.18);
         }
 
-        html {
-            color-scheme: light;
-        }
-
-        /* Native select fallback */
+        /* Native select fallback (used before the custom dropdown JS upgrades it,
+           and on platforms where the popup is drawn by the OS). */
         select {
-            color-scheme: light;
-            background-color: #ffffff;
-            color: #000000;
+            color-scheme: dark;
+            background-color: var(--ra-card);
+            color: var(--ra-text);
         }
 
         select option,
         select optgroup {
-            background-color: #ffffff;
-            color: #000000;
+            background-color: var(--ra-card);
+            color: var(--ra-text);
         }
 
         /* Custom dark dropdown (replaces native option list UI) */
@@ -113,14 +181,14 @@
 
         .dark-select-trigger svg {
             flex-shrink: 0;
-            opacity: 0.7;
+            color: var(--ra-dim);
         }
 
         .dark-select-menu {
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 0.75rem;
-            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.15);
+            background: var(--ra-card);
+            border: 1px solid var(--ra-border);
+            border-radius: 12px;
+            box-shadow: var(--ra-frame);
             max-height: 16rem;
             overflow-y: auto;
             padding: 0.35rem;
@@ -131,32 +199,19 @@
             width: 100%;
             text-align: left;
             padding: 0.5rem 0.65rem;
-            border-radius: 0.5rem;
-            font-size: 0.75rem;
-            color: #1e293b;
+            border-radius: 8px;
+            font-size: 13px;
+            color: var(--ra-text);
             background: transparent;
             border: none;
             cursor: pointer;
-            transition: background 0.12s, color 0.12s;
+            transition: background 0.16s ease, color 0.16s ease;
         }
 
         .dark-select-item:hover,
         .dark-select-item.is-active {
-            background: #2563eb;
-            color: #ffffff;
-        }
-
-        /* === HRMS Theme Tokens (mirrors Attendance Management/frontend/src/index.css) === */
-        :root {
-            --hrms-brand-300: #2563eb;
-            --hrms-brand-400: #1d4ed8;
-            --hrms-brand-500: #2563eb;
-            --hrms-brand-rgb: 37 99 235;
-            --hrms-text: #000000;
-            --hrms-card: #ffffff;
-            --hrms-border: #e2e8f0;
-            --hrms-shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.12);
-            --hrms-header-height: 70px;
+            background: rgba(var(--ra-sky-rgb), 0.12);
+            color: var(--ra-sky);
         }
 
         /* HRMS Sidebar Brand (matches .sidebar-brand from HRMS).
@@ -411,17 +466,18 @@
             text-align: left;
         }
 
-        /* Date / Time / DateTime pickers — dark icon on the light input bg.
-           color-scheme: light makes Chromium render the
-           ::-webkit-calendar-picker-indicator natively in dark, which is
-           visible on the white field. */
+        /* Date / Time / DateTime pickers.
+           color-scheme: dark makes Chromium draw the
+           ::-webkit-calendar-picker-indicator light, so it stays visible on the
+           translucent dark field, and gives the dropped-down calendar panel a
+           dark surface too. No filter: invert() hack needed. */
         .hrms-input[type="date"],
         .hrms-input[type="time"],
         .hrms-input[type="datetime-local"],
         .hrms-input[type="month"],
         .hrms-input[type="week"],
         .hrms-input[type="number"] {
-            color-scheme: light;
+            color-scheme: dark;
         }
 
         .hrms-input[type="date"]::-webkit-calendar-picker-indicator,
@@ -430,7 +486,7 @@
         .hrms-input[type="month"]::-webkit-calendar-picker-indicator,
         .hrms-input[type="week"]::-webkit-calendar-picker-indicator {
             cursor: pointer;
-            opacity: 0.95;
+            opacity: 1;
             padding: 2px;
             filter: none;
         }
@@ -1517,187 +1573,1929 @@
             box-shadow: none !important;
         }
 
-        /* ============================================================
-           LIGHT THEME OVERRIDES
-           The app was authored dark-first with hardcoded utility classes.
-           This layer remaps those utilities to light-mode values. It is
-           placed last and uses !important so it wins over the Tailwind CDN
-           utilities (which are injected into <head> at runtime). White text
-           is re-asserted afterwards for elements sitting on a brand colour.
-           ============================================================ */
-        /* Text: black on light (muted tones darkened so they read as near-black) */
-        .text-white { color: #000000 !important; }
-        .text-slate-100, .text-slate-200, .text-slate-300 { color: #000000 !important; }
-        .text-slate-400 { color: #1f2937 !important; }
-        .text-slate-500, .text-slate-600 { color: #374151 !important; }
+        /* ==========================================================================
+           DARK THEME LAYER
 
-        /* Translucent-white surfaces -> solid light cards / chips */
-        .bg-white\/\[0\.01\], .bg-white\/\[0\.015\], .bg-white\/\[0\.02\],
-        .bg-white\/\[0\.03\], .bg-white\/\[0\.04\], .bg-white\/\[0\.05\] { background-color: #ffffff !important; }
-        .bg-white\/5 { background-color: #f1f5f9 !important; }
-        .bg-white\/10 { background-color: #e5eaf1 !important; }
-        .hover\:bg-white\/5:hover, .hover\:bg-white\/10:hover,
-        .hover\:bg-white\/\[0\.06\]:hover { background-color: #e5eaf1 !important; }
+           Replaces the old "LIGHT THEME OVERRIDES" block. Two jobs:
 
-        /* Borders */
-        .border-white\/5, .border-white\/10, .border-white\/20,
-        .border-white\/\[0\.06\], .border-white\/\[0\.08\] { border-color: #e2e8f0 !important; }
+             1. Remap the ~200 hardcoded Tailwind tone utilities this page uses
+                (both the dark-authored ones and the light-mode ones that were
+                bolted in) onto the token set above. Doing it here means the
+                markup keeps the class names the JS and Tailwind's .hidden
+                depend on, and no utility gets missed.
+             2. Restyle the .hrms-* components and define the .ra-* components
+                used by the panels whose markup needed real structural changes.
 
-        /* Modal / overlay scrims stay a soft dark veil for focus */
-        .bg-black\/50, .bg-black\/60, .bg-black\/70 { background-color: rgba(15, 23, 42, 0.40) !important; }
-        /* Low-alpha black insets (were subtle dark panels) -> light neutral */
-        .bg-black\/15, .bg-black\/20, .bg-black\/25, .bg-black\/30,
-        .bg-black\/35, .bg-black\/40 { background-color: #f1f5f9 !important; }
+           Tailwind ships as a static stylesheet in <head>, so this block wins on
+           equal specificity by source order. !important appears only where the
+           conflict is genuinely stronger: Tailwind's own !-prefixed utilities
+           (added by the drag handlers) and a few inline styles.
+           ========================================================================== */
 
-        /* Panels driven by --hrms-card render as white cards */
-        .hrms-modal-panel {
-            background: #ffffff !important;
-            border: 1px solid #e2e8f0 !important;
-            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18) !important;
+        /* ---------- Type scale ------------------------------------------------ */
+        /* Nothing renders below 11px. The old micro-labels (8/9/10px) were
+           unreadable on a dark surface. */
+        .text-\[8px\],
+        .text-\[9px\],
+        .text-\[10px\],
+        .sm\:text-\[10px\],
+        .text-\[11px\] {
+            font-size: 11px;
         }
 
-        /* Elevated cards get a soft shadow so they read on the light bg */
-        .rounded-2xl.bg-white\/\[0\.02\], .rounded-2xl.bg-white\/\[0\.03\],
-        .rounded-xl.bg-white\/\[0\.02\] { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.05); }
-
-        /* Re-assert WHITE text where the surface is a brand colour */
-        .hrms-btn-primary, .hrms-btn-danger { color: #ffffff !important; }
-        .bg-brand-500.text-white, .bg-brand-600.text-white, .bg-brand-700.text-white,
-        .bg-brand-800.text-white, .bg-brand-900.text-white,
-        .hrms-sidebar-nav-btn.bg-brand-900,
-        [class*="from-brand-"].text-white, [class*="to-brand-"].text-white { color: #ffffff !important; }
-
-        /* Sidebar active item keeps its teal fill + white text */
-        .hrms-sidebar-nav-btn.bg-brand-900 { background-color: var(--hrms-brand-500) !important; }
-        .hrms-sidebar-nav-btn.bg-brand-900 * { color: #ffffff !important; }
-
-        /* Button variants that used white text on translucent fills */
-        .hrms-btn-secondary {
-            background: rgb(var(--hrms-brand-rgb) / 0.10) !important;
-            color: #1d4ed8 !important;
-            border-color: rgb(var(--hrms-brand-rgb) / 0.30) !important;
-        }
-        .hrms-btn-secondary:hover:not(:disabled) {
-            background: rgb(var(--hrms-brand-rgb) / 0.18) !important;
-            border-color: rgb(var(--hrms-brand-rgb) / 0.45) !important;
-        }
-        .hrms-btn-ghost {
-            background: #f1f5f9 !important;
-            color: #334155 !important;
-            border-color: #e2e8f0 !important;
-        }
-        .hrms-btn-ghost:hover:not(:disabled) {
-            background: #e5eaf1 !important;
-            border-color: #cbd5e1 !important;
+        .text-xs {
+            font-size: 12px;
         }
 
-        /* Accent text: brand tints were tuned for a dark bg; darken for contrast */
-        .text-brand-200, .text-brand-300 { color: #1d4ed8 !important; }
-        .hrms-page-header .hrms-page-eyebrow { color: #1d4ed8 !important; }
-        .hrms-page-header .hrms-page-title { color: #000000 !important; }
+        .text-\[12px\],
+        .text-\[12\.5px\] {
+            font-size: 13px;
+        }
 
-        /* Hover-to-white text would vanish on light surfaces -> keep it dark */
-        .hover\:text-white:hover { color: #000000 !important; }
+        .text-sm {
+            font-size: 14px;
+        }
 
-        /* Dashboard KPI + analytics cards were authored with white text — darken. */
-        .hrms-kpi-value, .hrms-section-title, .hrms-analytics-pane-title,
-        .hrms-sparkline-stat-value, .hrms-donut-pct,
-        .hrms-exp-count, .hrms-skill-bar-count { color: #000000 !important; }
-        .hrms-kpi-label, .hrms-kpi-sub, .hrms-kpi-trend--flat,
-        .hrms-section-sub, .hrms-sparkline-stat-label, .hrms-donut-label,
-        .hrms-exp-label, .hrms-skill-bar-name, .hrms-donut-legend-item,
-        .hrms-donut-legend { color: #374151 !important; }
-        .hrms-section-card { border-color: #e2e8f0 !important; }
-        .hrms-kpi-card:hover { border-color: #cbd5e1 !important; }
+        .text-base {
+            font-size: 16px;
+        }
 
-        /* Progress/chart tracks were translucent-white (invisible on white) */
-        .hrms-exp-bar-track, .hrms-skill-bar-track { background: #e6ebf1 !important; }
-        .hrms-donut-track { stroke: #e2e8f0 !important; }
-        .hrms-donut-legend-dot[style*="rgba(255,255,255"] { background: #cbd5e1 !important; }
+        /* Card titles. 24px is reserved for the one page title in the topbar. */
+        .text-lg {
+            font-size: 16px;
+            letter-spacing: -0.01em;
+        }
 
-        /* SVG chart text (axis labels etc.) injected with white fills */
-        .hrms-sparkline text { fill: #475569 !important; }
-        .hrms-sparkline line { stroke: #e2e8f0 !important; }
+        .text-xl,
+        .sm\:text-\[1\.35rem\] {
+            font-size: 18px;
+            letter-spacing: -0.01em;
+        }
 
-        /* Remaining custom components authored with white / translucent-white text */
-        .hrms-dropzone-title, .hrms-candidate-name, .hrms-quick-action-title,
-        .hrms-user-chip-name, .hrms-quick-action,
-        .hrms-table-modern td, .hrms-recent-table td { color: #000000 !important; }
-        .hrms-page-header .hrms-page-meta, .hrms-table-modern th, .hrms-recent-table th,
-        .hrms-dropzone-sub, .hrms-candidate-role, .hrms-quick-action-sub,
-        .hrms-quick-action-chev, .hrms-topbar-search-icon,
-        .hrms-user-chip-role { color: #4b5563 !important; }
-        .hrms-link:hover { color: #1d4ed8 !important; }
+        /* Uppercase micro-labels read as eyebrows, not shouty body text. */
+        .uppercase.tracking-wider,
+        .uppercase.tracking-widest,
+        .uppercase.tracking-\[0\.2em\] {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+        }
+
+        /* ---------- Text ----------------------------------------------------- */
+        .text-white,
+        .text-slate-100,
+        .text-slate-200,
+        .text-slate-300,
+        .text-slate-700,
+        .text-slate-800,
+        .text-slate-900 {
+            color: var(--ra-text);
+        }
+
+        /* Every muted grey lands on --ra-dim. slate-400/500/600 were either too
+           faint (on dark) or near-black (left over from the light pass). */
+        .text-slate-400,
+        .text-slate-500,
+        .text-slate-600 {
+            color: var(--ra-dim);
+        }
+
+        .hover\:text-white:hover,
+        .hover\:text-slate-200:hover {
+            color: var(--ra-text);
+        }
+
+        .placeholder-slate-500::placeholder,
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--ra-dim);
+        }
+
+        /* Accent text — semantic groupings, not per-hue passthrough. */
+        .text-brand-200,
+        .text-brand-300,
+        .text-brand-700,
+        .text-blue-400,
+        .text-blue-500,
+        .text-blue-600,
+        .text-blue-700,
+        .text-cyan-300,
+        .text-teal-300,
+        .hover\:text-brand-200:hover,
+        .hover\:text-brand-400:hover,
+        .hover\:text-blue-700:hover {
+            color: var(--ra-sky);
+        }
+
+        .text-emerald-300,
+        .text-emerald-400,
+        .text-emerald-600,
+        .text-emerald-700,
+        .hover\:text-emerald-400:hover {
+            color: var(--ra-emerald);
+        }
+
+        .text-amber-300,
+        .text-amber-400,
+        .text-amber-600,
+        .text-amber-700,
+        .text-orange-300,
+        .hover\:text-amber-400:hover {
+            color: var(--ra-amber);
+        }
+
+        .text-indigo-300,
+        .text-violet-300,
+        .text-fuchsia-300,
+        .hover\:text-indigo-400:hover {
+            color: var(--ra-violet);
+        }
+
+        .text-red-300,
+        .text-red-400,
+        .text-red-500,
+        .text-rose-300,
+        .text-rose-400,
+        .hover\:text-red-400:hover,
+        .hover\:text-rose-300:hover {
+            color: var(--ra-rose);
+        }
+
+        .peer-checked\:text-brand-300:where(.peer:checked ~ *) {
+            color: var(--ra-sky);
+        }
+
+        /* ---------- Surfaces -------------------------------------------------- */
+        /* Card-weight fills. Left-over light cards and the too-dark
+           translucent-white ones both resolve to the one card colour. */
+        .bg-white,
+        .bg-slate-50,
+        .bg-white\/\[0\.01\],
+        .bg-white\/\[0\.02\] {
+            background-color: var(--ra-card);
+        }
+
+        /* Inner tiles, chips and strips sitting on top of a card. */
+        .bg-white\/\[0\.015\] {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        .bg-white\/\[0\.03\],
+        .bg-white\/\[0\.035\],
+        .bg-white\/\[0\.04\],
+        .bg-white\/5,
+        .bg-slate-100 {
+            background-color: rgba(255, 255, 255, 0.04);
+        }
+
+        .bg-white\/10 {
+            background-color: rgba(255, 255, 255, 0.07);
+        }
+
+        .hover\:bg-white\/\[0\.01\]:hover,
+        .hover\:bg-white\/\[0\.02\]:hover,
+        .hover\:bg-white\/\[0\.03\]:hover,
+        .hover\:bg-white\/\[0\.04\]:hover,
+        .hover\:bg-white\/5:hover,
+        .hover\:bg-slate-100:hover {
+            background-color: rgba(255, 255, 255, 0.055);
+        }
+
+        .hover\:bg-white\/\[0\.06\]:hover,
+        .hover\:bg-white\/\[0\.08\]:hover,
+        .hover\:bg-white\/10:hover {
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+
+        /* Recessed insets inside cards (contact blocks, note lists, chat pill). */
+        .bg-black\/15,
+        .bg-black\/20,
+        .bg-black\/25,
+        .bg-black\/30,
+        .bg-black\/35,
+        .bg-black\/40 {
+            background-color: var(--ra-inset);
+        }
+
+        /* Overlay scrims */
+        .bg-black\/50,
+        .bg-black\/60,
+        .bg-black\/70,
+        .bg-slate-900\/40 {
+            background-color: var(--ra-scrim);
+        }
+
+        /* Tinted accent fills — the accent recipe, not solid blocks of colour. */
+        .bg-blue-50,
+        .bg-blue-100,
+        .bg-brand-500,
+        .bg-brand-500\/10,
+        .bg-brand-500\/15,
+        .bg-brand-500\/20,
+        .bg-brand-900,
+        .bg-brand-900\/20,
+        .bg-brand-900\/30,
+        .bg-brand-900\/40,
+        .bg-brand-900\/50,
+        .bg-brand-900\/60,
+        .bg-brand-900\/70,
+        .bg-brand-900\/95,
+        .bg-cyan-500\/20,
+        .bg-teal-500\/20,
+        .peer-checked\:bg-brand-500\/20:where(.peer:checked ~ *) {
+            background-color: rgba(var(--ra-sky-rgb), 0.10);
+        }
+
+        .hover\:bg-brand-500\/15:hover,
+        .hover\:bg-brand-500\/20:hover {
+            background-color: rgba(var(--ra-sky-rgb), 0.16);
+        }
+
+        .bg-emerald-50,
+        .bg-emerald-500\/10,
+        .bg-emerald-500\/20 {
+            background-color: rgba(var(--ra-emerald-rgb), 0.10);
+        }
+
+        .bg-amber-50,
+        .bg-amber-500\/20,
+        .bg-orange-500\/20 {
+            background-color: rgba(var(--ra-amber-rgb), 0.10);
+        }
+
+        .bg-indigo-500\/20,
+        .bg-violet-500\/20,
+        .bg-fuchsia-500\/20 {
+            background-color: rgba(var(--ra-violet-rgb), 0.10);
+        }
+
+        .bg-red-500\/10,
+        .bg-red-500\/15,
+        .bg-red-500\/20,
+        .bg-rose-500\/10,
+        .bg-rose-500\/20 {
+            background-color: rgba(var(--ra-rose-rgb), 0.10);
+        }
+
+        .bg-slate-500\/20 {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Solid dots / bars keep their accent at full strength. */
+        .bg-brand-300 {
+            background-color: var(--ra-sky);
+        }
+
+        .bg-emerald-400 {
+            background-color: var(--ra-emerald);
+        }
+
+        /* Gradients are gone; every fill is flat. */
+        .bg-gradient-to-br,
+        .hover\:from-brand-400:hover,
+        .hover\:to-brand-600:hover,
+        .disabled\:hover\:from-brand-500:disabled:hover,
+        .disabled\:hover\:to-brand-700:disabled:hover {
+            background-image: none;
+        }
+
+        /* ---------- Borders --------------------------------------------------- */
+        .border-white\/5,
+        .divide-white\/5 > :not([hidden]) ~ :not([hidden]),
+        .border-slate-100 {
+            border-color: var(--ra-divider);
+        }
+
+        .border-white\/10,
+        .border-white\/20,
+        .border-slate-200,
+        .border-\[\#e2e8f0\] {
+            border-color: var(--ra-border);
+        }
+
+        .border-white\/15 {
+            border-color: rgba(255, 255, 255, 0.14);
+        }
+
+        .border-blue-100,
+        .border-blue-200,
+        .border-blue-400,
+        .border-brand-300\/10,
+        .border-brand-300\/15,
+        .border-brand-300\/20,
+        .border-brand-400\/20,
+        .border-brand-400\/25,
+        .border-brand-400\/30,
+        .border-brand-400\/40,
+        .border-brand-500\/25,
+        .border-cyan-500\/10,
+        .border-teal-500\/10,
+        .focus-within\:border-brand-400\/50:focus-within,
+        .hover\:border-blue-300:hover,
+        .hover\:border-blue-400:hover,
+        .hover\:border-brand-400\/40:hover {
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+        }
+
+        .border-emerald-100,
+        .border-emerald-500\/10,
+        .border-emerald-500\/20 {
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+        }
+
+        .border-amber-100,
+        .border-amber-500\/10,
+        .border-orange-500\/10 {
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+        }
+
+        .border-indigo-500\/10,
+        .border-violet-500\/10,
+        .border-fuchsia-500\/10 {
+            border-color: rgba(var(--ra-violet-rgb), 0.26);
+        }
+
+        .border-red-500\/10,
+        .border-red-500\/20,
+        .border-red-500\/25,
+        .border-rose-500\/10 {
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+        }
+
+        .border-slate-500\/10 {
+            border-color: var(--ra-border);
+        }
+
+        /* Drop zones: 1px dashed, emerald on hover / drag-over. The drag handlers
+           bolt on Tailwind's !-prefixed utilities, hence the !important here. */
+        .border-2.border-dashed,
+        .border-dashed {
+            border-width: 1px;
+            border-style: dashed;
+        }
+
+        .hover\:border-brand-400:hover,
+        .\!border-brand-400 {
+            border-color: rgba(var(--ra-emerald-rgb), 0.4) !important;
+        }
+
+        .\!bg-brand-500\/5 {
+            background-color: rgba(var(--ra-emerald-rgb), 0.06) !important;
+        }
+
+        /* Spinners keep a visible arc plus a transparent leading edge. */
+        .border-brand-400 {
+            border-color: var(--ra-sky);
+        }
+
+        .border-t-transparent {
+            border-top-color: transparent;
+        }
+
+        /* ---------- Radius --------------------------------------------------- */
+        .rounded-3xl,
+        .rounded-2xl {
+            border-radius: 14px;
+        }
+
+        .rounded-xl {
+            border-radius: 12px;
+        }
+
+        .rounded-lg,
+        .rounded-md,
+        .rounded {
+            border-radius: 10px;
+        }
+
+        /* ---------- Elevation, opacity, rings -------------------------------- */
+        /* No card shadows anywhere. The single frame shadow is re-applied to the
+           sticky topbar and the floating panels further down. */
+        .shadow-sm,
+        .shadow,
+        .shadow-md,
+        .shadow-lg,
+        .shadow-xl,
+        .shadow-2xl,
+        .hover\:shadow-lg:hover {
+            box-shadow: none;
+        }
+
+        /* Text and icons never communicate state through opacity. */
+        .opacity-30,
+        .opacity-50,
+        .opacity-70,
+        .opacity-80,
+        .disabled\:opacity-40:disabled {
+            opacity: 1;
+        }
+
+        .ring-1,
+        .focus-within\:ring-2:focus-within {
+            box-shadow: 0 0 0 3px rgba(var(--ra-sky-rgb), 0.18);
+        }
+
+        .ring-blue-400\/50,
+        .focus-within\:ring-brand-500\/15:focus-within {
+            --tw-ring-color: rgba(var(--ra-sky-rgb), 0.18);
+        }
+
+        /* ---------- Motion ---------------------------------------------------- */
+        .transition,
+        .transition-all,
+        .transition-colors,
+        .transition-opacity {
+            transition-duration: 160ms;
+            transition-timing-function: var(--ra-ease);
+        }
+
+        /* Re-assert the two explicit durations the drawer and chevron rely on. */
+        .duration-200 {
+            transition-duration: 200ms;
+        }
+
+        .duration-300 {
+            transition-duration: 300ms;
+        }
+
+        /* Section entry: 10px up + fade, staggered 40ms across the cards. */
+        @keyframes ra-rise-in {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: none;
+            }
+        }
+
+        #hrms-workspace > section:not(.hidden) > * {
+            animation: ra-rise-in 520ms var(--ra-ease) both;
+        }
+
+        #hrms-workspace > section:not(.hidden) > *:nth-child(2) {
+            animation-delay: 40ms;
+        }
+
+        #hrms-workspace > section:not(.hidden) > *:nth-child(3) {
+            animation-delay: 80ms;
+        }
+
+        #hrms-workspace > section:not(.hidden) > *:nth-child(4) {
+            animation-delay: 120ms;
+        }
+
+        #hrms-workspace > section:not(.hidden) > *:nth-child(n + 5) {
+            animation-delay: 160ms;
+        }
+
+        /* Live status dot: a 2s ring pulse, so the dot itself stays saturated
+           instead of fading out. */
+        @keyframes ra-pulse {
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(var(--ra-emerald-rgb), 0.45);
+            }
+
+            50% {
+                box-shadow: 0 0 0 4px rgba(var(--ra-emerald-rgb), 0);
+            }
+        }
+
+        .animate-pulse {
+            animation: ra-pulse 2s var(--ra-ease) infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            #hrms-workspace > section:not(.hidden) > *,
+            .animate-pulse {
+                animation: none;
+            }
+        }
+
+        /* ==========================================================================
+           HRMS components, re-toned
+           ========================================================================== */
+
+        /* Topbar — the app frame, and the only element carrying the one shadow. */
+        .hrms-page-header {
+            background: var(--ra-shell);
+            border-bottom: 1px solid var(--ra-border);
+            box-shadow: var(--ra-frame);
+            color: var(--ra-text);
+        }
+
+        .hrms-page-header .hrms-page-eyebrow {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+            color: var(--ra-sky);
+        }
+
+        .hrms-page-header .hrms-page-title {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: var(--ra-text);
+        }
+
+        .hrms-page-header .hrms-page-meta {
+            font-size: 13px;
+            color: var(--ra-dim);
+        }
+
+        /* Rail */
+        .hrms-sidebar-brand {
+            border-bottom: 1px solid var(--ra-border);
+        }
+
+        .hrms-sidebar-brand-logo {
+            filter: none;
+        }
+
+        .hrms-sidebar-nav-btn {
+            color: var(--ra-dim);
+            border-radius: 12px;
+        }
+
+        .hrms-sidebar-nav-btn.bg-brand-900 {
+            background-color: rgba(var(--ra-sky-rgb), 0.12);
+            color: var(--ra-sky);
+            box-shadow: inset 0 0 0 1px rgba(var(--ra-sky-rgb), 0.26) !important;
+        }
+
+        .hrms-sidebar-nav-btn.bg-brand-900 * {
+            color: var(--ra-sky);
+        }
+
+        .hrms-user-chip {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: var(--ra-border);
+        }
+
+        .hrms-user-chip-name {
+            font-size: 13px;
+            color: var(--ra-text);
+        }
+
+        .hrms-user-chip-role {
+            font-size: 11px;
+            color: var(--ra-dim);
+        }
+
+        .hrms-avatar {
+            background: rgba(var(--ra-sky-rgb), 0.15);
+            color: var(--ra-sky);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            font-size: 12px;
+        }
+
+        .hrms-avatar--sm {
+            font-size: 11px;
+        }
+
+        /* Cards */
+        .hrms-section-card,
+        .hrms-kpi-card {
+            background: var(--ra-card);
+            border: 1px solid var(--ra-border);
+            border-radius: 14px;
+            box-shadow: none;
+        }
+
+        /* The KPI tiles carried a diagonal gradient plus a radial ::before wash.
+           Both are gone; the tile is a flat card. */
+        .hrms-kpi-card {
+            background-image: none;
+        }
+
+        .hrms-kpi-card::before {
+            content: none;
+        }
+
+        .hrms-kpi-card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+            transform: none;
+        }
+
+        .hrms-kpi-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+        }
+
+        /* KPI row accents, in order: sky, emerald, violet, amber. */
+        .hrms-kpi-icon--sky {
+            background: rgba(var(--ra-sky-rgb), 0.15);
+            color: var(--ra-sky);
+        }
+
+        .hrms-kpi-icon--emerald {
+            background: rgba(var(--ra-emerald-rgb), 0.15);
+            color: var(--ra-emerald);
+        }
+
+        .hrms-kpi-icon--violet {
+            background: rgba(var(--ra-violet-rgb), 0.15);
+            color: var(--ra-violet);
+        }
+
+        .hrms-kpi-icon--amber {
+            background: rgba(var(--ra-amber-rgb), 0.15);
+            color: var(--ra-amber);
+        }
+
+        .hrms-kpi-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+        }
+
+        .hrms-kpi-value {
+            font-size: 24px;
+            color: var(--ra-text);
+        }
+
+        .hrms-kpi-sub,
+        .hrms-kpi-trend {
+            font-size: 11px;
+            color: var(--ra-dim);
+        }
+
+        .hrms-kpi-trend--up {
+            color: var(--ra-emerald);
+        }
+
+        .hrms-kpi-trend--down {
+            color: var(--ra-rose);
+        }
+
+        .hrms-kpi-trend--flat {
+            color: var(--ra-dim);
+        }
+
+        .hrms-section-title {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--ra-text);
+        }
+
+        .hrms-section-sub {
+            font-size: 13px;
+            color: var(--ra-dim);
+        }
+
+        .hrms-analytics-pane-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+        }
+
+        .hrms-link {
+            font-size: 13px;
+            color: var(--ra-sky);
+        }
+
+        .hrms-link:hover {
+            color: var(--ra-sky);
+            text-decoration: underline;
+        }
+
+        /* Charts. Flat fills, and every tone has a matching key in the markup. */
+        .hrms-exp-bar-track,
+        .hrms-skill-bar-track {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .hrms-exp-bar-fill,
+        .hrms-skill-bar-fill {
+            background: var(--ra-sky);
+        }
+
+        .hrms-exp-label,
+        .hrms-skill-bar-name {
+            font-size: 13px;
+            color: var(--ra-text);
+        }
+
+        .hrms-exp-count,
+        .hrms-skill-bar-count {
+            font-size: 13px;
+            color: var(--ra-text);
+        }
+
+        .hrms-sparkline-stat-value {
+            font-size: 24px;
+            color: var(--ra-text);
+        }
+
+        .hrms-sparkline-stat-label {
+            font-size: 12px;
+            color: var(--ra-dim);
+        }
+
+        /* Pipeline donut. Violet matches the Shortlisted KPI tile, so the ring,
+           the tile and the legend all read as the same series. */
+        .hrms-donut-track {
+            stroke: rgba(255, 255, 255, 0.06);
+        }
+
+        .hrms-donut-progress {
+            stroke: var(--ra-violet);
+        }
+
+        .hrms-donut-pct {
+            font-size: 24px;
+            color: var(--ra-text);
+        }
+
+        .hrms-donut-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+        }
+
+        .hrms-donut-legend-item {
+            font-size: 12px;
+            color: var(--ra-dim);
+        }
+
+        .hrms-donut-legend-dot {
+            width: 8px;
+            height: 8px;
+        }
+
+        /* Quick actions */
+        .hrms-quick-action {
+            background: rgba(255, 255, 255, 0.03);
+            border-color: var(--ra-border);
+            border-radius: 12px;
+            color: var(--ra-text);
+        }
+
+        .hrms-quick-action:hover {
+            background: rgba(var(--ra-sky-rgb), 0.08);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            transform: none;
+        }
+
+        .hrms-quick-action-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: rgba(var(--ra-sky-rgb), 0.15);
+            color: var(--ra-sky);
+        }
+
+        .hrms-quick-action-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--ra-text);
+        }
+
+        .hrms-quick-action-sub {
+            font-size: 12px;
+            color: var(--ra-dim);
+        }
+
+        .hrms-quick-action-chev {
+            color: var(--ra-dim);
+        }
+
+        /* Tables */
+        .hrms-table-wrap {
+            background: var(--ra-card);
+            border: 1px solid var(--ra-border);
+            border-radius: 14px;
+            box-shadow: none;
+            color: var(--ra-text);
+        }
+
+        .hrms-table-modern {
+            background: transparent;
+            font-size: 14px;
+        }
+
+        .hrms-table-modern th {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.13em;
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--ra-dim);
+            border-bottom: 1px solid var(--ra-border);
+        }
+
+        .hrms-table-modern td {
+            color: var(--ra-text);
+            border-bottom: 1px solid var(--ra-divider);
+        }
+
+        .hrms-table-modern td strong {
+            color: var(--ra-text);
+        }
+
+        .hrms-table-modern tbody tr td,
+        .hrms-table-modern tbody tr:nth-child(even) td {
+            background: transparent;
+        }
+
+        .hrms-table-modern tbody tr:hover td {
+            background: rgba(var(--ra-sky-rgb), 0.07);
+        }
+
+        .hrms-recent-table th {
+            font-size: 11px;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+            background: transparent;
+            border-bottom: 1px solid var(--ra-border);
+        }
+
+        .hrms-recent-table td {
+            color: var(--ra-text);
+            border-bottom: 1px solid var(--ra-divider);
+        }
+
+        .hrms-recent-table tbody tr:hover td {
+            background: rgba(var(--ra-sky-rgb), 0.07);
+        }
+
+        .hrms-candidate-name {
+            color: var(--ra-text);
+        }
+
+        .hrms-candidate-role {
+            font-size: 12px;
+            color: var(--ra-dim);
+        }
+
+        /* Status pills — accent recipe plus a 5px dot, never a solid fill. */
+        .hrms-status-pill {
+            font-size: 11px;
+            padding: 0.25rem 0.6rem;
+            border-width: 1px;
+            border-style: solid;
+        }
+
+        .hrms-status-pill::before {
+            content: "";
+            width: 5px;
+            height: 5px;
+            border-radius: 999px;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+
+        .hrms-status-pill--shortlisted {
+            background: rgba(var(--ra-amber-rgb), 0.10);
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+            color: var(--ra-amber);
+        }
+
+        .hrms-status-pill--new {
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .hrms-status-pill--rejected {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+        }
+
+        /* Skill chips */
         .hrms-skill-chip {
-            background: rgb(var(--hrms-brand-rgb) / 0.08) !important;
-            color: #1d4ed8 !important;
+            font-size: 12px;
+            border-radius: 999px;
+            padding: 0.25rem 0.7rem;
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
         }
-        .hrms-skill-chip-remove { color: #64748b !important; }
-        .hrms-table-modern th, .hrms-recent-table th { border-color: #e2e8f0 !important; }
 
-        /* Candidate Overview (ATS) helpers */
+        .hrms-skill-chip-remove {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--ra-dim);
+        }
+
+        .hrms-skill-chip-remove:hover {
+            background: rgba(var(--ra-rose-rgb), 0.16);
+            color: var(--ra-rose);
+        }
+
+        /* Drop zone (the .hrms-dropzone variant) */
+        .hrms-dropzone {
+            border: 1px dashed rgba(255, 255, 255, 0.14);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .hrms-dropzone:hover {
+            border-color: rgba(var(--ra-emerald-rgb), 0.4);
+            background: rgba(var(--ra-emerald-rgb), 0.05);
+        }
+
+        .hrms-dropzone-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: rgba(var(--ra-emerald-rgb), 0.15);
+            color: var(--ra-emerald);
+        }
+
+        .hrms-dropzone-title {
+            font-size: 14px;
+            color: var(--ra-text);
+        }
+
+        .hrms-dropzone-sub {
+            font-size: 12px;
+            color: var(--ra-dim);
+        }
+
+        /* ---------- Form controls -------------------------------------------- */
+        .hrms-input,
+        .hrms-select,
+        .hrms-textarea {
+            font-family: var(--ra-font);
+            font-size: 14px;
+            font-weight: 400;
+            color: var(--ra-text);
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 10px;
+        }
+
+        .hrms-input,
+        .hrms-select {
+            height: 38px;
+            padding: 0 0.85rem;
+        }
+
+        .hrms-textarea {
+            min-height: 38px;
+            padding: 0.55rem 0.85rem;
+        }
+
+        .hrms-input:hover:not(:disabled),
+        .hrms-select:hover:not(:disabled),
+        .hrms-textarea:hover:not(:disabled) {
+            border-color: rgba(var(--ra-sky-rgb), 0.4);
+        }
+
+        .hrms-input:focus,
+        .hrms-select:focus,
+        .hrms-textarea:focus {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(var(--ra-sky-rgb), 0.55);
+            box-shadow: 0 0 0 3px rgba(var(--ra-sky-rgb), 0.16);
+        }
+
+        /* Disabled is a recess, not a faded control. */
+        .hrms-input:disabled,
+        .hrms-select:disabled,
+        .hrms-textarea:disabled,
+        input:disabled,
+        textarea:disabled,
+        select:disabled {
+            opacity: 1;
+            background: var(--ra-recess);
+            border-color: var(--ra-border);
+            color: var(--ra-dim);
+            cursor: not-allowed;
+        }
+
+        .hrms-select {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b93a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        }
+
+        .hrms-select option,
+        .hrms-select optgroup {
+            background: var(--ra-card);
+            color: var(--ra-text);
+        }
+
+        .hrms-input[type="date"],
+        .hrms-input[type="time"],
+        .hrms-input[type="datetime-local"],
+        .hrms-input[type="month"],
+        .hrms-input[type="week"],
+        .hrms-input[type="number"] {
+            color-scheme: dark;
+        }
+
+        .hrms-input--sm,
+        .hrms-select--sm {
+            height: 32px;
+            font-size: 13px;
+            border-radius: 10px;
+        }
+
+        .hrms-form-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ra-text);
+        }
+
+        .hrms-form-eyebrow,
         .cand-lbl {
             display: block;
-            font-size: 0.66rem;
+            font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: #64748b;
-            margin-bottom: 0.3rem;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+            margin-bottom: 0.35rem;
         }
-        .no-scrollbar::-webkit-scrollbar { height: 0; width: 0; display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* File input: the native button is its own control, so tone it too. */
+        .hrms-input[type="file"] {
+            padding: 0 0.5rem;
+            line-height: 36px;
+        }
+
+        .hrms-input[type="file"]::file-selector-button {
+            margin-right: 0.75rem;
+            height: 26px;
+            padding: 0 0.7rem;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ra-sky);
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border: 1px solid rgba(var(--ra-sky-rgb), 0.26);
+            border-radius: 999px;
+            cursor: pointer;
+        }
+
+        /* ---------- Buttons --------------------------------------------------- */
+        .hrms-btn {
+            min-height: 36px;
+            padding: 0 0.95rem;
+            font-family: var(--ra-font);
+            font-size: 13px;
+            font-weight: 700;
+            border-radius: 10px;
+            color: var(--ra-text);
+        }
+
+        .hrms-btn-primary,
+        .hrms-btn-success {
+            background: rgba(var(--ra-emerald-rgb), 0.12);
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+            color: var(--ra-emerald);
+            box-shadow: none;
+        }
+
+        .hrms-btn-primary:hover:not(:disabled),
+        .hrms-btn-success:hover:not(:disabled) {
+            background: rgba(var(--ra-emerald-rgb), 0.18);
+            border-color: rgba(var(--ra-emerald-rgb), 0.4);
+            transform: none;
+            box-shadow: none;
+        }
+
+        .hrms-btn-secondary,
+        .hrms-btn-ghost {
+            background: transparent;
+            border-color: rgba(255, 255, 255, 0.09);
+            color: var(--ra-dim);
+        }
+
+        .hrms-btn-secondary:hover:not(:disabled),
+        .hrms-btn-ghost:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.16);
+            color: var(--ra-text);
+        }
+
+        /* Destructive: bordered and rose, never a solid red slab. */
+        .hrms-btn-danger {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+            box-shadow: none;
+        }
+
+        .hrms-btn-danger:hover:not(:disabled) {
+            background: rgba(var(--ra-rose-rgb), 0.16);
+            border-color: rgba(var(--ra-rose-rgb), 0.42);
+            transform: none;
+        }
+
+        .hrms-btn:disabled,
+        .hrms-btn[disabled] {
+            opacity: 1;
+            background: var(--ra-recess);
+            border-color: var(--ra-border);
+            color: var(--ra-dim);
+            cursor: not-allowed;
+        }
+
+        .hrms-btn-sm {
+            min-height: 32px;
+            font-size: 12px;
+            border-radius: 10px;
+        }
+
+        .hrms-btn-lg {
+            min-height: 42px;
+            font-size: 14px;
+        }
+
+        .hrms-btn-icon {
+            min-height: 36px;
+            width: 36px;
+            border-radius: 10px;
+        }
+
+        .hrms-btn-icon-sm {
+            min-height: 32px;
+            width: 32px;
+            border-radius: 10px;
+        }
+
+        /* ---------- Alerts --------------------------------------------------- */
+        .hrms-alert {
+            font-size: 13px;
+            border-radius: 10px;
+        }
+
+        .hrms-alert--error {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+        }
+
+        .hrms-alert--success {
+            background: rgba(var(--ra-emerald-rgb), 0.10);
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+            color: var(--ra-emerald);
+        }
+
+        .hrms-alert--warning {
+            background: rgba(var(--ra-amber-rgb), 0.10);
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+            color: var(--ra-amber);
+        }
+
+        /* ---------- Floating panels ------------------------------------------ */
+        /* These sit above the page, so they carry the frame shadow rather than a
+           card shadow of their own. */
+        .hrms-modal-panel {
+            background: var(--ra-card) !important;
+            border: 1px solid var(--ra-border) !important;
+            border-radius: 14px;
+            box-shadow: var(--ra-frame) !important;
+        }
+
+        .hrms-modal-panel .border-white\/10 {
+            border-color: var(--ra-border) !important;
+        }
+
+        #detailDrawer {
+            background: var(--ra-card);
+            border-left: 1px solid var(--ra-border);
+            box-shadow: var(--ra-frame);
+        }
+
+        .candidate-notes-inline {
+            background: var(--ra-inset) !important;
+            border: 1px solid var(--ra-border) !important;
+            border-radius: 12px !important;
+        }
+
+        /* ==========================================================================
+           .ra-* components
+
+           Used by the panels that needed real markup changes: Candidate Overview,
+           AI Match / Compare, and the shared card header.
+           ========================================================================== */
+
+        .ra-rail {
+            background: var(--ra-rail);
+            border-right: 1px solid var(--ra-border);
+        }
+
+        .ra-shell {
+            background: var(--ra-shell);
+        }
+
+        .ra-card {
+            background: var(--ra-card);
+            border: 1px solid var(--ra-border);
+            border-radius: 14px;
+        }
+
+        /* Card header: 38px icon chip, title/subtitle stack, actions right. */
+        .ra-cardhead {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 17px 20px;
+            border-bottom: 1px solid var(--ra-border);
+        }
+
+        .ra-cardhead-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            flex-shrink: 0;
+            background: rgba(var(--ra-sky-rgb), 0.15);
+            color: var(--ra-sky);
+        }
+
+        .ra-cardhead-icon--violet {
+            background: rgba(var(--ra-violet-rgb), 0.15);
+            color: var(--ra-violet);
+        }
+
+        .ra-cardhead-icon--emerald {
+            background: rgba(var(--ra-emerald-rgb), 0.15);
+            color: var(--ra-emerald);
+        }
+
+        .ra-cardhead-text {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .ra-cardhead-title {
+            display: block;
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--ra-text);
+        }
+
+        .ra-cardhead-sub {
+            display: block;
+            margin: 2px 0 0;
+            font-size: 13px;
+            color: var(--ra-dim);
+        }
+
+        .ra-cardhead-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        .ra-cardbody {
+            padding: 16px 20px 20px;
+        }
+
+        .ra-eyebrow {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+        }
+
+        /* Summary stat tiles */
+        .ra-statrow {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        @media (min-width: 640px) {
+            .ra-statrow {
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+            }
+        }
+
+        .ra-stat {
+            padding: 10px 12px;
+            border-radius: 12px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--ra-border);
+        }
+
+        .ra-stat-figure {
+            display: block;
+            font-size: 20px;
+            font-weight: 700;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+            color: var(--ra-text);
+        }
+
+        .ra-stat-label {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.13em;
+            color: var(--ra-dim);
+        }
+
+        .ra-stat--sky {
+            background: rgba(var(--ra-sky-rgb), 0.08);
+            border-color: rgba(var(--ra-sky-rgb), 0.22);
+        }
+
+        .ra-stat--sky .ra-stat-figure,
+        .ra-stat--sky .ra-stat-label {
+            color: var(--ra-sky);
+        }
+
+        .ra-stat--amber {
+            background: rgba(var(--ra-amber-rgb), 0.08);
+            border-color: rgba(var(--ra-amber-rgb), 0.22);
+        }
+
+        .ra-stat--amber .ra-stat-figure,
+        .ra-stat--amber .ra-stat-label {
+            color: var(--ra-amber);
+        }
+
+        .ra-stat--emerald {
+            background: rgba(var(--ra-emerald-rgb), 0.08);
+            border-color: rgba(var(--ra-emerald-rgb), 0.22);
+        }
+
+        .ra-stat--emerald .ra-stat-figure,
+        .ra-stat--emerald .ra-stat-label {
+            color: var(--ra-emerald);
+        }
+
+        /* Status pills built in JS */
+        .ra-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 9px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .ra-pill::before {
+            content: "";
+            width: 5px;
+            height: 5px;
+            border-radius: 999px;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+
+        .ra-pill--emerald {
+            background: rgba(var(--ra-emerald-rgb), 0.10);
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+            color: var(--ra-emerald);
+        }
+
+        .ra-pill--sky {
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .ra-pill--amber {
+            background: rgba(var(--ra-amber-rgb), 0.10);
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+            color: var(--ra-amber);
+        }
+
+        .ra-pill--violet {
+            background: rgba(var(--ra-violet-rgb), 0.10);
+            border-color: rgba(var(--ra-violet-rgb), 0.26);
+            color: var(--ra-violet);
+        }
+
+        .ra-pill--rose {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+        }
+
+        .ra-pill--neutral {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--ra-border);
+            color: var(--ra-dim);
+        }
+
+        /* Removable filter chips */
+        .ra-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border: 1px solid rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .ra-chip-x {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border: 0;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--ra-dim);
+            cursor: pointer;
+            padding: 0;
+        }
+
+        .ra-chip-x:hover {
+            background: rgba(var(--ra-rose-rgb), 0.16);
+            color: var(--ra-rose);
+        }
+
+        /* Chat quick-ask chips — violet, the AI accent. */
+        .ra-chip-q {
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(var(--ra-violet-rgb), 0.08);
+            border: 1px solid rgba(var(--ra-violet-rgb), 0.22);
+            color: var(--ra-violet);
+            cursor: pointer;
+            transition: background 160ms var(--ra-ease), border-color 160ms var(--ra-ease);
+        }
+
+        .ra-chip-q:hover {
+            background: rgba(var(--ra-violet-rgb), 0.14);
+            border-color: rgba(var(--ra-violet-rgb), 0.4);
+        }
+
+        /* Bordered icon buttons for row actions */
+        .ra-iconbtn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            flex-shrink: 0;
+            border-radius: 9px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--ra-dim);
+            cursor: pointer;
+            padding: 0;
+            transition: background 160ms var(--ra-ease), border-color 160ms var(--ra-ease),
+                color 160ms var(--ra-ease);
+        }
+
+        .ra-iconbtn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--ra-border);
+            color: var(--ra-text);
+        }
+
+        .ra-iconbtn--sky:hover {
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .ra-iconbtn--emerald:hover {
+            background: rgba(var(--ra-emerald-rgb), 0.10);
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+            color: var(--ra-emerald);
+        }
+
+        .ra-iconbtn--violet:hover {
+            background: rgba(var(--ra-violet-rgb), 0.10);
+            border-color: rgba(var(--ra-violet-rgb), 0.26);
+            color: var(--ra-violet);
+        }
+
+        .ra-iconbtn--amber:hover {
+            background: rgba(var(--ra-amber-rgb), 0.10);
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+            color: var(--ra-amber);
+        }
+
+        /* Destructive row action: bordered, rose only on hover. */
+        .ra-iconbtn--rose:hover {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+        }
+
+        .ra-iconbtn.is-on {
+            color: var(--ra-amber);
+        }
+
+        /* Nothing to act on: recessed, not faded. */
+        .ra-iconbtn--off,
+        .ra-iconbtn--off:hover {
+            background: var(--ra-recess);
+            border-color: var(--ra-border);
+            color: var(--ra-dim);
+            cursor: not-allowed;
+        }
+
+        /* Compare candidate picker */
+        .ra-pick {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 58px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--ra-border);
+            cursor: pointer;
+            transition: background 160ms var(--ra-ease), border-color 160ms var(--ra-ease);
+        }
+
+        .ra-pick:hover {
+            background: rgba(var(--ra-sky-rgb), 0.07);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+        }
+
+        .ra-pick.is-picked {
+            background: rgba(var(--ra-emerald-rgb), 0.10);
+            border-color: rgba(var(--ra-emerald-rgb), 0.4);
+        }
+
+        .ra-pick-check {
+            width: 15px;
+            height: 15px;
+            flex-shrink: 0;
+            accent-color: var(--ra-emerald);
+        }
+
+        .ra-pick-avatar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            background: rgba(var(--ra-sky-rgb), 0.15);
+            border: 1px solid rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .ra-pick-name {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ra-text);
+        }
+
+        .ra-pick-sub {
+            display: block;
+            font-size: 11px;
+            color: var(--ra-dim);
+        }
+
+        /* Fit-score meter + badge on the compare result cards */
+        .ra-meter {
+            height: 6px;
+            width: 100%;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            overflow: hidden;
+        }
+
+        .ra-meter-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: currentColor;
+        }
+
+        .ra-score {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex-shrink: 0;
+            padding: 6px 12px;
+            border-radius: 12px;
+            border: 1px solid transparent;
+        }
+
+        .ra-score-value {
+            font-size: 20px;
+            font-weight: 700;
+            line-height: 1;
+            letter-spacing: -0.02em;
+        }
+
+        .ra-score-unit {
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .ra-score-label {
+            margin-top: 3px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.13em;
+        }
+
+        .ra-tone-emerald {
+            color: var(--ra-emerald);
+            background: rgba(var(--ra-emerald-rgb), 0.10);
+            border-color: rgba(var(--ra-emerald-rgb), 0.26);
+        }
+
+        .ra-tone-sky {
+            color: var(--ra-sky);
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+        }
+
+        .ra-tone-amber {
+            color: var(--ra-amber);
+            background: rgba(var(--ra-amber-rgb), 0.10);
+            border-color: rgba(var(--ra-amber-rgb), 0.26);
+        }
+
+        .ra-tone-neutral {
+            color: var(--ra-dim);
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--ra-border);
+        }
+
+        /* Recessed read-only block (AI feedback, raw skills text) */
+        .ra-inset {
+            background: var(--ra-inset);
+            border: 1px solid var(--ra-border);
+            border-radius: 10px;
+        }
+
+        /* Empty states */
+        .ra-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 56px 24px;
+            text-align: center;
+        }
+
+        .ra-empty-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--ra-border);
+            color: var(--ra-dim);
+        }
+
+        .ra-empty-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--ra-text);
+        }
+
+        .ra-empty-sub {
+            font-size: 13px;
+            color: var(--ra-dim);
+            max-width: 34ch;
+        }
+
+        /* Chat bubbles */
+        .ra-bubble {
+            padding: 8px 14px;
+            border-radius: 14px;
+            font-size: 13px;
+            line-height: 1.6;
+            border: 1px solid transparent;
+            word-break: break-word;
+        }
+
+        .ra-bubble--user {
+            background: rgba(var(--ra-sky-rgb), 0.10);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-text);
+            border-bottom-right-radius: 4px;
+        }
+
+        .ra-bubble--ai {
+            background: rgba(var(--ra-violet-rgb), 0.08);
+            border-color: rgba(var(--ra-violet-rgb), 0.22);
+            color: var(--ra-text);
+            border-bottom-left-radius: 4px;
+        }
+
+        .ra-bubble--error {
+            background: rgba(var(--ra-rose-rgb), 0.10);
+            border-color: rgba(var(--ra-rose-rgb), 0.26);
+            color: var(--ra-rose);
+            border-bottom-left-radius: 4px;
+        }
+
+        .ra-bubble-time {
+            padding: 0 4px;
+            font-size: 11px;
+            color: var(--ra-dim);
+        }
+
+        .ra-avatar-chat {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            flex-shrink: 0;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            background: rgba(var(--ra-sky-rgb), 0.12);
+            border: 1px solid rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-sky);
+        }
+
+        .ra-avatar-chat--ai {
+            background: rgba(var(--ra-violet-rgb), 0.12);
+            border-color: rgba(var(--ra-violet-rgb), 0.26);
+            color: var(--ra-violet);
+        }
+
+        /* Chat send button */
+        .ra-send {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            border-radius: 999px;
+            border: 1px solid rgba(var(--ra-emerald-rgb), 0.26);
+            background: rgba(var(--ra-emerald-rgb), 0.12);
+            color: var(--ra-emerald);
+            cursor: pointer;
+            transition: background 160ms var(--ra-ease), border-color 160ms var(--ra-ease);
+        }
+
+        .ra-send:hover:not(:disabled) {
+            background: rgba(var(--ra-emerald-rgb), 0.18);
+            border-color: rgba(var(--ra-emerald-rgb), 0.4);
+        }
+
+        .ra-send:disabled {
+            background: var(--ra-recess);
+            border-color: var(--ra-border);
+            color: var(--ra-dim);
+            cursor: not-allowed;
+        }
+
+        /* ==========================================================================
+           Candidate Overview specifics
+           ========================================================================== */
+        .no-scrollbar::-webkit-scrollbar {
+            height: 0;
+            width: 0;
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Role/technology tab strip.
+           This row overflows as soon as there are more than a handful of roles,
+           and it used to carry .no-scrollbar — so the tabs past the right edge
+           were reachable but completely invisible: no bar, no hint, nothing to
+           drag. The scrollbar is intentionally shown here, styled thin so it
+           reads as part of the card rather than an OS artefact. */
+        #cand-tabs {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+            scroll-behavior: smooth;
+            padding-bottom: 0.4rem;
+            overscroll-behavior-x: contain;
+        }
+
+        #cand-tabs::-webkit-scrollbar {
+            height: 7px;
+        }
+
+        #cand-tabs::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #cand-tabs::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.16);
+            border-radius: 9999px;
+        }
+
+        #cand-tabs::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.26);
+        }
+
         .cand-tab {
             flex-shrink: 0;
             display: inline-flex;
             align-items: center;
             gap: 0.4rem;
-            padding: 0.4rem 0.85rem;
+            padding: 0.35rem 0.8rem;
             border-radius: 9999px;
-            font-size: 0.78rem;
+            font-size: 12px;
             font-weight: 600;
             white-space: nowrap;
             cursor: pointer;
-            border: 1px solid #e2e8f0;
-            background: #ffffff;
-            color: #475569;
-            transition: all 0.15s ease;
+            border: 1px solid var(--ra-border);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--ra-dim);
+            transition: background 160ms var(--ra-ease), border-color 160ms var(--ra-ease),
+                color 160ms var(--ra-ease);
         }
-        .cand-tab:hover { border-color: #93c5fd; background: #eff6ff; }
+
+        .cand-tab:hover {
+            background: rgba(var(--ra-sky-rgb), 0.08);
+            border-color: rgba(var(--ra-sky-rgb), 0.26);
+            color: var(--ra-text);
+        }
+
         .cand-tab.is-active {
-            background: #2563eb;
-            border-color: #2563eb;
-            color: #ffffff;
+            background: rgba(var(--ra-sky-rgb), 0.12);
+            border-color: rgba(var(--ra-sky-rgb), 0.4);
+            color: var(--ra-sky);
         }
+
         .cand-tab .cand-tab-count {
-            font-size: 0.66rem;
-            font-weight: 800;
+            font-size: 11px;
+            font-weight: 700;
             padding: 0.05rem 0.4rem;
             border-radius: 9999px;
-            background: rgba(37, 99, 235, 0.12);
-            color: #1d4ed8;
+            background: rgba(255, 255, 255, 0.07);
+            color: var(--ra-dim);
         }
-        .cand-tab.is-active .cand-tab-count { background: rgba(255,255,255,0.22); color: #ffffff; }
-        .cand-th-sort { cursor: pointer; user-select: none; }
-        .cand-th-sort:hover { color: #2563eb; }
-        .cand-row:nth-child(even) { background: #f8fafc; }
-        .cand-row:hover { background: #eff6ff; }
+
+        .cand-tab.is-active .cand-tab-count {
+            background: rgba(var(--ra-sky-rgb), 0.18);
+            color: var(--ra-sky);
+        }
+
+        .cand-th-sort {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .cand-th-sort:hover {
+            color: var(--ra-sky);
+        }
+
+        .cand-row:nth-child(even) {
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .cand-row:hover {
+            background: rgba(var(--ra-sky-rgb), 0.07);
+        }
+
         /* Full grid: horizontal + vertical cell borders on the candidate table. */
         #tab-details table th,
-        #tab-details table td { border: 1px solid #e5eaf1; }
-        #tab-details table thead th { border-bottom: 2px solid #cbd5e1; }
+        #tab-details table td {
+            border: 1px solid var(--ra-divider);
+        }
 
-        /* Light scrollbar */
-        ::-webkit-scrollbar-thumb { background: #cbd5e1 !important; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
-        ::-webkit-scrollbar-track { background: transparent !important; }
+        #tab-details table thead th {
+            border-bottom: 1px solid var(--ra-border);
+        }
+
+        #tab-details thead {
+            background: rgba(255, 255, 255, 0.03);
+        }
     </style>
 </head>
 
 <body class="text-slate-100 font-sans h-screen flex flex-row overflow-hidden">
 
     <aside
-        class="w-72 bg-[#f8fafc] border-r border-[#e2e8f0] flex flex-col h-screen shrink-0 z-30">
+        class="ra-rail w-72 flex flex-col h-screen shrink-0 z-30">
 
         <!-- Branding Logo Header (matches HRMS .sidebar-brand exactly) -->
         <div class="hrms-sidebar-brand">
@@ -1844,7 +3642,7 @@
     </aside>
 
     <!-- Scrollable Workspace Panel -->
-    <div class="flex-grow h-screen overflow-y-auto bg-[#eef2f7] flex flex-col">
+    <div class="ra-shell flex-grow h-screen overflow-y-auto flex flex-col">
 
         <!-- Top Workspace Bar (HRMS-themed) -->
         <header class="hrms-page-header">
@@ -1891,7 +3689,7 @@
 
             <!-- Loader Screen -->
             <div id="loader" class="hidden py-32 flex flex-col items-center justify-center">
-                <div class="animate-spin rounded-full h-12 w-12 border-2 border-brand-400 border-t-transparent mb-4">
+                <div class="animate-spin rounded-full h-12 w-12 border-2 border-brand-400 border-t-transparent mb-4" role="status" aria-label="Loading">
                 </div>
                 <div class="text-xs font-semibold text-brand-300">Synchronizing database candidates...</div>
             </div>
@@ -1901,7 +3699,7 @@
                 <!-- KPI tiles row -->
                 <div class="hrms-kpi-grid">
                     <div class="hrms-kpi-card">
-                        <div class="hrms-kpi-icon hrms-kpi-icon--info" aria-hidden="true">
+                        <div class="hrms-kpi-icon hrms-kpi-icon--sky" aria-hidden="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                 stroke-linejoin="round">
@@ -1917,7 +3715,7 @@
                     </div>
 
                     <div class="hrms-kpi-card">
-                        <div class="hrms-kpi-icon hrms-kpi-icon--success" aria-hidden="true">
+                        <div class="hrms-kpi-icon hrms-kpi-icon--emerald" aria-hidden="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                 stroke-linejoin="round">
@@ -1933,7 +3731,7 @@
                     </div>
 
                     <div class="hrms-kpi-card">
-                        <div class="hrms-kpi-icon hrms-kpi-icon--warning" aria-hidden="true">
+                        <div class="hrms-kpi-icon hrms-kpi-icon--violet" aria-hidden="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                 stroke-linejoin="round">
@@ -1948,7 +3746,7 @@
                     </div>
 
                     <div class="hrms-kpi-card">
-                        <div class="hrms-kpi-icon hrms-kpi-icon--primary" aria-hidden="true">
+                        <div class="hrms-kpi-icon hrms-kpi-icon--amber" aria-hidden="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                 stroke-linejoin="round">
@@ -2029,12 +3827,6 @@
                             </div>
                             <div class="hrms-donut-wrap">
                                 <svg class="hrms-donut-svg" viewBox="0 0 120 120" aria-hidden="true">
-                                    <defs>
-                                        <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                                            <stop offset="0%" stop-color="#fbbf24" />
-                                            <stop offset="100%" stop-color="#f59e0b" />
-                                        </linearGradient>
-                                    </defs>
                                     <circle class="hrms-donut-track" cx="60" cy="60" r="50" />
                                     <circle id="dash-donut-progress" class="hrms-donut-progress" cx="60" cy="60" r="50"
                                         stroke-dasharray="314" stroke-dashoffset="314" />
@@ -2046,12 +3838,12 @@
                             </div>
                             <div class="hrms-donut-legend">
                                 <span class="hrms-donut-legend-item">
-                                    <span class="hrms-donut-legend-dot" style="background: #fbbf24;"></span>
-                                    Shortlisted <strong id="dash-donut-short" style="color: #111827; margin-left: 0.2rem;">0</strong>
+                                    <span class="hrms-donut-legend-dot" style="background: var(--ra-violet);"></span>
+                                    Shortlisted <strong id="dash-donut-short" style="color: var(--ra-text); margin-left: 0.2rem;">0</strong>
                                 </span>
                                 <span class="hrms-donut-legend-item">
-                                    <span class="hrms-donut-legend-dot" style="background: rgba(255,255,255,0.15);"></span>
-                                    Other <strong id="dash-donut-other" style="color: #111827; margin-left: 0.2rem;">0</strong>
+                                    <span class="hrms-donut-legend-dot" style="background: #4a515c;"></span>
+                                    Other <strong id="dash-donut-other" style="color: var(--ra-text); margin-left: 0.2rem;">0</strong>
                                 </span>
                             </div>
                         </div>
@@ -2192,12 +3984,12 @@
 
                 <!-- Compact Upload Card (full width) -->
                 <div class="w-full">
-                    <div class="p-4 sm:p-5 rounded-xl bg-white/[0.02] shadow-lg">
+                    <div class="ra-card p-4 sm:p-5">
 
                         <!-- Header -->
                         <div class="flex items-start justify-between gap-3 mb-3">
                             <div>
-                                <h3 class="font-outfit font-extrabold text-base text-white flex items-center gap-2">
+                                <h3 class="font-extrabold text-base text-white flex items-center gap-2">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
                                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                         stroke-linejoin="round" class="text-brand-300">
@@ -2244,8 +4036,7 @@
                                 ondragover="event.preventDefault(); this.classList.add('!border-brand-400','!bg-brand-500/5');"
                                 ondragleave="this.classList.remove('!border-brand-400','!bg-brand-500/5');"
                                 ondrop="event.preventDefault(); this.classList.remove('!border-brand-400','!bg-brand-500/5'); handleDroppedFiles(event.dataTransfer.files, 'single');">
-                                <span
-                                    class="w-9 h-9 rounded-lg bg-brand-500/15 border border-brand-400/30 flex items-center justify-center text-brand-300 flex-shrink-0">
+                                <span class="ra-icon-chip ra-icon-chip--emerald">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
                                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                         stroke-linejoin="round">
@@ -2278,8 +4069,7 @@
                                 ondragover="event.preventDefault(); this.classList.add('!border-brand-400','!bg-brand-500/5');"
                                 ondragleave="this.classList.remove('!border-brand-400','!bg-brand-500/5');"
                                 ondrop="event.preventDefault(); this.classList.remove('!border-brand-400','!bg-brand-500/5'); handleDroppedFiles(event.dataTransfer.files, 'zip');">
-                                <span
-                                    class="w-9 h-9 rounded-lg bg-brand-500/15 border border-brand-400/30 flex items-center justify-center text-brand-300 flex-shrink-0">
+                                <span class="ra-icon-chip ra-icon-chip--emerald">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
                                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                         stroke-linejoin="round">
@@ -2305,7 +4095,7 @@
                         <!-- Import from Email (intelligent resume importer) -->
                         <div class="mt-3 pt-3 border-t border-white/5">
                             <div class="flex items-center gap-3">
-                                <span class="w-9 h-9 rounded-lg bg-brand-500/15 border border-brand-400/30 flex items-center justify-center text-brand-300 flex-shrink-0">
+                                <span class="ra-icon-chip ra-icon-chip--sky">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
                                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                         stroke-linejoin="round">
@@ -2372,7 +4162,7 @@
                         <!-- Skills-only result (kept for /extract/skills flow if invoked elsewhere) -->
                         <div id="transientSkillsResult"
                             class="hidden mt-3 p-3 bg-black/35 rounded-lg border border-white/10 space-y-2">
-                            <h4 class="font-outfit font-extrabold text-xs text-brand-300 flex items-center gap-1.5">
+                            <h4 class="font-extrabold text-xs text-brand-300 flex items-center gap-1.5">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
                                     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                     stroke-linejoin="round">
@@ -2403,13 +4193,13 @@
                 <!-- Resume Database Header -->
                 <!-- <div class="flex items-center justify-between pt-2">
                     <div>
-                        <h3 class="font-outfit font-extrabold text-lg text-white">Resume Database</h3>
+                        <h3 class="font-extrabold text-lg text-white">Resume Database</h3>
                         <p class="text-xs text-slate-400 mt-1">Browse, filter and manage parsed candidate profiles</p>
                     </div>
                 </div> -->
 
                 <!-- Search & Advanced Filters (collapsible) -->
-                <div class="rounded-2xl bg-white/[0.02] shadow-xl overflow-hidden">
+                <div class="ra-card overflow-hidden">
                     <button type="button" id="filterToggleBtn" onclick="toggleFilterPanel()"
                         aria-expanded="false" aria-controls="filterPanel"
                         class="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-white/[0.03] transition-colors">
@@ -2419,7 +4209,7 @@
                                 stroke-linejoin="round" class="text-brand-300">
                                 <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                             </svg>
-                            <h3 class="font-outfit font-extrabold text-base text-white">Database Filtering &amp; Sorting</h3>
+                            <h3 class="font-extrabold text-base text-white">Database Filtering &amp; Sorting</h3>
                             <span class="text-[10px] text-slate-500 hidden sm:inline">Click to expand</span>
                         </div>
                         <svg id="filterChevron" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
@@ -2530,41 +4320,40 @@
             <section id="tab-details" class="hidden space-y-4 flex-1 flex flex-col min-w-0">
 
                 <!-- Header + summary stats -->
-                <div class="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-                    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                        <div class="flex items-center gap-3 min-w-0">
-                            <div class="w-11 h-11 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3z"/><path d="M3 11h18v4H3z"/><path d="M3 19h18v2H3z"/></svg>
-                            </div>
-                            <div class="min-w-0">
-                                <h3 class="font-outfit font-extrabold text-lg text-slate-900">Candidate Overview</h3>
-                                <p class="text-xs text-slate-500 mt-0.5">Search, filter and manage your candidate pipeline.</p>
-                            </div>
-                        </div>
-                        <!-- Summary stats -->
-                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                            <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                                <div class="text-lg font-black text-slate-900 leading-none" id="cand-stat-total">0</div>
-                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">Total</div>
-                            </div>
-                            <div class="px-3 py-2 rounded-xl bg-blue-50 border border-blue-100 text-center">
-                                <div class="text-lg font-black text-blue-700 leading-none" id="cand-stat-showing">0</div>
-                                <div class="text-[10px] font-bold text-blue-600 uppercase tracking-wider mt-1">Showing</div>
-                            </div>
-                            <div class="px-3 py-2 rounded-xl bg-amber-50 border border-amber-100 text-center">
-                                <div class="text-lg font-black text-amber-700 leading-none" id="cand-stat-shortlisted">0</div>
-                                <div class="text-[10px] font-bold text-amber-600 uppercase tracking-wider mt-1">Shortlisted</div>
-                            </div>
-                            <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-center">
-                                <div class="text-lg font-black text-emerald-700 leading-none" id="cand-stat-immediate">0</div>
-                                <div class="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mt-1">Immediate</div>
-                            </div>
-                            <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                                <div class="text-lg font-black text-slate-900 leading-none" id="cand-stat-avgexp">0</div>
-                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">Avg Exp (Yr)</div>
-                            </div>
-                        </div>
+                <div class="ra-card">
+                    <div class="ra-cardhead">
+                        <span class="ra-icon-chip ra-icon-chip--sky">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3z"/><path d="M3 11h18v4H3z"/><path d="M3 19h18v2H3z"/></svg>
+                        </span>
+                        <span class="ra-cardhead-text">
+                            <h3 class="ra-cardhead-title">Candidate Overview</h3>
+                            <span class="ra-cardhead-sub">Search, filter and manage your candidate pipeline.</span>
+                        </span>
                     </div>
+                    <div class="ra-cardbody">
+                        <!-- Summary stats -->
+                        <div class="ra-statrow">
+                            <div class="ra-stat">
+                                <div class="ra-stat-figure" id="cand-stat-total">0</div>
+                                <div class="ra-stat-label">Total</div>
+                            </div>
+                            <div class="ra-stat ra-stat--sky">
+                                <div class="ra-stat-figure" id="cand-stat-showing">0</div>
+                                <div class="ra-stat-label">Showing</div>
+                            </div>
+                            <div class="ra-stat ra-stat--amber">
+                                <div class="ra-stat-figure" id="cand-stat-shortlisted">0</div>
+                                <div class="ra-stat-label">Shortlisted</div>
+                            </div>
+                            <div class="ra-stat ra-stat--emerald">
+                                <div class="ra-stat-figure" id="cand-stat-immediate">0</div>
+                                <div class="ra-stat-label">Immediate</div>
+                            </div>
+                            <div class="ra-stat">
+                                <div class="ra-stat-figure" id="cand-stat-avgexp">0</div>
+                                <div class="ra-stat-label">Avg Exp (Yr)</div>
+                            </div>
+                        </div>
 
                     <!-- Global search + advanced filters toggle -->
                     <div class="flex flex-col sm:flex-row gap-2 mt-4">
@@ -2584,7 +4373,7 @@
                     <div id="cand-chips" class="hidden flex-wrap gap-1.5 mt-3"></div>
 
                     <!-- Advanced filters panel -->
-                    <div id="cand-filters" class="hidden mt-3 pt-4 border-t border-slate-100">
+                    <div id="cand-filters" class="hidden mt-3 pt-4 border-t border-white/5">
                         <form onsubmit="candApply(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-3 gap-y-3">
                             <div><label class="cand-lbl">Candidate Name</label><input id="cf-name" class="hrms-input" placeholder="Name…"></div>
                             <div><label class="cand-lbl">Company Name</label><input id="cf-company" class="hrms-input" placeholder="Company…"></div>
@@ -2630,21 +4419,25 @@
                             </div>
                         </form>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Technology / role tabs -->
-                <div class="rounded-2xl bg-white border border-slate-200 shadow-sm px-3 py-2.5">
-                    <div id="cand-tabs" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+                <div class="ra-card px-3 py-2.5">
+                    <!-- `no-scrollbar` deliberately NOT applied here: the row already
+                         scrolled, but with the bar hidden there was nothing to show that
+                         roles past the right edge existed. Styled in the <style> block. -->
+                    <div id="cand-tabs" class="flex items-center gap-2 overflow-x-auto py-0.5">
                         <span class="text-xs text-slate-400 px-1">Loading roles…</span>
                     </div>
                 </div>
 
                 <!-- Candidate table -->
-                <div class="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0 min-w-0 w-full">
+                <div class="ra-card overflow-hidden flex-1 flex flex-col min-h-0 min-w-0 w-full">
                     <div class="overflow-x-auto overflow-y-auto flex-1 min-w-0" style="max-height: calc(100vh - 380px);">
                         <table class="w-full text-[12px] border-collapse">
-                            <thead class="sticky top-0 z-10 bg-slate-50 backdrop-blur">
-                                <tr id="cand-thead" class="text-[10px] uppercase tracking-wider font-bold text-slate-500 border-b border-slate-200"></tr>
+                            <thead class="sticky top-0 z-10">
+                                <tr id="cand-thead" class="uppercase tracking-wider text-slate-400 border-b border-white/10"></tr>
                             </thead>
                             <tbody id="cand-tbody">
                                 <tr><td colspan="14" class="px-4 py-12 text-center text-slate-400 text-xs">Loading candidates…</td></tr>
@@ -2677,23 +4470,24 @@
 
             <!-- TAB 3: MATCH / COMPARE -->
             <section id="tab-compare" class="hidden space-y-4 flex-1 flex flex-col">
-                <div class="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4 flex-1 flex flex-col">
-                    <div class="flex items-center gap-3">
-                        <div class="w-11 h-11 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                <div class="ra-card flex-1 flex flex-col">
+                    <div class="ra-cardhead">
+                        <span class="ra-icon-chip ra-icon-chip--sky">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M16 3h5v5" /><path d="M8 3H3v5" /><path d="m21 3-7.5 7.5" /><path d="m3 3 7.5 7.5" /><path d="M16 21h5v-5" /><path d="M8 21H3v-5" /><path d="m21 21-7.5-7.5" /><path d="m3 21 7.5-7.5" />
                             </svg>
-                        </div>
-                        <div>
-                            <h3 class="font-outfit font-extrabold text-lg text-slate-900">Compare Candidates</h3>
-                            <p class="text-xs text-slate-500 mt-0.5">Choose 2 to 5 candidates, add the job details, and see who fits best.</p>
-                        </div>
+                        </span>
+                        <span class="ra-cardhead-text">
+                            <h3 class="ra-cardhead-title">Compare Candidates</h3>
+                            <span class="ra-cardhead-sub">Choose 2 to 5 candidates, add the job details, and see who fits best.</span>
+                        </span>
                     </div>
+                    <div class="ra-cardbody space-y-4 flex-1 flex flex-col">
 
                     <!-- Inline Candidate Selector -->
                     <div class="space-y-3">
                         <div class="flex items-center justify-between">
-                            <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Choose candidates to compare (2–5)</label>
+                            <label class="ra-eyebrow">Choose candidates to compare (2–5)</label>
                         </div>
 
                         <!-- Search input for filter in grid -->
@@ -2717,7 +4511,7 @@
                         </div>
                         <!-- Selected chips strip -->
                         <div id="compare-selectedStrip"
-                            class="hidden flex flex-wrap gap-2 pt-1 border-t border-white/5 pt-2">
+                            class="hidden flex flex-wrap gap-2 border-t border-white/5 pt-2">
                             <!-- Selected candidate chips appear here -->
                         </div>
                     </div>
@@ -2741,13 +4535,14 @@
                     </div>
 
                     <div id="tab-compareResults" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
-                        <div class="col-span-full py-16 flex flex-col items-center justify-center text-center gap-3">
-                            <div class="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-500">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="m21 3-7.5 7.5"/><path d="m3 3 7.5 7.5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/><path d="m21 21-7.5-7.5"/><path d="m3 21 7.5-7.5"/></svg>
-                            </div>
-                            <p class="text-sm font-bold text-slate-700">Ready to compare</p>
-                            <p class="text-xs text-slate-400 max-w-xs">Select 2–5 candidates above, paste the job details, then hit <span class="font-semibold text-slate-600">Match Profiles</span> to see AI fit scores side by side.</p>
+                        <div class="col-span-full ra-empty">
+                            <span class="ra-empty-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="m21 3-7.5 7.5"/><path d="m3 3 7.5 7.5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/><path d="m21 21-7.5-7.5"/><path d="m3 21 7.5-7.5"/></svg>
+                            </span>
+                            <p class="ra-empty-title">Ready to compare</p>
+                            <p class="ra-empty-sub">Select 2–5 candidates above, paste the job details, then hit <span class="font-semibold text-slate-200">Match Profiles</span> to see AI fit scores side by side.</p>
                         </div>
+                    </div>
                     </div>
                 </div>
             </section>
@@ -2755,11 +4550,17 @@
 
             <!-- TAB 4: GLOBAL AI SEARCH -->
             <section id="tab-search" class="hidden space-y-4 flex-1 flex flex-col">
-                <div class="p-3 rounded-2xl bg-white/[0.02] shadow-xl space-y-4 flex-1 flex flex-col">
-                    <div>
-                        <h3 class="font-outfit font-extrabold text-lg text-white">Search Candidates</h3>
-                        <p class="text-xs text-slate-400 mt-1">Describe your ideal candidate to get quick matches</p>
+                <div class="ra-card flex-1 flex flex-col">
+                    <div class="ra-cardhead">
+                        <span class="ra-icon-chip ra-icon-chip--sky">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        </span>
+                        <span class="ra-cardhead-text">
+                            <h3 class="ra-cardhead-title">Search Candidates</h3>
+                            <span class="ra-cardhead-sub">Describe your ideal candidate to get quick matches</span>
+                        </span>
                     </div>
+                    <div class="ra-cardbody space-y-4 flex-1 flex flex-col">
 
                     <form onsubmit="executeGlobalChatSearch(event)" class="flex gap-2">
                         <input type="text" id="globalChatQuery"
@@ -2782,14 +4583,16 @@
                     </div>
 
                     <div id="globalChatAnswerBox"
-                        class="hidden p-4 bg-brand-900/20 border border-brand-300/10 rounded-xl space-y-1">
-                        <span class="text-[9px] uppercase font-bold tracking-wider text-brand-300">AI Analyst
+                        class="hidden p-4 rounded-xl space-y-1"
+                        style="background: rgba(var(--ra-violet-rgb), 0.08); border: 1px solid rgba(var(--ra-violet-rgb), 0.22);">
+                        <span class="ra-eyebrow" style="color: var(--ra-violet);">AI Analyst
                             Response</span>
-                        <p id="globalChatAnswer" class="text-xs leading-relaxed text-slate-200"></p>
+                        <p id="globalChatAnswer" class="text-sm leading-relaxed text-slate-200"></p>
                     </div>
 
                     <div id="globalChatResults" class="space-y-4">
                         <!-- Loaded query rows -->
+                    </div>
                     </div>
                 </div>
             </section>
@@ -2797,13 +4600,13 @@
             <!-- TAB 5: RESUME AI CHAT (PER CANDIDATE) -->
             <section id="tab-chat" class="hidden space-y-4 flex-1 flex flex-col">
                 <div
-                    class="rounded-2xl bg-white/[0.02] shadow-xl flex flex-col flex-1 min-h-[520px] overflow-hidden">
+                    class="ra-card flex flex-col flex-1 min-h-[520px] overflow-hidden">
 
                     <!-- Chat Header Bar -->
                     <div class="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-white/10 bg-white/[0.015] backdrop-blur-sm">
                         <div class="flex items-center gap-3 min-w-0">
                             <div id="chatHeaderAvatar"
-                                class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 border border-brand-400/40 flex items-center justify-center flex-shrink-0 text-white font-extrabold text-xs shadow-md">
+                                class="ra-icon-chip ra-icon-chip--violet" style="border-radius: 999px;">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -2811,7 +4614,7 @@
                             </div>
                             <div class="min-w-0">
                                 <div class="flex items-center gap-2">
-                                    <h3 id="chatHeaderName" class="font-outfit font-extrabold text-sm text-white truncate">
+                                    <h3 id="chatHeaderName" class="font-extrabold text-sm text-white truncate">
                                         Resume AI Assistant
                                     </h3>
                                     <span id="chatHeaderStatus"
@@ -2863,14 +4666,14 @@
                     <!-- Empty state shown when no candidate is selected -->
                     <div id="chatEmptyState"
                         class="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center gap-4">
-                        <div class="w-16 h-16 rounded-2xl bg-brand-500/15 border border-brand-400/30 flex items-center justify-center text-brand-300 shadow-lg">
+                        <div class="ra-empty-icon" style="background: rgba(var(--ra-violet-rgb), 0.10); border-color: rgba(var(--ra-violet-rgb), 0.22); color: var(--ra-violet);">
                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                             </svg>
                         </div>
                         <div class="space-y-1">
-                            <h4 class="font-outfit font-extrabold text-base text-white">Start a candidate Q&A</h4>
+                            <h4 class="font-extrabold text-base text-white">Start a candidate Q&A</h4>
                             <p class="text-xs text-slate-400 max-w-md mx-auto">
                                 Choose any parsed candidate from the dropdown to chat with their resume context. Ask about
                                 skills, experience, education or fitment.
@@ -2888,9 +4691,7 @@
                     <!-- Chat Screen -->
                     <div id="tabChatMessages"
                         class="hidden flex-1 overflow-y-auto px-5 py-5 space-y-4 flex flex-col scroll-smooth"
-                        style="background:
-                            radial-gradient(900px 400px at 50% -10%, rgba(83, 102, 245, 0.06), transparent 70%),
-                            linear-gradient(180deg, rgba(255,255,255,0.005), rgba(0,0,0,0.15));">
+                        style="background: var(--ra-inset);">
                         <!-- Messages rendered dynamically -->
                     </div>
 
@@ -2900,41 +4701,41 @@
                         <div id="chatQuickChips" class="hidden flex flex-wrap gap-1.5">
                             <button type="button" onclick="chatQuickAsk(this.dataset.q)"
                                 data-q="What are their top 5 skills?"
-                                class="text-[11px] font-semibold text-slate-300 hover:text-white bg-white/[0.04] hover:bg-brand-500/15 border border-white/10 hover:border-brand-400/40 rounded-full px-3 py-1 transition-all">
+                                class="ra-chip-q">
                                 Top skills
                             </button>
                             <button type="button" onclick="chatQuickAsk(this.dataset.q)"
                                 data-q="Summarise their work experience and years of experience."
-                                class="text-[11px] font-semibold text-slate-300 hover:text-white bg-white/[0.04] hover:bg-brand-500/15 border border-white/10 hover:border-brand-400/40 rounded-full px-3 py-1 transition-all">
+                                class="ra-chip-q">
                                 Experience
                             </button>
                             <button type="button" onclick="chatQuickAsk(this.dataset.q)"
                                 data-q="What is their education background?"
-                                class="text-[11px] font-semibold text-slate-300 hover:text-white bg-white/[0.04] hover:bg-brand-500/15 border border-white/10 hover:border-brand-400/40 rounded-full px-3 py-1 transition-all">
+                                class="ra-chip-q">
                                 Education
                             </button>
                             <button type="button" onclick="chatQuickAsk(this.dataset.q)"
                                 data-q="List notable projects from their resume."
-                                class="text-[11px] font-semibold text-slate-300 hover:text-white bg-white/[0.04] hover:bg-brand-500/15 border border-white/10 hover:border-brand-400/40 rounded-full px-3 py-1 transition-all">
+                                class="ra-chip-q">
                                 Projects
                             </button>
                             <button type="button" onclick="chatQuickAsk(this.dataset.q)"
                                 data-q="What are their core strengths and stand-out qualities?"
-                                class="text-[11px] font-semibold text-slate-300 hover:text-white bg-white/[0.04] hover:bg-brand-500/15 border border-white/10 hover:border-brand-400/40 rounded-full px-3 py-1 transition-all">
+                                class="ra-chip-q">
                                 Strengths
                             </button>
                         </div>
 
                         <!-- Pill input -->
                         <form onsubmit="sendTabChatMessage(event)"
-                            class="flex items-center gap-2 bg-black/30 border border-white/10 focus-within:border-brand-400/50 focus-within:ring-2 focus-within:ring-brand-500/15 rounded-full pl-4 pr-1.5 py-1.5 transition-all">
+                            class="ra-composer flex items-center gap-2 rounded-full pl-4 pr-1.5 py-1.5 transition-all">
                             <input type="text" id="tabChatInput"
                                 placeholder="Select a candidate to start chatting..."
-                                class="flex-grow bg-transparent border-0 outline-none text-xs text-slate-100 placeholder-slate-500 disabled:cursor-not-allowed"
+                                class="ra-composer-input flex-grow bg-transparent border-0 outline-none text-sm text-slate-100 disabled:cursor-not-allowed"
                                 disabled
                                 autocomplete="off">
                             <button type="submit" id="tabChatSendBtn"
-                                class="w-9 h-9 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 hover:from-brand-400 hover:to-brand-600 text-white flex items-center justify-center flex-shrink-0 shadow-md transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-brand-500 disabled:hover:to-brand-700"
+                                class="ra-send transition-all"
                                 aria-label="Send message" disabled>
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
                                     fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
@@ -2951,17 +4752,23 @@
             <!-- TAB: INTERVIEW QUESTIONS -->
             <section id="tab-interview" class="hidden space-y-4">
                 <!-- Upload panel (collapsible) -->
-                <div class="p-4 rounded-2xl bg-white/[0.02] shadow-xl space-y-4">
-                    <div class="flex items-center justify-between gap-3 flex-wrap">
-                        <div>
-                            <h3 class="font-outfit font-extrabold text-lg text-white">Interview Questions</h3>
-                            <p class="text-xs text-slate-400 mt-1">Upload and manage interview-question PDFs by hiring position.</p>
-                        </div>
-                        <button type="button" onclick="toggleInterviewForm()" id="iq-toggleBtn" class="hrms-btn hrms-btn-primary">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                            Upload Interview Questions
-                        </button>
+                <div class="ra-card">
+                    <div class="ra-cardhead">
+                        <span class="ra-icon-chip ra-icon-chip--sky">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v0a2 2 0 0 1 2-2z"/><path d="M17 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg>
+                        </span>
+                        <span class="ra-cardhead-text">
+                            <h3 class="ra-cardhead-title">Interview Questions</h3>
+                            <span class="ra-cardhead-sub">Upload and manage interview-question PDFs by hiring position.</span>
+                        </span>
+                        <span class="ra-cardhead-actions">
+                            <button type="button" onclick="toggleInterviewForm()" id="iq-toggleBtn" class="hrms-btn hrms-btn-primary">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                Upload Interview Questions
+                            </button>
+                        </span>
                     </div>
+                    <div class="ra-cardbody space-y-4">
 
                     <div id="iq-banner" class="hidden text-xs font-semibold rounded-lg px-3 py-2"></div>
 
@@ -2987,10 +4794,11 @@
                             <button type="submit" id="iq-submitBtn" class="hrms-btn hrms-btn-primary">Upload</button>
                         </div>
                     </form>
+                    </div>
                 </div>
 
                 <!-- Search + filter -->
-                <div class="p-3 rounded-2xl bg-white/[0.02] shadow-xl flex items-center gap-3 flex-wrap">
+                <div class="ra-card p-3 flex items-center gap-3 flex-wrap">
                     <input type="text" id="iq-search" oninput="renderInterviewQuestions()" placeholder="Search by title or position…" class="hrms-input flex-grow min-w-[200px]">
                     <select id="iq-filter" onchange="renderInterviewQuestions()" class="hrms-select w-[220px]"></select>
                     <span id="iq-count" class="text-xs text-slate-400"></span>
@@ -3000,7 +4808,7 @@
                 <div id="iq-loader" class="hidden py-16 flex items-center justify-center w-full">
                     <div class="animate-spin rounded-full h-8 w-8 border border-brand-400 border-t-transparent"></div>
                 </div>
-                <div id="iq-empty" class="hidden p-6 rounded-2xl bg-white/[0.02] text-sm text-slate-300"></div>
+                <div id="iq-empty" class="hidden ra-card p-6 text-sm text-slate-300"></div>
                 <div id="iq-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
 
                 <!-- Pagination -->
@@ -3011,7 +4819,7 @@
             <!-- <section id="tab-export" class="hidden space-y-6">
                 <div class="p-6 rounded-2xl bg-white/[0.02] shadow-xl space-y-6">
                     <div>
-                        <h3 class="font-outfit font-extrabold text-lg text-white">Google Sheets Database Export</h3>
+                        <h3 class="font-extrabold text-lg text-white">Google Sheets Database Export</h3>
                         <p class="text-xs text-slate-400 mt-1">Export your complete PostgreSQL candidate resumes
                             directory to a Google Sheets workbook. Authentication requires Google Service Account API
                             credentials.</p>
@@ -3087,10 +4895,10 @@
 
             <!-- TAB 7: EMPLOYEE SKILLS REGISTRY -->
             <section id="tab-skills" class="hidden space-y-4">
-                <div class="p-5 rounded-2xl bg-white/[0.02] shadow-xl space-y-4">
+                <div class="ra-card p-5 space-y-4">
                     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                         <div>
-                            <h3 class="font-outfit font-extrabold text-lg text-white">Employee Skills Registry</h3>
+                            <h3 class="font-extrabold text-lg text-white">Employee Skills Registry</h3>
                             <p class="text-xs text-slate-400 mt-1">View and filter skills extracted from employee
                                 resumes in the database.</p>
                         </div>
@@ -3144,7 +4952,7 @@
         <!-- Header -->
         <div class="p-6 border-b border-white/10 flex items-center justify-between">
             <div>
-                <h3 class="font-outfit font-extrabold text-xl text-white" id="dw-name">Candidate Name</h3>
+                <h3 class="font-extrabold text-xl text-white" id="dw-name">Candidate Name</h3>
                 <p class="text-xs text-brand-300 font-medium" id="dw-role">Role Designatory</p>
             </div>
             <button onclick="closeDrawer()"
@@ -3281,7 +5089,7 @@
     <div id="confirmModal"
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
         <div class="w-[420px] hrms-modal-panel rounded-xl shadow-2xl p-6">
-            <h4 class="font-outfit font-bold text-base text-white" id="conf-title">Confirm Action</h4>
+            <h4 class="font-bold text-base text-white" id="conf-title">Confirm Action</h4>
             <p class="text-xs text-slate-300 mt-2 leading-relaxed" id="conf-message">Are you sure you want to perform
                 this action?</p>
             <div class="flex gap-2 justify-end mt-6">
@@ -3296,7 +5104,7 @@
         class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
         <div class="hrms-modal-panel p-6 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col gap-4">
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
-                <h3 class="font-outfit font-extrabold text-base text-white">Edit Interview Questions</h3>
+                <h3 class="font-extrabold text-base text-white">Edit Interview Questions</h3>
                 <button type="button" onclick="closeInterviewEdit()" class="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -3333,7 +5141,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
                 <div>
-                    <h3 class="font-outfit font-extrabold text-base text-white">Interview Notes</h3>
+                    <h3 class="font-extrabold text-base text-white">Interview Notes</h3>
                     <p class="text-[10px] font-semibold text-brand-300 uppercase tracking-widest mt-0.5"
                         id="notesModalCandidate">Candidate Notes</p>
                 </div>
@@ -3404,7 +5212,7 @@
                         </svg>
                     </div>
                     <div>
-                        <h3 class="font-outfit font-extrabold text-xl sm:text-[1.35rem] leading-tight text-white">Candidate Details Form</h3>
+                        <h3 class="font-extrabold text-xl sm:text-[1.35rem] leading-tight text-white">Candidate Details Form</h3>
                         <p class="text-[9px] sm:text-[10px] font-semibold text-brand-300 uppercase tracking-[0.2em] mt-0.5"
                             id="detailsModalCandidate">Edit Details</p>
                     </div>
@@ -3558,7 +5366,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-white/10 pb-3">
                 <div>
-                    <h3 class="font-outfit font-extrabold text-base text-white" id="cv-name">Candidate Name</h3>
+                    <h3 class="font-extrabold text-base text-white" id="cv-name">Candidate Name</h3>
                     <p class="text-[10px] font-semibold text-brand-300 uppercase tracking-widest mt-0.5" id="cv-role">
                         Role Designation</p>
                 </div>
@@ -3669,12 +5477,10 @@
         const resumeApiUrl = (new URLSearchParams(window.location.search).get("api"))
             || `${window.location.origin}/resume-api`;
 
-        // Extract JWT token from URL, localStorage, or sessionStorage
+        // Authentication is provided by the unified server's HttpOnly cookie.
+        // Keep only a short-lived in-memory token for standalone login state.
         const urlParams = new URLSearchParams(window.location.search);
-        let jwtToken = urlParams.get("token") || localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-        if (jwtToken) {
-            localStorage.setItem("token", jwtToken);
-        }
+        let jwtToken = "";
 
         // Are we mounted inside the HRMS app (served at /resume/) or running
         // standalone? Under HRMS there must be exactly ONE login — the HRMS
@@ -3711,6 +5517,7 @@
         }
 
         window.fetch = async function (url, options = {}) {
+            options.credentials = options.credentials || "same-origin";
             if (needsAuthHeader(url)) {
                 if (!options.headers) {
                     options.headers = {};
@@ -3895,7 +5702,7 @@
 
         // The global fetch interceptor only auto-injects the token for /resume-api
         // URLs; these endpoints live on the HRMS API (/api), so attach the bearer
-        // token explicitly (the user is already authenticated via ?token=).
+        // token explicitly (the user is already authenticated via the session cookie).
         function iqFetch(path, opts = {}) {
             const headers = new Headers(opts.headers || {});
             if (jwtToken && !headers.has("Authorization")) headers.set("Authorization", "Bearer " + jwtToken);
@@ -4017,7 +5824,7 @@
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 15h6M9 18h4"/></svg>
                     </div>
                     <div class="min-w-0 flex-1">
-                        <div class="font-outfit font-bold text-sm text-white truncate" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</div>
+                        <div class="font-bold text-sm text-white truncate" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</div>
                         <div class="text-[11px] text-slate-500 mt-0.5">Uploaded ${iqFormatDate(r.created_at)}${by}</div>
                     </div>
                 </div>
@@ -4786,13 +6593,18 @@
             if (avElem) avElem.innerText = _dashInitials(displayName);
 
             // Enrich with the real user record from /api/auth/me when reachable.
-            if (!jwtToken) return;
+            // Under HRMS jwtToken is always "" (HttpOnly cookie), so gating on it
+            // meant the topbar never showed the real name — it sat on the
+            // "User #3 / HR" placeholder derived from the JWT. Same-origin fetch
+            // sends the session cookie automatically; standalone still needs the
+            // Bearer header, so send it only when we actually hold a token.
+            if (!UNDER_HRMS && !jwtToken) return;
             try {
                 // The Resume Analyzer is mounted under the HRMS app, so /api/auth/me
                 // is available on the same origin. When running fully standalone
                 // this just fails silently and we keep the JWT fallback above.
                 const resp = await fetch("/api/auth/me", {
-                    headers: { "Authorization": `Bearer ${jwtToken}` }
+                    headers: jwtToken ? { "Authorization": `Bearer ${jwtToken}` } : {}
                 });
                 if (!resp.ok) return;
                 const me = await resp.json();
@@ -4914,7 +6726,7 @@
                     <td class="p-3.5 text-center text-slate-400 font-medium text-[11px]">${dateAdded}</td>
                     <td class="p-4 pr-6 text-right" onclick="event.stopPropagation()">
                         <div class="inline-flex gap-1">
-                            <a href="${resumeApiUrl}/files/${r.source_file}?token=${jwtToken}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
+                            <a href="${resumeApiUrl}/files/${r.source_file}" target="_blank" title="Open Resume PDF" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-emerald-400 transition-all flex items-center justify-center">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                             </a>
                             <button onclick="openCandidateDetailsModal('${r.id}', event)" title="Edit Candidate Details" class="p-2 hover:bg-white/5 rounded-lg text-slate-400 hover:text-indigo-400 transition-all">
@@ -5191,6 +7003,15 @@
                 `<button type="button" class="cand-tab ${candState.role === r.role ? 'is-active' : ''}" onclick="candSetRole('${r.role.replace(/'/g, "\\'")}')">${_detailsEscape(r.role)} <span class="cand-tab-count">${r.count}</span></button>`
             ).join('');
             el.innerHTML = all + items;
+
+            // Re-rendering via innerHTML resets scrollLeft to 0. Without this,
+            // picking a role that sits off to the right snapped the strip back
+            // to the start and the tab you just selected was scrolled out of
+            // sight — it looked like the click had done nothing.
+            const active = el.querySelector('.cand-tab.is-active');
+            if (active && active.scrollIntoView) {
+                active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
         }
 
         function candSetRole(role) {
@@ -5308,7 +7129,7 @@
             const star = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${r.is_shortlisted ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
             const trash = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
             const view = r.source_file
-                ? btn('View resume', 'hover:text-blue-600', eye, `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}?token=${encodeURIComponent(jwtToken)}','_blank','noopener')`)
+                ? btn('View resume', 'hover:text-blue-600', eye, `window.open('${resumeApiUrl}/files/${encodeURIComponent(r.source_file)}','_blank','noopener')`)
                 : btn('No resume file', 'opacity-30 cursor-not-allowed', eye, 'void(0)');
             const download = r.source_file
                 ? btn('Download resume', 'hover:text-emerald-600', dl, `candDownloadResume('${encodeURIComponent(r.source_file)}', '${_detailsEscape(r.name).replace(/'/g, "\\'")}')`)
@@ -5321,7 +7142,7 @@
 
         function candDownloadResume(sourceFile, name) {
             const a = document.createElement('a');
-            a.href = `${resumeApiUrl}/files/${sourceFile}?token=${encodeURIComponent(jwtToken)}`;
+            a.href = `${resumeApiUrl}/files/${sourceFile}`;
             a.download = (name || 'resume');
             document.body.appendChild(a); a.click(); a.remove();
         }
@@ -6268,7 +8089,7 @@
                             <!-- Header: name + fit score badge -->
                             <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
                                 <div class="min-w-0">
-                                    <div class="font-outfit font-extrabold text-sm text-slate-900 truncate" title="${r.name}">${r.name}</div>
+                                    <div class="font-extrabold text-sm text-slate-900 truncate" title="${r.name}">${r.name}</div>
                                     <div class="text-[10px] text-slate-500 mt-0.5">${parseFloat(r.experience_years || 0).toFixed(1)} yrs experience</div>
                                 </div>
                                 <div class="flex-shrink-0 flex flex-col items-center px-3 py-1.5 rounded-xl border ${toneMap[tone]}">
@@ -6728,7 +8549,7 @@
             }
 
             // Viewing resume file PDF
-            document.getElementById("dw-download-link").href = `${resumeApiUrl}/files/${resume.source_file}?token=${jwtToken}`;
+            document.getElementById("dw-download-link").href = `${resumeApiUrl}/files/${resume.source_file}`;
             document.getElementById("dw-chat-btn").onclick = (e) => {
                 e.stopPropagation();
                 triggerSpecificResumeQna(resume.id);
@@ -7410,7 +9231,6 @@
                 const data = await response.json();
 
                 jwtToken = data.access_token;
-                localStorage.setItem("token", jwtToken);
 
                 document.getElementById("standalone-login-modal").classList.add("hidden");
 
@@ -7574,7 +9394,21 @@
 
         checkServerHealth();
         initTopbarUser();
-        if (!jwtToken) {
+        // "Do I hold a token string?" is NOT a test of being signed in when
+        // mounted under HRMS. There the session is an HttpOnly cookie, which
+        // JavaScript cannot read by design, so jwtToken is always "" — this
+        // check used to fire on every load and redirect straight back to the
+        // HRMS dashboard, making the Resume Analyzer flash up and vanish.
+        //
+        // Under HRMS the server has ALREADY authenticated us: resume_access_guard
+        // 302s an unauthorised /resume/ request away, so if this script is
+        // running at all, the user is a signed-in Admin/HR. Just load. Should a
+        // later API call genuinely come back 401/403, the fetch interceptor
+        // above still calls requireLogin().
+        //
+        // Standalone (no HRMS, no cookie) keeps the old behaviour: no token
+        // means show the login modal.
+        if (!UNDER_HRMS && !jwtToken) {
             requireLogin();
         } else {
             fetchResumes();
@@ -7593,7 +9427,7 @@
                     class="inline-flex h-12 w-12 rounded-xl bg-brand-900 border border-brand-300/20 items-center justify-center overflow-hidden shadow-lg mb-3 p-0.5">
                     <img src="assets/softwiz-logo.png" alt="Softwiz" class="h-full w-full object-contain">
                 </div>
-                <h2 class="text-xl font-outfit font-black tracking-tight text-white leading-none">SOFTWIZ AI RECRUITER
+                <h2 class="text-xl font-black tracking-tight text-white leading-none">SOFTWIZ AI RECRUITER
                 </h2>
                 <p class="text-[11px] font-semibold text-brand-300 tracking-wider uppercase mt-2">Resume Analyzer Portal
                 </p>

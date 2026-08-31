@@ -1,11 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { attendance as api, employees as employeesApi } from "../api/client";
 import CustomSelect from "../components/CustomSelect";
 import MonthlyAttendanceGrid from "../components/MonthlyAttendanceGrid";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+import { dailyTarget } from "../utils/workingHours";
 import { SectionLoader } from "../components/LoadingState";
-import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import { useTableControls } from "../components/dataTable";
+import type { SortState, SortDirection } from "../components/dataTable";
 
 interface AttendanceRow {
   id: number;
@@ -85,28 +87,126 @@ function formatLocalDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/* 24-box strokes, round caps, currentColor. Rendered size comes from the
+   control that holds them (.eds-iconbtn 15px, .eds-sort 9px, and so on). */
 const Icons = {
   Edit: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
+      <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path>
     </svg>
   ),
   Eye: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"></path>
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   ),
   Calendar: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-      <line x1="16" y1="2" x2="16" y2="6"></line>
-      <line x1="8" y1="2" x2="8" y2="6"></line>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect>
       <line x1="3" y1="10" x2="21" y2="10"></line>
+      <line x1="8" y1="2.5" x2="8" y2="6"></line>
+      <line x1="16" y1="2.5" x2="16" y2="6"></line>
+    </svg>
+  ),
+  CalendarPlain: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </svg>
+  ),
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5"></circle>
+      <line x1="21" y1="21" x2="16.7" y2="16.7"></line>
+    </svg>
+  ),
+  Users: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+    </svg>
+  ),
+  UserPlus: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <line x1="19" y1="8" x2="19" y2="14"></line>
+      <line x1="22" y1="11" x2="16" y2="11"></line>
+    </svg>
+  ),
+  ChevronLeft: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6"></polyline>
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  ),
+  Close: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
+  ),
+  /** Sort affordance: both chevrons when idle, one when the column is active. */
+  Sort: ({ direction }: { direction: SortDirection | null }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      {direction !== "asc" && <polyline points="7 15 12 20 17 15"></polyline>}
+      {direction !== "desc" && <polyline points="7 9 12 4 17 9"></polyline>}
     </svg>
   )
 };
+
+/** Column header for the attendance table. Sorting itself stays in
+ *  useTableControls; this only renders the design's affordance. */
+function SortTh({
+  label,
+  columnKey,
+  sort,
+  onToggle,
+  notSortable,
+}: {
+  label: string;
+  columnKey: string;
+  sort: SortState;
+  onToggle: (key: string) => void;
+  notSortable?: boolean;
+}) {
+  if (notSortable) return <th className="is-actions">{label}</th>;
+  const active = sort.key === columnKey;
+  return (
+    <th>
+      <button
+        type="button"
+        className={`eds-sort${active ? " is-active" : ""}`}
+        onClick={() => onToggle(columnKey)}
+        title={`Sort by ${label}`}
+      >
+        {label}
+        <Icons.Sort direction={active ? sort.direction : null} />
+      </button>
+    </th>
+  );
+}
+
+/** Identity tint for a member avatar, stable across sorts and searches. */
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+function initialsOf(first: string, last: string): string {
+  const a = (first || "").trim()[0] || "";
+  const b = (last || "").trim()[0] || "";
+  return (a + b).toUpperCase() || "?";
+}
+
+/** An em dash reads better than a hyphen for an empty cell. */
+function orDash(value: string) {
+  return value === "-" ? <span className="eds-dash">—</span> : value;
+}
 
 
 // Monthly Attendance Summary (Feature 3) — reads the existing attendance
@@ -153,41 +253,31 @@ function MonthlySummaryCard({ employeeId, month, year }: { employeeId: number; m
     : [];
 
   return (
-    <div className="card" style={{ marginTop: "1rem" }}>
-      <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 700 }}>
-        {monthName} {year} — Month Summary
-      </h3>
-      {loading ? (
-        <div className="text-muted">Loading summary…</div>
-      ) : !summary ? (
-        <div className="text-muted">Summary unavailable.</div>
-      ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: "0.75rem",
-          }}
-        >
-          {rows.map((r) => (
-            <div
-              key={r.label}
-              style={{
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 10,
-                padding: "0.7rem 0.8rem",
-              }}
-            >
-              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6 }}>
-                {r.label}
-              </div>
-              <div style={{ fontSize: "1.15rem", fontWeight: 800, marginTop: 2 }}>{r.value}</div>
-            </div>
-          ))}
+    <section className="eds-card">
+      <div className="eds-card-head">
+        <span className="eds-chip"><Icons.Calendar /></span>
+        <div className="eds-card-titles">
+          <h2 className="eds-card-title">Month Summary</h2>
+          <p className="eds-card-sub">{monthName} {year}</p>
         </div>
-      )}
-    </div>
+      </div>
+      <div className="eds-card-body">
+        {loading ? (
+          <div className="eds-note">Loading summary…</div>
+        ) : !summary ? (
+          <div className="eds-note">Summary unavailable.</div>
+        ) : (
+          <div className="eds-metrics">
+            {rows.map((r) => (
+              <div key={r.label} className="eds-metric">
+                <div className="eds-metric-lab">{r.label}</div>
+                <div className="eds-metric-val">{r.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -246,6 +336,9 @@ export default function Attendance() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // Stamped when the roster/records load settles, so the card footer can say
+  // how fresh the table is instead of claiming a refresh cadence it lacks.
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
   const [editCell, setEditCell] = useState<{
     employee_id: number;
@@ -345,7 +438,10 @@ export default function Attendance() {
           }
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLastSynced(new Date());
+      });
   }, [selectedDate, month, year, isHrOrAdmin, user?.employee_id]);
 
   // Per-second update for live tracking
@@ -429,7 +525,7 @@ export default function Attendance() {
     breakMinutes: string | number = 0
   ): { status: string; hoursWorked: number } => {
     const emp = employees.find(e => e.id === employeeId);
-    const expected = emp?.expected_working_hours || 9;
+    const target = dailyTarget(emp?.expected_working_hours);
     if (!signIn || !signOut) return { status: "ABSENT", hoursWorked: 0 };
     const [ih, im] = signIn.split(":").map(Number);
     const [oh, om] = signOut.split(":").map(Number);
@@ -439,7 +535,10 @@ export default function Attendance() {
     const workedMins = outMins - inMins - breakMins;
     if (workedMins <= 0) return { status: "ABSENT", hoursWorked: 0 };
     const hoursWorked = workedMins / 60;
-    const expectedMins = expected * 60;
+    // No daily target: they worked, so they were present. There is no shorter
+    // -than-required to be short of.
+    if (target === null) return { status: "PRESENT", hoursWorked };
+    const expectedMins = target * 60;
     if (workedMins >= expectedMins * 0.9) return { status: "PRESENT", hoursWorked };
     if (workedMins >= expectedMins * 0.5) return { status: "HALF_DAY", hoursWorked };
     return { status: "SHORT", hoursWorked };
@@ -504,109 +603,126 @@ export default function Attendance() {
   const renderDaySummary = (d: AttendanceDetails | null, loading: boolean) => {
     if (loading) return <SectionLoader size="sm" />;
     const labelFor = makeEventLabeler(d?.events || [], !!d?.sign_out_time);
-    const metric = (label: string, value: React.ReactNode, color?: string) => (
-      <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", padding: "0.55rem 0.7rem" }}>
-        <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6 }}>{label}</div>
-        <div style={{ fontSize: "1.05rem", fontWeight: 800, marginTop: 2, color: color || "#fff" }}>{value}</div>
+    const metric = (label: string, value: React.ReactNode, tone?: "emerald" | "amber") => (
+      <div className="eds-metric">
+        <div className="eds-metric-lab">{label}</div>
+        <div className={`eds-metric-val${tone ? ` is-${tone}` : ""}`}>{value}</div>
       </div>
     );
     return (
-      <>
-        {/* Summary card */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.6rem", marginBottom: "1.1rem" }}>
-          {metric("First Check-In", formatTime12h(d?.sign_in_time), "#22c55e")}
-          {metric("Last Check-Out", formatTime12h(d?.sign_out_time), "#f59e0b")}
+      <div className="eds-card-body">
+        <div className="eds-metrics">
+          {metric("First Check-In", formatTime12h(d?.sign_in_time), "emerald")}
+          {metric("Last Check-Out", formatTime12h(d?.sign_out_time), "amber")}
           {metric("Working Hours", formatCompactDuration(d?.total_work_hours))}
           {metric("Break Time", formatCompactDuration(d?.total_break_hours))}
           {metric("Break Outs", d?.break_out_count ?? 0)}
           {metric("Break Ins", d?.break_in_count ?? 0)}
         </div>
 
-        {/* Detailed timeline */}
-        <div style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6, margin: "0 0 0.4rem 2px" }}>Timeline</div>
-        <div style={{
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: "10px",
-          padding: "0.4rem 1rem",
-          maxHeight: "240px",
-          overflowY: "auto",
-        }}>
+        <div className="eds-eyebrow">Timeline</div>
+        <div className="eds-timeline">
           {(d?.events?.length || 0) === 0 ? (
-            <div style={{ opacity: 0.65, textAlign: "center", padding: "0.6rem 0" }}>No attendance events recorded for this date.</div>
+            <div className="eds-timeline-empty">No attendance events recorded for this date.</div>
           ) : (
             d?.events.map((evt) => {
               const { label, kind } = labelFor(evt);
-              const color = kind === "in" ? "#22c55e" : kind === "out" ? "#f59e0b" : "#94a3b8";
               return (
-                <div key={evt.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.4rem 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                  <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatEventTime12h(evt.event_time)}</span>
-                  <span style={{ fontWeight: 700, color }}>{label}</span>
+                <div key={evt.id} className="eds-timeline-row">
+                  <span className="eds-timeline-time">{formatEventTime12h(evt.event_time)}</span>
+                  <span className={`eds-timeline-label is-${kind}`}>{label}</span>
                 </div>
               );
             })
           )}
         </div>
 
-        <div style={{ marginTop: "0.9rem", fontSize: "0.85rem" }}>
-          Status: <strong>{formatStatusLabel(d?.status || "ABSENT", d?.total_work_hours)}</strong>
+        <div className="eds-note">
+          Status: <b>{formatStatusLabel(d?.status || "ABSENT", d?.total_work_hours)}</b>
         </div>
-      </>
+      </div>
     );
   };
+
+  const dayNavigator = (
+    <div className="eds-att-nav">
+      <label className="eds-datefield" title="Pick a date">
+        <Icons.CalendarPlain />
+        <input
+          type="date"
+          value={selectedDate}
+          min="2026-01-01"
+          max={todayIso}
+          onChange={(e) => setSelectedDate(e.target.value)}
+        />
+      </label>
+      <div className="eds-seg">
+        <button type="button" className="eds-seg-btn" onClick={() => changeDay(-1)} title="Go to Previous Day">
+          <Icons.ChevronLeft />
+          Previous Day
+        </button>
+        <button
+          type="button"
+          className="eds-seg-btn eds-seg-btn--today"
+          onClick={() => setSelectedDate(todayIso)}
+          title="Go to Today"
+        >
+          Today
+        </button>
+        <button
+          type="button"
+          className="eds-seg-btn"
+          onClick={() => changeDay(1)}
+          disabled={selectedDate >= todayIso}
+          title={selectedDate >= todayIso ? "Cannot navigate past today" : "Go to Next Day"}
+        >
+          Next Day
+          <Icons.ChevronRight />
+        </button>
+      </div>
+    </div>
+  );
 
   if (!isHrOrAdmin) {
     const empDateObj = new Date(selectedDate);
     const empDateLabel = empDateObj.toLocaleString("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric" });
-    const navBtn: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "0.85rem", height: "42px", padding: "0 1rem", color: "#fff", cursor: "pointer" };
     return (
-      <>
-        <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h1 className="page-title">My Attendance</h1>
-          <GlobalHeaderControls />
-        </div>
-
-        {/* Daily summary + timeline for the selected date */}
-        <div className="card" style={{ padding: "1.5rem", marginBottom: "1rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.25rem", flexWrap: "wrap", gap: "1rem" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>Daily Summary</h3>
-              <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>{empDateLabel}</div>
-            </div>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: "0.6rem", flexWrap: "wrap" }}>
-              <input
-                type="date"
-                value={selectedDate}
-                min="2026-01-01"
-                max={todayIso}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="date-input-white"
-                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "8px", padding: "0 12px", color: "#fff", fontSize: "0.85rem", width: "150px", height: "42px" }}
-              />
-              <button type="button" onClick={() => changeDay(-1)} style={navBtn} title="Previous Day">Prev</button>
-              <button type="button" onClick={() => setSelectedDate(todayIso)} style={navBtn} title="Today">Today</button>
-              <button
-                type="button"
-                onClick={() => changeDay(1)}
-                disabled={selectedDate >= todayIso}
-                style={{ ...navBtn, opacity: selectedDate >= todayIso ? 0.3 : 1, cursor: selectedDate >= todayIso ? "not-allowed" : "pointer" }}
-                title="Next Day"
-              >
-                Next
-              </button>
-            </div>
+      <div className="eds">
+        <header className="eds-topbar">
+          <div>
+            <h1 className="eds-title">My Attendance</h1>
+            <p className="eds-subtitle">Employee view · Daily attendance</p>
           </div>
-          {renderDaySummary(myDetails, myDetailsLoading)}
-        </div>
+          <GlobalHeaderControls />
+        </header>
 
-        <div className="card">
-          <MonthlyAttendanceGrid month={month} year={year} setMonth={setMonth} setYear={setYear} records={records} loading={loading} />
-        </div>
+        <div className="eds-page">
+          {/* Daily summary + timeline for the selected date */}
+          <section className="eds-card">
+            <div className="eds-card-head eds-att-head">
+              <div className="eds-att-title">
+                <span className="eds-chip"><Icons.Calendar /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Daily Summary</h2>
+                  <p className="eds-card-sub">{empDateLabel}</p>
+                </div>
+              </div>
+              {dayNavigator}
+            </div>
+            {renderDaySummary(myDetails, myDetailsLoading)}
+          </section>
 
-        {user?.employee_id && (
-          <MonthlySummaryCard employeeId={user.employee_id} month={month} year={year} />
-        )}
-      </>
+          <section className="eds-card">
+            <div className="eds-card-body">
+              <MonthlyAttendanceGrid month={month} year={year} setMonth={setMonth} setYear={setYear} records={records} loading={loading} />
+            </div>
+          </section>
+
+          {user?.employee_id && (
+            <MonthlySummaryCard employeeId={user.employee_id} month={month} year={year} />
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -620,9 +736,29 @@ export default function Attendance() {
 
   const activeRoster = rosterTab === "staff" ? staffMembers : employees;
 
-  const employeeRows = [...activeRoster]
-    .sort((a, b) => (Number(a.employee_code) || 0) - (Number(b.employee_code) || 0))
-    .map(e => ({ info: e, rec: records.find(r => r.employee_id === e.id && r.date === selectedDate) }));
+  // Index the day's records by employee id, once.
+  //
+  // This used to be `records.find(...)` called from inside the .map() below —
+  // a linear scan of every record for every employee, so the cost was
+  // employees x records. A 200-person roster with a month of history is well
+  // over a million comparisons, and because none of this was memoised it ran
+  // again on EVERY render: each keystroke in the search box, every sort click.
+  // One pass to build the index, then O(1) lookups.
+  const recordsForSelectedDate = useMemo(() => {
+    const byEmployee = new Map<number, (typeof records)[number]>();
+    for (const r of records) {
+      if (r.date === selectedDate) byEmployee.set(r.employee_id, r);
+    }
+    return byEmployee;
+  }, [records, selectedDate]);
+
+  const employeeRows = useMemo(
+    () =>
+      [...activeRoster]
+        .sort((a, b) => (Number(a.employee_code) || 0) - (Number(b.employee_code) || 0))
+        .map(e => ({ info: e, rec: recordsForSelectedDate.get(e.id) })),
+    [activeRoster, recordsForSelectedDate],
+  );
 
   const dayCounts = employeeRows.reduce((acc, { rec }) => {
     const s = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
@@ -648,7 +784,7 @@ export default function Attendance() {
       member: (r) => `${r.info.first_name} ${r.info.last_name}`,
       sign_in_time: (r) => r.rec?.sign_in_time || "",
       sign_out_time: (r) => r.rec?.sign_out_time || "",
-      required: (r) => r.info.expected_working_hours || 9,
+      required: (r) => dailyTarget(r.info.expected_working_hours) ?? 0,
       working_hours: (r) => Number(r.rec?.total_work_hours ?? 0),
       break_time: (r) => Number(r.rec?.total_break_hours ?? 0),
       status: (r) => effectiveStatus(r),
@@ -657,21 +793,62 @@ export default function Attendance() {
       `${r.info.employee_code} ${r.info.first_name} ${r.info.last_name} ${effectiveStatus(r)}`,
   });
 
+  // Worked hours for a row: ticks live for anyone checked in today who has not
+  // checked out yet, otherwise the stored snapshot. Same rule the cell applied
+  // before, lifted out so the progress bar and the footer total read the same
+  // number the cell prints.
+  const workedHoursFor = (rec: AttendanceRow | undefined): number | null => {
+    const signedOut = !!(rec?.sign_out_time && rec.sign_out_time !== "00:00:00");
+    if (rec?.sign_in_time && selectedDate === todayIso && !signedOut) {
+      const [h, m, sec] = rec.sign_in_time.split(":").map(Number);
+      const start = new Date();
+      start.setHours(h, m, sec || 0, 0);
+      if (nowTick > start) {
+        const elapsed = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
+        return Math.max(0, elapsed - Number(rec?.total_break_hours || 0));
+      }
+    }
+    if (rec?.total_work_hours != null && rec.total_work_hours > 0) return rec.total_work_hours;
+    return null;
+  };
+
+  // Card footer aggregate — a straight sum of the Working hours column above it.
+  let loggedHours = 0;
+  let loggedMembers = 0;
+  displayedEmployeeRows.forEach(({ rec }) => {
+    const worked = workedHoursFor(rec);
+    if (worked != null && worked > 0) {
+      loggedHours += worked;
+      loggedMembers++;
+    }
+  });
+
+  // Same tones the status text used before: present emerald, absent rose,
+  // leave/part-day sky, week off and holiday neutral.
+  const statusTone = (s: string) =>
+    s === "PRESENT"
+      ? " eds-status--present"
+      : s === "ABSENT"
+      ? " eds-status--absent"
+      : ["ON_LEAVE", "PAID_LEAVE", "HALF_DAY", "SHORT"].includes(s)
+      ? " eds-status--info"
+      : "";
+
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Attendance</h1>
-          <div className="page-subtitle">{isAdmin ? "Admin view" : "HR view"} · Daily attendance</div>
+          <h1 className="eds-title">Attendance</h1>
+          <p className="eds-subtitle">{isAdmin ? "Admin view" : "HR view"} · Daily attendance</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
-      {success && <div className="alert alert-success">{success}</div>}
-      {error && !editCell && <div className="alert alert-error">{error}</div>}
+      <div className="eds-page">
+        {success && <div className="alert alert-success">{success}</div>}
+        {error && !editCell && <div className="alert alert-error">{error}</div>}
 
-      <div className="card" style={{ padding: "1.5rem" }}>
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>
+        <div className="eds-tabs">
           {([
             { key: "employees", label: "Employees", count: employees.length },
             { key: "staff", label: "Non-Employee Staff", count: staffMembers.length },
@@ -679,243 +856,231 @@ export default function Attendance() {
             <button
               key={tab.key}
               type="button"
+              className={`eds-tab${rosterTab === tab.key ? " is-active" : ""}`}
               onClick={() => { setRosterTab(tab.key); setAttendanceSearch(""); }}
-              style={{
-                background: rosterTab === tab.key ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.04)",
-                border: `1px solid ${rosterTab === tab.key ? "rgba(59,130,246,0.55)" : "rgba(255,255,255,0.1)"}`,
-                color: rosterTab === tab.key ? "#60a5fa" : "rgba(255,255,255,0.65)",
-                borderRadius: "8px",
-                padding: "0.5rem 1rem",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
             >
-              {tab.label} <span style={{ opacity: 0.7 }}>({tab.count})</span>
+              {tab.key === "staff" ? <Icons.UserPlus /> : <Icons.Users />}
+              <span>{tab.label}</span>
+              <span className="eds-tab-count">{tab.count}</span>
             </button>
           ))}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>
-                {rosterTab === "staff" ? "Non-Employee Staff Attendance" : "Daily Attendance"}
-              </h3>
-              <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>
-                {rosterTab === "staff"
-                  ? `${dayLabelFull} · not counted in employee reports`
-                  : dayLabelFull}
+        <section className="eds-card">
+          <div className="eds-card-head eds-att-head">
+            <div className="eds-att-title">
+              <span className="eds-chip"><Icons.Calendar /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">
+                  {rosterTab === "staff" ? "Non-Employee Staff Attendance" : "Daily Attendance"}
+                </h2>
+                <p className="eds-card-sub">
+                  {rosterTab === "staff"
+                    ? `${dayLabelFull} · not counted in employee reports`
+                    : dayLabelFull}
+                </p>
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: "0.75rem" }}>
-              <div style={{ background: "rgba(34, 197, 94, 0.15)", color: "#22c55e", padding: "0.4rem 1rem", borderRadius: "99px", fontSize: "0.85rem", fontWeight: 700, display: "flex", alignItems: "center" }}>
-                Present <span style={{ marginLeft: "0.5rem" }}>{dayCounts.present}</span>
-              </div>
-              <div style={{ background: "rgba(239, 68, 68, 0.15)", color: "#ef4444", padding: "0.4rem 1rem", borderRadius: "99px", fontSize: "0.85rem", fontWeight: 700, display: "flex", alignItems: "center" }}>
-                Absent <span style={{ marginLeft: "0.5rem" }}>{dayCounts.absent}</span>
-              </div>
+            <div className="eds-att-counts">
+              <span className="eds-count-pill eds-count-pill--present">
+                <i className="eds-live-dot"></i>
+                Present
+                <b>{dayCounts.present}</b>
+              </span>
+              <span className="eds-count-pill">
+                Absent
+                <b>{dayCounts.absent}</b>
+              </span>
             </div>
+
+            {dayNavigator}
           </div>
 
-          <div style={{ display: "flex", alignItems: "flex-end", gap: "0.75rem" }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
+          <div className="eds-tablebar">
+            <label className="eds-search">
+              <Icons.Search />
               <input
-                type="date"
-                value={selectedDate}
-                min="2026-01-01"
-                max={todayIso}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="date-input-white"
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  borderRadius: "8px",
-                  padding: "0 12px",
-                  color: "#fff",
-                  fontSize: "0.85rem",
-                  width: "150px",
-                  height: "42px",
-                  textAlign: "left",
-                }}
+                type="search"
+                value={attendanceSearch}
+                onChange={(e) => setAttendanceSearch(e.target.value)}
+                placeholder="Search by name, code, status..."
               />
-            </div>
-            <button type="button" className="btn btn-secondary" onClick={() => changeDay(-1)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", padding: "0", borderRadius: "8px", fontSize: "0.85rem", width: "130px", height: "42px", textAlign: "center" }} title="Go to Previous Day">Previous Day</button>
-            <button type="button" className="btn btn-secondary" onClick={() => setSelectedDate(todayIso)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", padding: "0", borderRadius: "8px", fontSize: "0.85rem", width: "100px", height: "42px", textAlign: "center" }} title="Go to Today">Today</button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => changeDay(1)}
-              disabled={selectedDate >= todayIso}
-              style={{
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                padding: "0",
-                borderRadius: "8px",
-                fontSize: "0.85rem",
-                width: "130px",
-                height: "42px",
-                textAlign: "center",
-                opacity: selectedDate >= todayIso ? 0.3 : 1,
-                cursor: selectedDate >= todayIso ? "not-allowed" : "pointer"
-              }}
-              title="Go to Next Day"
-            >
-              Next Day
-            </button>
+            </label>
+            {attendanceHasActive && (
+              <button
+                type="button"
+                className="eds-action"
+                onClick={clearAttendanceControls}
+                title="Clear search, sort and column filters"
+              >
+                Clear filters
+              </button>
+            )}
+            <span className="eds-showing">
+              Showing <b>{displayedEmployeeRows.length}</b> of <b>{employeeRows.length}</b>
+            </span>
           </div>
-        </div>
 
-        <TableToolbar
-          search={attendanceSearch}
-          onSearchChange={setAttendanceSearch}
-          placeholder="Search by name, code, status..."
-          showClear={attendanceHasActive}
-          onClear={clearAttendanceControls}
-          count={{ shown: displayedEmployeeRows.length, total: employeeRows.length }}
-        />
-        <div className="table-wrap table-wrap--dark">
-          <table className="table-modern table-modern--dark">
-            <thead>
-              <tr>
-                <SortableHeader label="Member" columnKey="member" sort={attendanceSort} onToggle={toggleAttendanceSort} style={{ paddingLeft: '1.5rem' }} />
-                <SortableHeader label="First In" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Last Out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Required Time" columnKey="required" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Working Hours" columnKey="working_hours" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Break Time" columnKey="break_time" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Status" columnKey="status" sort={attendanceSort} onToggle={toggleAttendanceSort} align="center" />
-                <SortableHeader label="Actions" columnKey="__actions" sort={attendanceSort} onToggle={toggleAttendanceSort} notSortable align="center" />
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
+          <div className="eds-table-wrap">
+            <table className="eds-table">
+              <colgroup>
+                <col style={{ width: "21.5%" }} />
+                <col style={{ width: "10.3%" }} />
+                <col style={{ width: "10.3%" }} />
+                <col style={{ width: "11.3%" }} />
+                <col style={{ width: "14.4%" }} />
+                <col style={{ width: "10.3%" }} />
+                <col style={{ width: "10.3%" }} />
+                <col style={{ width: "11.8%" }} />
+              </colgroup>
+              <thead>
                 <tr>
-                  <td colSpan={8}>
-                    <SectionLoader size="md" />
-                  </td>
+                  <SortTh label="Member" columnKey="member" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="First in" columnKey="sign_in_time" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Last out" columnKey="sign_out_time" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Required time" columnKey="required" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Working hours" columnKey="working_hours" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Break time" columnKey="break_time" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Status" columnKey="status" sort={attendanceSort} onToggle={toggleAttendanceSort} />
+                  <SortTh label="Actions" columnKey="__actions" sort={attendanceSort} onToggle={toggleAttendanceSort} notSortable />
                 </tr>
-              ) : displayedEmployeeRows.length === 0 ? (
-                <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '1.25rem', opacity: 0.65 }}>
-                    No attendance rows match your search.
-                  </td>
-                </tr>
-              ) : (
-                displayedEmployeeRows.map(({ info, rec }) => {
-                  const rawStatus = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={8}>
+                      <SectionLoader size="md" />
+                    </td>
+                  </tr>
+                ) : displayedEmployeeRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="eds-table-empty">
+                      No attendance rows match your search.
+                    </td>
+                  </tr>
+                ) : (
+                  displayedEmployeeRows.map(({ info, rec }) => {
+                    const rawStatus = rec?.status || (selectedIsWeekend ? "WEEKLY_OFF" : "ABSENT");
 
-                  // If DB says ABSENT but employee has actual working hours recorded,
-                  // derive the real status from total_work_hours vs expected
-                  let s = rawStatus;
-                  if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
-                    const expected = info.expected_working_hours || 9;
-                    if (rec.total_work_hours >= expected * 0.9) s = "PRESENT";
-                    else if (rec.total_work_hours >= expected * 0.5) s = "HALF_DAY";
-                    else s = "SHORT";
-                  }
+                    // If DB says ABSENT but employee has actual working hours recorded,
+                    // derive the real status from total_work_hours vs expected
+                    let s = rawStatus;
+                    const target = dailyTarget(info.expected_working_hours);
+                    if (rawStatus === "ABSENT" && rec?.total_work_hours && rec.total_work_hours > 0) {
+                      if (target === null) s = "PRESENT";
+                      else if (rec.total_work_hours >= target * 0.9) s = "PRESENT";
+                      else if (rec.total_work_hours >= target * 0.5) s = "HALF_DAY";
+                      else s = "SHORT";
+                    }
 
-                  return (
-                    <tr key={info.id} style={{ background: "transparent" }}>
-                      <td style={{ textAlign: 'left', paddingLeft: '1.5rem' }}>
-                        <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>{info.first_name} {info.last_name}</div>
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        {formatTime12h(rec?.sign_in_time)}
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        {(rec?.sign_out_time && rec.sign_out_time !== "00:00:00") ? formatTime12h(rec.sign_out_time) : "-"}
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        {s === "WEEKLY_OFF" || s === "HOLIDAY" ? "-" : `${info.expected_working_hours || 9} Hours`}
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        {(() => {
-                          const signedOut = rec?.sign_out_time && rec.sign_out_time !== "00:00:00";
-                          // LIVE: an employee who is checked in today and NOT
-                          // checked out / on a break (sign_out_time is null only
-                          // while actively working) → tick the working hours up
-                          // each second: time since first check-in minus recorded
-                          // break time. nowTick updates every second.
-                          if (rec?.sign_in_time && selectedDate === todayIso && !signedOut) {
-                            const [h, m, sec] = rec.sign_in_time.split(':').map(Number);
-                            const start = new Date();
-                            start.setHours(h, m, sec || 0, 0);
-                            if (nowTick > start) {
-                              const elapsed = (nowTick.getTime() - start.getTime()) / (1000 * 60 * 60);
-                              const live = Math.max(0, elapsed - Number(rec?.total_break_hours || 0));
-                              return (
-                                <span style={{ color: "rgb(34, 192, 93)", fontWeight: 600, fontSize: "0.95rem" }}>
-                                  {formatCompactDuration(live)}
-                                </span>
-                              );
-                            }
-                          }
-                          // Static snapshot: checked out, on a break, or past days.
-                          if (rec?.total_work_hours != null && rec.total_work_hours > 0) {
-                            return formatCompactDuration(rec.total_work_hours);
-                          }
-                          return "-";
-                        })()}
-                      </td>
-                      <td style={{ opacity: 0.9, textAlign: 'center' }}>
-                        {formatCompactDuration(rec?.total_break_hours)}
-                      </td>
-                      <td style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: 'center' }}>
-                        <span style={{
-                          color: s === "PRESENT" ? "rgb(34 192 93)" :
-                            s === "ABSENT" ? "#ef4444" :
-                              (s === "ON_LEAVE" || s === "PAID_LEAVE" || s === "HALF_DAY" || s === "SHORT") ? "#3b82f6" :
-                                "inherit",
-                          fontWeight: 500
-                        }}>
-                          {formatStatusLabel(s, (rec?.sign_out_time && rec.sign_out_time !== "00:00:00") ? rec?.total_work_hours : null)}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <div className="actions-stack" style={{ justifyContent: 'center', display: 'flex', gap: '0.35rem' }}>
-                          <button className="btn-icon-circle" onClick={() => setDetailsEmployee(info)} title="View Attendance Details">
-                            <Icons.Eye />
-                          </button>
-                          <button className="btn-icon-circle" onClick={() => { setAttendanceDialogEmployee(info); setDialogMonth(month); setDialogYear(year); }} title="View Monthly Attendance History">
-                            <Icons.Calendar />
-                          </button>
-                          {isHR && (
-                            <button className="btn-icon-circle" onClick={() => openEdit(info.id, selectedDate)} title="Edit Attendance for this Day">
-                              <Icons.Edit />
-                            </button>
+                    const signedOut = !!(rec?.sign_out_time && rec.sign_out_time !== "00:00:00");
+                    const worked = workedHoursFor(rec);
+
+                    return (
+                      <tr key={info.id}>
+                        <td>
+                          <div className="eds-member">
+                            <span className={`eds-avatar eds-avatar--lg ${AVATAR_TINTS[info.id % AVATAR_TINTS.length]}`}>
+                              {initialsOf(info.first_name, info.last_name)}
+                            </span>
+                            <span className="eds-member-name">{info.first_name} {info.last_name}</span>
+                          </div>
+                        </td>
+                        <td className="eds-cell-time">{orDash(formatTime12h(rec?.sign_in_time))}</td>
+                        <td className="eds-cell-time">
+                          {orDash(signedOut ? formatTime12h(rec?.sign_out_time) : "-")}
+                        </td>
+                        <td className="eds-cell-dim">
+                          {s === "WEEKLY_OFF" || s === "HOLIDAY"
+                            ? orDash("-")
+                            : target === null
+                              ? "No fixed hours"
+                              : `${target} Hours`}
+                        </td>
+                        <td>
+                          {worked == null ? (
+                            orDash("-")
+                          ) : (
+                            <div className="eds-hours">
+                              <span className="eds-hours-val">{formatCompactDuration(worked)}</span>
+                              {target === null ? null : (
+                                <div
+                                  className="eds-hours-track"
+                                  role="img"
+                                  aria-label={`${formatCompactDuration(worked)} worked of ${target} hours required`}
+                                >
+                                  <div
+                                    className="eds-hours-fill"
+                                    style={{ width: `${Math.min(100, Math.round((worked / target) * 100))}%` }}
+                                  ></div>
+                                </div>
+                              )}
+                            </div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                        </td>
+                        <td className="eds-cell-dim">
+                          {orDash(formatCompactDuration(rec?.total_break_hours))}
+                        </td>
+                        <td>
+                          <span className={`eds-status${statusTone(s)}`}>
+                            <i></i>
+                            {formatStatusLabel(s, signedOut ? rec?.total_work_hours : null)}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="eds-rowactions">
+                            <button
+                              type="button"
+                              className="eds-iconbtn eds-iconbtn--view"
+                              onClick={() => setDetailsEmployee(info)}
+                              title="View Attendance Details"
+                            >
+                              <Icons.Eye />
+                            </button>
+                            <button
+                              type="button"
+                              className="eds-iconbtn eds-iconbtn--month"
+                              onClick={() => { setAttendanceDialogEmployee(info); setDialogMonth(month); setDialogYear(year); }}
+                              title="View Monthly Attendance History"
+                            >
+                              <Icons.CalendarPlain />
+                            </button>
+                            {isHR && (
+                              <button
+                                type="button"
+                                className="eds-iconbtn eds-iconbtn--edit"
+                                onClick={() => openEdit(info.id, selectedDate)}
+                                title="Edit Attendance for this Day"
+                              >
+                                <Icons.Edit />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
 
-      <style>{`
-        .btn-icon-circle {
-          background: rgba(255,255,255,0.06);
-          border: 1px solid rgba(255,255,255,0.1);
-          border-radius: 8px;
-          width: 32px;
-          height: 32px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          color: #fff;
-          transition: all 0.2s;
-        }
-        .btn-icon-circle:hover {
-          background: rgba(255,255,255,0.12);
-          border-color: rgba(255,255,255,0.2);
-        }
-      `}</style>
+          <div className="eds-card-foot eds-att-foot">
+            <span>
+              {displayedEmployeeRows.length} members ·{" "}
+              <b className="is-emerald">{loggedHours > 0 ? formatCompactDuration(loggedHours) : "0m"}</b> logged today · avg{" "}
+              <b className="is-text">{loggedMembers ? formatCompactDuration(loggedHours / loggedMembers) : "—"}</b>
+            </span>
+            <span>
+              Working hours tick live · last synced{" "}
+              {lastSynced
+                ? lastSynced.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+                : "—"}
+            </span>
+          </div>
+        </section>
+      </div>
 
       {/* Edit Modal */}
       {
@@ -985,7 +1150,7 @@ export default function Attendance() {
                       ]}
                     />
                   </div>
-                  <div style={{ gridColumn: "1 / -1", fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '-0.15rem' }}>
+                  <div style={{ gridColumn: "1 / -1" }} className="eds-note">
                     Break is deducted from working hours — enter in minutes (e.g. 90m or 90), hours (e.g. 1.5h or 1.5), or HH:MM (e.g. 1:30). Leave blank to use the camera recorded break.
                   </div>
                   {editCell.sign_in_time && editCell.sign_out_time && (() => {
@@ -997,7 +1162,7 @@ export default function Attendance() {
                     const brkM = Math.round(brk % 60);
                     const brkStr = brkH > 0 ? `${brkH}h ${brkM}m` : `${brkM}m`;
                     return hoursWorked > 0 ? (
-                      <div style={{ gridColumn: "1 / -1", fontSize: '0.78rem', color: '#60a5fa', fontWeight: 600 }}>
+                      <div style={{ gridColumn: "1 / -1", fontSize: "12px", color: "#60a5fa", fontWeight: 600 }}>
                         ⏱ {h}h {m}m worked{brk > 0 ? ` (${brkStr} break deducted)` : ""} · status auto-set
                       </div>
                     ) : null;
@@ -1007,11 +1172,11 @@ export default function Attendance() {
                   <button
                     type="button"
                     className="btn"
-                    style={{ background: "rgba(239, 68, 68, 0.15)", color: "#ef4444" }}
+                    style={{ background: "rgba(251, 113, 133, 0.12)", color: "#fb7185" }}
                     onClick={() => {
                       setEditCell({ ...editCell, status: "", sign_in_time: "", sign_out_time: "", break_minutes: "" });
-                      // Provide a slight delay so state updates before submit is simulated, 
-                      // or just call adminSet directly. It's safer to just set state, and let user click save, 
+                      // Provide a slight delay so state updates before submit is simulated,
+                      // or just call adminSet directly. It's safer to just set state, and let user click save,
                       // or we can invoke handleSaveCell programmatically by simulating the form submit.
                     }}
                     title="Clear Attendance Data"
@@ -1035,9 +1200,8 @@ export default function Attendance() {
           <div className="modal-backdrop" onClick={() => setDetailsEmployee(null)} style={{ zIndex: 1100 }}>
             <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 560, width: "95%" }}>
               <h3>Attendance Details</h3>
-              <div style={{ marginBottom: "1rem", opacity: 0.85 }}>
-                Employee: <strong>{detailsEmployee.first_name} {detailsEmployee.last_name}</strong>
-                <div className="text-muted" style={{ fontSize: "0.85rem", marginTop: "4px" }}>{dayLabelFull}</div>
+              <div className="eds-note" style={{ marginBottom: "0.75rem" }}>
+                Employee: <b>{detailsEmployee.first_name} {detailsEmployee.last_name}</b> · {dayLabelFull}
               </div>
               {renderDaySummary(detailsData, detailsLoading)}
               <div className="modal-actions" style={{ marginTop: "1.25rem", justifyContent: "flex-end" }}>
@@ -1054,12 +1218,12 @@ export default function Attendance() {
             <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 1200, width: "95%", maxHeight: "90vh", overflowY: "auto", position: "relative" }}>
               <button
                 type="button"
-                className="btn-icon-circle"
+                className="eds-iconbtn"
                 onClick={() => setAttendanceDialogEmployee(null)}
                 style={{ position: "absolute", top: "1rem", right: "1rem", zIndex: 10 }}
                 title="Close Monthly View"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <Icons.Close />
               </button>
               <h3>Monthly View - {attendanceDialogEmployee.first_name} {attendanceDialogEmployee.last_name}</h3>
               <MonthlyAttendanceGrid
@@ -1075,6 +1239,6 @@ export default function Attendance() {
             </div>
           </div>
         )}
-    </>
+    </div>
   );
 }

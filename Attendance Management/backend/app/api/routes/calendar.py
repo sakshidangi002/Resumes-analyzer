@@ -268,7 +268,7 @@ def list_reminders(
     Reminders for HR/Admin: birthdays, work anniversaries, and custom events.
     Batch-optimized to fetch all data for the range in a few queries instead of a loop.
     """
-    from sqlalchemy import extract, func
+    from sqlalchemy import func
     
     if for_date is None:
         for_date = date.today() + timedelta(days=1)

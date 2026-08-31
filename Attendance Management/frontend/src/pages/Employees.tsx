@@ -6,7 +6,8 @@ import ConfirmModal from "../components/ConfirmModal";
 import { SectionLoader } from "../components/LoadingState";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
 import CustomSelect from "../components/CustomSelect";
-import { useTableControls, SortableHeader, TableToolbar } from "../components/dataTable";
+import { useTableControls } from "../components/dataTable";
+import type { SortState, SortDirection } from "../components/dataTable";
 
 interface Emp {
   id: number;
@@ -65,22 +66,84 @@ const maxDobDate = (() => {
 })();
 
 // Premium SVG Icons for Actions
+/* 24-box strokes, round caps, currentColor. Size comes from the control that
+   holds them (.eds-iconbtn 15px, .eds-search 15px, .eds-sort 9px). */
 const Icons = {
   View: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"></path>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"></path>
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   ),
   Delete: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-      <line x1="10" y1="11" x2="10" y2="17"></line>
-      <line x1="14" y1="11" x2="14" y2="17"></line>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+      <path d="M10 11v6M14 11v6"></path>
+    </svg>
+  ),
+  Search: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7.5"></circle>
+      <line x1="21" y1="21" x2="16.7" y2="16.7"></line>
+    </svg>
+  ),
+  Person: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 21v-1.5A4.5 4.5 0 0 0 14.5 15h-5A4.5 4.5 0 0 0 5 19.5V21"></path>
+      <circle cx="12" cy="8" r="4"></circle>
+    </svg>
+  ),
+  Sort: ({ direction }: { direction: SortDirection | null }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      {direction !== "asc" && <polyline points="7 15 12 20 17 15"></polyline>}
+      {direction !== "desc" && <polyline points="7 9 12 4 17 9"></polyline>}
     </svg>
   ),
 };
+
+/** Column header. Sorting itself stays in useTableControls; this only renders
+ *  the design's affordance. */
+function SortTh({
+  label,
+  columnKey,
+  sort,
+  onToggle,
+  notSortable,
+  className,
+}: {
+  label: string;
+  columnKey: string;
+  sort: SortState;
+  onToggle: (key: string) => void;
+  notSortable?: boolean;
+  className?: string;
+}) {
+  if (notSortable) return <th className={`is-actions ${className || ""}`}>{label}</th>;
+  const active = sort.key === columnKey;
+  return (
+    <th className={className}>
+      <button
+        type="button"
+        className={`eds-sort${active ? " is-active" : ""}`}
+        onClick={() => onToggle(columnKey)}
+        title={`Sort by ${label}`}
+      >
+        {label}
+        <Icons.Sort direction={active ? sort.direction : null} />
+      </button>
+    </th>
+  );
+}
+
+/** Identity tint for a member avatar, stable across sorts and searches. */
+const AVATAR_TINTS = ["eds-avatar--blue", "eds-avatar--green", "eds-avatar--purple", "eds-avatar--rose", ""];
+
+function initialsOf(first: string, last: string): string {
+  const a = (first || "").trim()[0] || "";
+  const b = (last || "").trim()[0] || "";
+  return (a + b).toUpperCase() || "?";
+}
 
 export default function Employees() {
   const { hasRole } = useAuth();
@@ -342,158 +405,180 @@ export default function Employees() {
   };
 
 
+  // Footer aggregate over the rows actually on this page.
+  const pageActive = pagedList.filter((e) => e.employment_status === "Active").length;
+  const pageLeft = pagedList.length - pageActive;
+
   return (
-    <>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title">Employees</h1>
-          <div className="page-subtitle">View and manage employee records</div>
+          <h1 className="eds-title">Employees</h1>
+          <p className="eds-subtitle">View and manage employee records</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
+      <div className="eds-page">
       {createdLogin && (
-        <div className="card">
-          <p><strong>Login created for employee.</strong> Share these credentials securely with the employee:</p>
-          <p className="text-muted">
-            Username: <strong>{createdLogin.username}</strong> &nbsp;|&nbsp;
-            Password: <strong>{createdLogin.password}</strong>
-          </p>
+        <div className="eds-card">
+          <div className="eds-card-body">
+            <p className="eds-note"><b>Login created for employee.</b> Share these credentials securely with the employee:</p>
+            <p className="eds-note">
+              Username: <b>{createdLogin.username}</b> &nbsp;|&nbsp;
+              Password: <b>{createdLogin.password}</b>
+            </p>
+          </div>
         </div>
       )}
       {success && <div className="alert alert-success">{success}</div>}
       {error && <div className="alert alert-error">{error}</div>}
-      <div className="card">
-        <TableToolbar
-          search={search}
-          onSearchChange={setSearch}
-          placeholder="Search employees (name, code, email, department)..."
-          showClear={hasActiveControls || !!filterDept || !!filterStatus}
-          onClear={() => {
-            clearAll();
-            setFilterDept("");
-            setFilterStatus("");
-          }}
-          count={{ shown: displayedList.length, total: list.length }}
-          leftControls={
-            <>
-              <div className="form-group" style={{ marginBottom: 0, minWidth: "180px" }}>
-                <CustomSelect
-                  value={filterDept}
-                  onChange={setFilterDept}
-                  placeholder="All Departments"
-                  options={[
-                    { value: "", label: "All Departments" },
-                    ...departments.map((d) => ({ value: String(d.id), label: d.name }))
-                  ]}
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: 0, minWidth: "160px" }}>
-                <CustomSelect
-                  value={filterStatus}
-                  onChange={setFilterStatus}
-                  placeholder="All Status"
-                  options={[
-                    { value: "", label: "All Status" },
-                    ...EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: s }))
-                  ]}
-                />
-              </div>
-            </>
-          }
-          rightControls={
-            canEdit ? (
-              <div style={{ display: "flex", gap: "0.6rem" }}>
-                <button type="button" className="btn btn-secondary" onClick={openStaff} title="Add non-employee staff (housekeeping, security, etc.)" style={{ height: "42px", minWidth: "120px" }}>
-                  + Add Staff
-                </button>
-                <button type="button" className="btn btn-primary" onClick={openAdd} title="Add New Employee" style={{ height: "42px", minWidth: "140px" }}>
-                  Add Employee
-                </button>
-              </div>
-            ) : null
-          }
-        />
+      <section className="eds-card">
+        <div className="eds-toolbar">
+          <CustomSelect
+            className="eds-cselect"
+            value={filterDept}
+            onChange={setFilterDept}
+            placeholder="All Departments"
+            options={[
+              { value: "", label: "All Departments" },
+              ...departments.map((d) => ({ value: String(d.id), label: d.name }))
+            ]}
+          />
+          <CustomSelect
+            className="eds-cselect eds-cselect--status"
+            value={filterStatus}
+            onChange={setFilterStatus}
+            placeholder="All Status"
+            options={[
+              { value: "", label: "All Status" },
+              ...EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: s }))
+            ]}
+          />
+          <label className="eds-search eds-search--wide">
+            <Icons.Search />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search employees (name, code, email, department)"
+            />
+          </label>
+          <span className="eds-showing">
+            <b>{displayedList.length}</b> of <b>{list.length}</b>
+          </span>
+          {(hasActiveControls || !!filterDept || !!filterStatus) && (
+            <button
+              type="button"
+              className="eds-action"
+              onClick={() => { clearAll(); setFilterDept(""); setFilterStatus(""); }}
+              title="Clear search, sort and column filters"
+            >
+              Clear filters
+            </button>
+          )}
+          {canEdit && (
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, flexShrink: 0 }}>
+              <button type="button" className="eds-action" onClick={openStaff} title="Add non-employee staff (housekeeping, security, etc.)">
+                + Add Staff
+              </button>
+              <button type="button" className="eds-action eds-action--info" onClick={openAdd} title="Add New Employee">
+                Add Employee
+              </button>
+            </div>
+          )}
+        </div>
         {loading ? (
           <div style={{ padding: "3rem 0" }}><SectionLoader size="md" /></div>
         ) : list.length === 0 ? (
-          <p className="text-muted">No employee records found.</p>
+          <div className="eds-well">
+            <div className="eds-empty--dashed">
+              <span className="eds-chip"><Icons.Person /></span>
+              <span className="eds-empty-title">No employee records found.</span>
+            </div>
+          </div>
         ) : (
-          <div className="table-responsive">
-            <div className="table-wrap table-wrap--dark">
-              <table className="table-modern table-modern--dark" style={{ tableLayout: 'fixed', width: '100%' }}>
+          <>
+            <div className="eds-table-wrap">
+              <table className="eds-table eds-table--employees">
                 <colgroup>
-                  <col style={{ width: '80px' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '110px' }} />
-                  <col style={{ width: '20%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '130px' }} />
-                  <col style={{ width: '110px' }} />
-                  {canEdit && <col style={{ width: '120px' }} />}
+                  <col style={{ width: '4.7%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '9.3%' }} />
+                  <col style={{ width: '19.6%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '10.3%' }} />
+                  <col style={{ width: '10.3%' }} />
+                  <col style={{ width: '9.3%' }} />
+                  {canEdit && <col style={{ width: '8.4%' }} />}
                 </colgroup>
                 <thead>
                   <tr>
-                    <SortableHeader className="hide-md" label="ID" columnKey="employee_code" sort={sort} onToggle={toggleSort} style={{ paddingLeft: '1.5rem' }} />
-                    <SortableHeader label="Name" columnKey="name" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader label="Staff Type" columnKey="staff_type" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader label="Email" columnKey="official_email" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader className="hide-sm" label="Department" columnKey="department" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader className="hide-md" label="DOJ" columnKey="date_of_joining" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader className="hide-md" label="DOL" columnKey="date_of_leaving" sort={sort} onToggle={toggleSort} />
-                    <SortableHeader className="hide-sm" label="Status" columnKey="employment_status" sort={sort} onToggle={toggleSort} />
+                    <SortTh className="hide-md" label="ID" columnKey="employee_code" sort={sort} onToggle={toggleSort} />
+                    <SortTh label="Name" columnKey="name" sort={sort} onToggle={toggleSort} />
+                    <SortTh label="Staff type" columnKey="staff_type" sort={sort} onToggle={toggleSort} />
+                    <SortTh label="Email" columnKey="official_email" sort={sort} onToggle={toggleSort} />
+                    <SortTh className="hide-sm" label="Department" columnKey="department" sort={sort} onToggle={toggleSort} />
+                    <SortTh className="hide-md" label="DOJ" columnKey="date_of_joining" sort={sort} onToggle={toggleSort} />
+                    <SortTh className="hide-md" label="DOL" columnKey="date_of_leaving" sort={sort} onToggle={toggleSort} />
+                    <SortTh className="hide-sm" label="Status" columnKey="employment_status" sort={sort} onToggle={toggleSort} />
                     {canEdit && (
-                      <SortableHeader label="Actions" columnKey="__actions" sort={sort} onToggle={toggleSort} align="center" notSortable />
+                      <SortTh label="Actions" columnKey="__actions" sort={sort} onToggle={toggleSort} notSortable />
                     )}
                   </tr>
                 </thead>
                 <tbody>
                   {displayedList.length === 0 ? (
                     <tr>
-                      <td colSpan={canEdit ? 9 : 8} style={{ textAlign: 'center', padding: '1.5rem', opacity: 0.65 }}>
+                      <td colSpan={canEdit ? 9 : 8} className="eds-table-empty">
                         No employees match your search / filters.
                       </td>
                     </tr>
                   ) : null}
                   {pagedList.map((e) => {
                     const hasLeft = !!e.date_of_leaving;
-                    const rowStyle: React.CSSProperties = hasLeft
-                      ? {
-                          background: 'rgba(239, 68, 68, 0.08)',
-                          color: 'rgba(248, 113, 113, 0.95)',
-                        }
-                      : {};
                     const dolText = e.date_of_leaving
                       ? new Date(e.date_of_leaving).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
                       : '-';
                     return (
-                    <tr key={e.id} style={rowStyle} title={hasLeft ? `Employee left on ${dolText}` : undefined}>
-                      <td className="hide-md" style={{ textAlign: 'left', paddingLeft: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.employee_code}</td>
-                      <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.first_name} {e.last_name}</td>
-                      <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.staff_type || "Employee"}</td>
-                      <td style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.official_email}</td>
-                      <td className="hide-sm" style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
-                      <td className="hide-md" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{e.date_of_joining ? new Date(e.date_of_joining).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' }) : "-"}</td>
-                      <td className="hide-md" style={{ textAlign: 'left', whiteSpace: 'nowrap', fontWeight: hasLeft ? 600 : 400 }}>{dolText}</td>
-                      <td className="hide-sm" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{e.employment_status}</td>
+                    <tr key={e.id} title={hasLeft ? `Employee left on ${dolText}` : undefined}>
+                      <td className="hide-md eds-cell-dim">{e.employee_code}</td>
+                      <td>
+                        <div className="eds-member">
+                          <span className={`eds-avatar eds-avatar--md ${AVATAR_TINTS[e.id % AVATAR_TINTS.length]}`}>
+                            {initialsOf(e.first_name, e.last_name)}
+                          </span>
+                          <span className="eds-member-name">{e.first_name} {e.last_name}</span>
+                        </div>
+                      </td>
+                      <td className="eds-cell-dim">{e.staff_type || "Employee"}</td>
+                      <td className="eds-cell-dim eds-cell-clip">{e.official_email}</td>
+                      <td className="hide-sm eds-cell-strong eds-cell-clip">{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
+                      <td className="hide-md eds-cell-dim">{e.date_of_joining ? new Date(e.date_of_joining).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' }) : "-"}</td>
+                      <td className={`hide-md ${hasLeft ? "eds-cell-strong" : "eds-cell-dim"}`} style={hasLeft ? { fontWeight: 600 } : undefined}>
+                        {hasLeft ? dolText : <span className="eds-dash">–</span>}
+                      </td>
+                      <td className="hide-sm">
+                        <span className={`eds-status${e.employment_status === "Active" ? " eds-status--present" : " eds-status--absent"}`}>
+                          <i></i>
+                          {e.employment_status}
+                        </span>
+                      </td>
                       {canEdit && (
-                        <td style={{ textAlign: 'center' }}>
-                          <div className="actions-stack" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+                        <td className="is-actions">
+                          <div className="eds-rowactions">
                             <button
                               type="button"
-                              className="btn btn-secondary btn-icon btn-sm"
+                              className="eds-iconbtn eds-iconbtn--view"
                               onClick={() => navigate(`/employees/${e.id}`)}
                               title="View Employee Profile"
-                              style={{ padding: '0.4rem 0.6rem' }}
                             >
                               <Icons.View />
                             </button>
                             <button
                               type="button"
-                              className="btn btn-danger btn-icon btn-sm"
+                              className="eds-iconbtn eds-iconbtn--del"
                               onClick={() => setConfirmDelete(e)}
                               title="Delete Employee Permanently"
-                              style={{ padding: '0.4rem 0.6rem' }}
                             >
                               <Icons.Delete />
                             </button>
@@ -507,57 +592,39 @@ export default function Employees() {
               </table>
             </div>
             {displayedList.length > 0 && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: '0.75rem',
-                  marginTop: '1rem',
-                  padding: '0.5rem 0.25rem',
-                }}
-              >
-                <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>
-                  Showing <strong>{pageStart + 1}</strong>–<strong>{Math.min(pageEnd, displayedList.length)}</strong> of <strong>{displayedList.length}</strong>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <label style={{ fontSize: '0.85rem', opacity: 0.7 }}>Rows:</label>
-                  <select
-                    value={pageSize}
-                    onChange={(e) => setPageSize(Number(e.target.value))}
-                    style={{
-                      background: 'rgba(255,255,255,0.05)',
-                      color: '#fff',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: '6px',
-                      padding: '4px 8px',
-                      fontSize: '0.85rem',
-                    }}
-                  >
-                    {[10, 25, 50, 100].map((n) => (
-                      <option key={n} value={n} style={{ background: '#153273' }}>{n}</option>
-                    ))}
-                  </select>
+              <div className="eds-card-foot eds-att-foot">
+                <span>
+                  <b className="is-emerald">{pageActive}</b> active · <b className="is-text">{pageLeft}</b> not active on this page
+                </span>
+                <span className="eds-pager">
+                  <span className="eds-showing" style={{ margin: 0 }}>
+                    Showing <b>{pageStart + 1}</b>–<b>{Math.min(pageEnd, displayedList.length)}</b> of <b>{displayedList.length}</b>
+                  </span>
+                  <label className="eds-pager-rows">
+                    Rows
+                    <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                      {[10, 25, 50, 100].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  </label>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className="eds-action"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page === 1}
-                    style={{ padding: '0.3rem 0.75rem' }}
                   >
                     Prev
                   </button>
                   {pageNumbers.map((n, idx) =>
                     n === '...' ? (
-                      <span key={`e-${idx}`} style={{ padding: '0 4px', opacity: 0.5 }}>…</span>
+                      <span key={`e-${idx}`} className="eds-dash">…</span>
                     ) : (
                       <button
                         key={n}
                         type="button"
-                        className={`btn btn-sm ${n === page ? 'btn-primary' : 'btn-secondary'}`}
+                        className={`eds-action${n === page ? " eds-action--info" : ""}`}
                         onClick={() => setPage(n)}
-                        style={{ padding: '0.3rem 0.7rem', minWidth: '34px' }}
                       >
                         {n}
                       </button>
@@ -565,18 +632,18 @@ export default function Employees() {
                   )}
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className="eds-action"
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={page === totalPages}
-                    style={{ padding: '0.3rem 0.75rem' }}
                   >
                     Next
                   </button>
-                </div>
+                </span>
               </div>
             )}
-          </div>
+          </>
         )}
+      </section>
       </div>
 
       {modal === "staff" && (
@@ -819,6 +886,6 @@ export default function Employees() {
         confirmText="Yes, Delete Employee"
       />
 
-    </>
+    </div>
   );
 }

@@ -9,6 +9,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+import { dailyTarget } from "../utils/workingHours";
 interface ReminderBirthday {
   employee_id: number;
   employee_code: string;
@@ -76,32 +77,43 @@ interface HolidayRow {
   is_optional: boolean;
 }
 
+/* 24-box strokes at 1.8, round caps, currentColor. Rendered size comes from
+   the chip that holds them (.eds-chip 16px, .eds-tile-chip 17px). */
 const Icons = {
   Clock: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15.5 14"></polyline></svg>
   ),
   Calendar: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><line x1="3" y1="10" x2="21" y2="10"></line><line x1="8" y1="2.5" x2="8" y2="6"></line><line x1="16" y1="2.5" x2="16" y2="6"></line></svg>
   ),
   Users: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20"></path><circle cx="10.5" cy="8" r="3.5"></circle><path d="M20 20v-1.5a3.5 3.5 0 0 0-2.6-3.4"></path></svg>
+  ),
+  Person: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 20v-1.5A4.5 4.5 0 0 0 14.5 14h-5A4.5 4.5 0 0 0 5 18.5V20"></path><circle cx="12" cy="7.5" r="4"></circle></svg>
   ),
   Operations: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
   ),
   Birthday: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20.5v-4a2.5 2.5 0 0 1 2.5-2.5h11a2.5 2.5 0 0 1 2.5 2.5v4z"></path><line x1="3" y1="20.5" x2="21" y2="20.5"></line><line x1="12" y1="10.5" x2="12" y2="14"></line><path d="M12 7.5c1 -1.4 0 -2.5 0 -2.5s-1 1.1 0 2.5z"></path></svg>
   ),
   Team: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><polyline points="17 11 19 13 23 9"></polyline></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 20v-1.5A3.5 3.5 0 0 0 11.5 15h-5A3.5 3.5 0 0 0 3 18.5V20"></path><circle cx="9" cy="8" r="3.5"></circle><polyline points="16 11.5 18 13.5 22 9.5"></polyline></svg>
   ),
-  ThreeDots: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+  Target: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="0.6"></circle></svg>
+  ),
+  Payroll: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline><line x1="15" y1="13" x2="9" y2="13"></line><line x1="15" y1="17" x2="9" y2="17"></line></svg>
   ),
   Star: () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
   )
 };
+
+/** Both ring paths trace the same 36-box circle. */
+const RING_PATH = "M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831";
 
 export default function Dashboard() {
   const { user, hasRole } = useAuth();
@@ -135,7 +147,11 @@ export default function Dashboard() {
     lateToday: 0
   });
   const todayISO = useMemo(() => formatLocalDate(new Date()), []);
-  const expectedHoursPerDay = Number(empDetails?.expected_working_hours || 9);
+  // null when this person has no fixed daily target -- see utils/workingHours.
+  // Kept as null rather than 0 so the weekly meter below can be hidden instead
+  // of dividing by it and rendering a full bar against a "0 Hours" target.
+  const dailyHoursTarget = dailyTarget(empDetails?.expected_working_hours);
+  const expectedHoursPerDay = dailyHoursTarget ?? 0;
 
   const tomorrowISO = useMemo(() => {
     const d = new Date();
@@ -403,15 +419,14 @@ export default function Dashboard() {
 
 
   return (
-    <div className="dash-container">
-      {/* Header Section */}
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="eds">
+      <header className="eds-topbar">
         <div>
-          <h1 className="page-title" style={{ textTransform: 'capitalize' }}>Welcome, {user?.username?.split(' ')[0] || "User"} 👋</h1>
-          <div className="page-subtitle">{user?.designation || "Admin"}</div>
+          <h1 className="eds-title">Welcome, {user?.username?.split(' ')[0] || "User"} 👋</h1>
+          <p className="eds-subtitle">{user?.designation || "Admin"}</p>
         </div>
         <GlobalHeaderControls />
-      </div>
+      </header>
 
       {/* <section className="card" style={{ padding: "1rem 1.1rem", marginBottom: "1rem", background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(51,65,85,0.94))", color: "#fff", border: "none" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -424,527 +439,486 @@ export default function Dashboard() {
         </div>
       </section> */}
 
-      <div className="dash-grid">
-        {/* Row 1 for Admin: 3 Separate Cards | Row 1 for Others: Clock + Overviews */}
-        <div className="dash-card dash-card--clock">
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Clock />
-              <span>Current Time</span>
+      <div className="eds-grid">
+        {/* Clock — compact card, one live figure */}
+        <section className="eds-card eds-c1-3">
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Clock /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Current Time</h2>
+              <p className="eds-card-sub">{todayFormatted.dayName}</p>
+            </div>
+            <span className="eds-live"><i className="eds-live-dot"></i>Live</span>
+          </div>
+          <div className="eds-card-body">
+            <p className="eds-eyebrow">{todayFormatted.fullDate}</p>
+            <div className="eds-clock">
+              <span className="eds-clock-time">{todayFormatted.timeStr.split(' ')[0]}</span>
+              <span className="eds-clock-ampm">{todayFormatted.timeStr.split(' ')[1]}</span>
             </div>
           </div>
-          <div className="clock-body">
-            <p className="clock-date">{todayFormatted.fullDate}</p>
-            <div className="clock-time">
-              {todayFormatted.timeStr.split(' ')[0]}
-              <span className="clock-ampm">{todayFormatted.timeStr.split(' ')[1]}</span>
-            </div>
+          <div className="eds-card-foot">
+            <span className="eds-pill"><Icons.Star />Have a productive day!</span>
           </div>
-          <div className="clock-footer">
-            <div className="quote-pill">
-              <Icons.Star />
-              <span>Have a productive day!</span>
-            </div>
-          </div>
-        </div>
+        </section>
 
         {hasRole("Admin") ? (
           <>
-            <div className="dash-card">
-              <div className="card-top">
-                <div className="card-title-group">
-                  <Icons.Operations />
-                  <span>Workforce Attendance</span>
+            <section className="eds-card eds-c4-5">
+              <div className="eds-card-head">
+                <span className="eds-chip"><Icons.Operations /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Workforce Attendance</h2>
                 </div>
               </div>
-              <div className="overview-stack">
-                <div className="info-box info-box--green">
-                  <div className="box-icon"><Icons.Operations /></div>
-                  <div className="box-content">
-                    <span className="box-val">{teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%</span>
-                    <span className="box-lab">Attendance Rate</span>
-                    <span className="box-sub">{teamStats.available} Employees Present</span>
+              <div className="eds-card-body">
+                <div className="eds-tiles">
+                  <div className="eds-tile eds-tile--emerald">
+                    <span className="eds-tile-chip"><Icons.Operations /></span>
+                    <div className="eds-tile-figures">
+                      <span className="eds-figure">{teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%</span>
+                      <span className="eds-label">Attendance Rate</span>
+                      <span className="eds-sub">{teamStats.available} Employees Present</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="dash-card">
-              <div className="card-top">
-                <div className="card-title-group">
-                  <Icons.Clock />
-                  <span>Absence & Punctuality</span>
+            <section className="eds-card eds-c9-4">
+              <div className="eds-card-head">
+                <span className="eds-chip"><Icons.Clock /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Absence &amp; Punctuality</h2>
                 </div>
               </div>
-              <div className="overview-stack">
-                <div className="info-box info-box--red" style={{ marginBottom: '0.75rem' }}>
-                  <div className="box-icon" style={{ color: "#ffa500" }}><Icons.Clock /></div>
-                  <div className="box-content">
-                    <span className="box-val" style={{ color: "rgb(251, 146, 60)" }}>{String(teamStats.lateToday).padStart(2, '0')}</span>
-                    <span className="box-lab">Late Arrivals</span>
+              <div className="eds-card-body">
+                <div className="eds-tiles">
+                  <div className="eds-tile eds-tile--amber">
+                    <span className="eds-tile-chip"><Icons.Clock /></span>
+                    <div className="eds-tile-figures">
+                      <span className="eds-figure">{String(teamStats.lateToday).padStart(2, '0')}</span>
+                      <span className="eds-label">Late Arrivals</span>
+                    </div>
                   </div>
-                </div>
-                <div className="info-box info-box--blue">
-                  <div className="box-icon" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                  </div>
-                  <div className="box-content">
-                    <span className="box-val" style={{ color: '#60a5fa' }}>{String(teamStats.onLeave).padStart(2, '0')}</span>
-                    <span className="box-lab">Employees On Leave</span>
+                  <div className="eds-tile eds-tile--sky">
+                    <span className="eds-tile-chip"><Icons.Person /></span>
+                    <div className="eds-tile-figures">
+                      <span className="eds-figure">{String(teamStats.onLeave).padStart(2, '0')}</span>
+                      <span className="eds-label">Employees On Leave</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
           </>
         ) : (
           <>
-            <div className="dash-card dash-card--monthly">
-              <div className="card-top">
-                <div className="card-title-group">
-                  <Icons.Calendar />
-                  <span>Monthly Overview</span>
+            <section className="eds-card eds-c4-9">
+              <div className="eds-card-head">
+                <span className="eds-chip"><Icons.Calendar /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Monthly Overview</h2>
                 </div>
               </div>
-              <div className="monthly-body">
-                <div className="progress-circle-wrap">
-                  <svg viewBox="0 0 36 36" className="progress-circle">
-                    <path className="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                    <path className="circle-fill" strokeDasharray={`${attendanceStats.percentage}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                  </svg>
-                  <div className="progress-text">{attendanceStats.percentage}%</div>
-                </div>
-                <div className="stats-group">
-                  <div className="stat-item">
-                    <span className="stat-val">{String(Math.round(attendanceStats.present)).padStart(2, '0')} Days</span>
-                    <span className="stat-lab">Present</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-val">{String(Math.round(attendanceStats.leave)).padStart(2, '0')} Days</span>
-                    <span className="stat-lab">Leave</span>
-                  </div>
-                </div>
-                <div className="divider-v"></div>
-                <div className="stats-group">
-                  <div className="stat-item">
-                    <span className="stat-val stat-val--blue">{attendanceStats.totalHours}</span>
-                    <span className="stat-lab">Worked Hours</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-val stat-val--blue">{attendanceStats.requiredHours}</span>
-                    <span className="stat-lab">Required Hours</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="dash-card dash-card--weekly">
-              <div className="card-top">
-                <div className="card-title-group">
-                  <Icons.Calendar />
-                  <span>Weekly Overview</span>
-                </div>
-              </div>
-              <div className="weekly-grid">
-                {weekDates.map((d) => {
-                  const dt = new Date(d);
-                  const isToday = d === todayISO;
-                  return (
-                    <div key={d} className={`week-day ${isToday ? 'active' : ''}`}>
-                      <span className="day-name">{dt.toLocaleDateString(undefined, { weekday: 'short' })}</span>
-                      <span className="day-num">{dt.getDate()}</span>
-                      {isToday && null}
+              <div className="eds-card-body">
+                <div className="eds-monthly">
+                  <div className="eds-ring">
+                    <div className="eds-ring-plot">
+                      <svg viewBox="0 0 36 36">
+                        <path className="eds-ring-track" d={RING_PATH} />
+                        <path className="eds-ring-fill" strokeDasharray={`${attendanceStats.percentage}, 100`} d={RING_PATH} />
+                      </svg>
+                      <div className="eds-ring-value">{attendanceStats.percentage}%</div>
                     </div>
-                  );
-                })}
-              </div>
-              <div className="weekly-summary" style={{ marginTop: '2.5rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: '0.75rem', opacity: 0.5, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Weekly Performance</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'rgb(34 192 93)', marginTop: '4px' }}>{Math.round(weeklyHours)} Hours Logged</div>
+                    <span className="eds-key">
+                      <span><i className="eds-key-dot eds-key-dot--emerald"></i>Present</span>
+                    </span>
+                  </div>
+                  <div className="eds-tiles">
+                    <div className="eds-tile eds-tile--emerald">
+                      <span className="eds-tile-chip"><Icons.Team /></span>
+                      <div className="eds-tile-figures">
+                        <span className="eds-figure">{String(Math.round(attendanceStats.present)).padStart(2, '0')} Days</span>
+                        <span className="eds-label">Present</span>
+                      </div>
+                    </div>
+                    <div className="eds-tile eds-tile--sky">
+                      <span className="eds-tile-chip"><Icons.Calendar /></span>
+                      <div className="eds-tile-figures">
+                        <span className="eds-figure">{String(Math.round(attendanceStats.leave)).padStart(2, '0')} Days</span>
+                        <span className="eds-label">Leave</span>
+                      </div>
+                    </div>
+                    <div className="eds-tile">
+                      <span className="eds-tile-chip"><Icons.Clock /></span>
+                      <div className="eds-tile-figures">
+                        <span className="eds-figure">{attendanceStats.totalHours}</span>
+                        <span className="eds-label">Worked Hours</span>
+                      </div>
+                    </div>
+                    <div className="eds-tile">
+                      <span className="eds-tile-chip"><Icons.Target /></span>
+                      <div className="eds-tile-figures">
+                        <span className="eds-figure">{attendanceStats.requiredHours}</span>
+                        <span className="eds-label">Required Hours</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.75rem', opacity: 0.5, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Target</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'rgba(255,255,255,0.9)', marginTop: '4px' }}>{(expectedHoursPerDay * 5).toFixed(0)} Hours</div>
+              </div>
+            </section>
+
+            {/* Weekly — wide strip; the footer meter is bounded by the two
+                figures printed on either side of it. */}
+            <section className="eds-card eds-c1-12">
+              <div className="eds-card-head">
+                <span className="eds-chip"><Icons.Calendar /></span>
+                <div className="eds-card-titles">
+                  <h2 className="eds-card-title">Weekly Overview</h2>
+                </div>
+                <span className="eds-key">
+                  <span><i className="eds-key-dot eds-key-dot--emerald"></i>Today</span>
+                </span>
+              </div>
+              <div className="eds-card-body">
+                <div className="eds-week-grid">
+                  {weekDates.map((d) => {
+                    const dt = new Date(d);
+                    const isToday = d === todayISO;
+                    return (
+                      <div key={d} className={`eds-week-day ${isToday ? 'eds-week-day--today' : ''}`}>
+                        <span className="eds-week-dow">{dt.toLocaleDateString(undefined, { weekday: 'short' })}</span>
+                        <span className="eds-week-date">{dt.getDate()}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
+              <div className="eds-card-foot eds-week-foot">
+                <div className="eds-week-block eds-week-block--logged">
+                  <span className="eds-eyebrow">Weekly Performance</span>
+                  <span className="eds-figure">{Math.round(weeklyHours)} Hours Logged</span>
+                </div>
+                {dailyHoursTarget === null ? null : (
+                  <div
+                    className="eds-meter"
+                    role="img"
+                    aria-label={`${Math.round(weeklyHours)} of ${(dailyHoursTarget * 5).toFixed(0)} target hours logged`}
+                  >
+                    <div
+                      className="eds-meter-fill"
+                      style={{ width: `${Math.min(100, Math.round((weeklyHours / (dailyHoursTarget * 5)) * 100))}%` }}
+                    ></div>
+                  </div>
+                )}
+                <div className="eds-week-block eds-week-block--end">
+                  <span className="eds-eyebrow">Target</span>
+                  <span className="eds-figure">
+                    {dailyHoursTarget === null
+                      ? "No fixed hours"
+                      : `${(dailyHoursTarget * 5).toFixed(0)} Hours`}
+                  </span>
+                </div>
+              </div>
+            </section>
           </>
         )}
 
         {/* Admin-only: System Overview (This Month) */}
         {isAdmin && (
-          <div className="dash-card dash-card--full">
-            <div className="card-top" style={{ marginBottom: '1.25rem' }}>
-              <div className="card-title-group">
-                <Icons.Calendar />
-                <span>System Overview <span style={{ fontWeight: 500, opacity: 0.65, fontSize: '0.9em' }}>(This Month)</span></span>
+          <section className="eds-card eds-c1-12">
+            <div className="eds-card-head">
+              <span className="eds-chip"><Icons.Calendar /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">System Overview</h2>
+                <p className="eds-card-sub">This Month</p>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-              {/* Average Attendance */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', padding: '1.1rem 0.75rem', borderRadius: '14px', background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.15)' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4ade80' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <div className="eds-card-body">
+              <div className="eds-tiles">
+                <div className="eds-tile eds-tile--emerald">
+                  <span className="eds-tile-chip"><Icons.Operations /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure">
+                      {teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%
+                    </span>
+                    <span className="eds-label">Average Attendance</span>
+                  </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.65 }}>Average Attendance</span>
-                <span style={{ fontSize: '2rem', fontWeight: 900, lineHeight: 1, color: '#4ade80' }}>
-                  {teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%
-                </span>
-              </div>
-              {/* Total Working Hours */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', padding: '1.1rem 0.75rem', borderRadius: '14px', background: 'rgba(59,130,246,0.07)', border: '1px solid rgba(59,130,246,0.15)' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <div className="eds-tile">
+                  <span className="eds-tile-chip"><Icons.Clock /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure">
+                      {teamStats.totalEmps > 0 ? `${(teamStats.available * 9).toLocaleString()}h` : '0h'}
+                    </span>
+                    <span className="eds-label">Total Working Hours</span>
+                  </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.65 }}>Total Working Hours</span>
-                <span style={{ fontSize: '2rem', fontWeight: 900, lineHeight: 1, color: '#60a5fa' }}>
-                  {teamStats.totalEmps > 0 ? `${(teamStats.available * 9).toLocaleString()}h` : '0h'}
-                </span>
-              </div>
-              {/* Leave Requests */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', padding: '1.1rem 0.75rem', borderRadius: '14px', background: 'rgba(251,146,60,0.07)', border: '1px solid rgba(251,146,60,0.15)' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(223, 51, 8, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fb923c' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgb(251, 146, 60)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                <div className="eds-tile eds-tile--sky">
+                  <span className="eds-tile-chip"><Icons.Calendar /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure">{pendingLeaveList.length}</span>
+                    <span className="eds-label">Leave Requests</span>
+                  </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.65 }}>Leave Requests</span>
-                <span style={{ fontSize: '2rem', fontWeight: 900, lineHeight: 1, color: '#FB923C' }}>
-                  {pendingLeaveList.length}
-                </span>
-              </div>
-              {/* Payroll Status */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', padding: '1.1rem 0.75rem', borderRadius: '14px', background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(168,85,247,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c084fc' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                <div className="eds-tile">
+                  <span className="eds-tile-chip"><Icons.Payroll /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure eds-figure--text">In Progress</span>
+                    <span className="eds-label">Payroll Status</span>
+                    <span className="eds-sub">
+                      {new Date().toLocaleString('en-IN', { month: 'long' })} {new Date().getFullYear()}
+                    </span>
+                  </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.65 }}>Payroll Status</span>
-                <span style={{ fontSize: '1.15rem', fontWeight: 900, lineHeight: 1, color: '#c084fc' }}>In Progress</span>
-                <span style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)', fontWeight: 600 }}>
-                  {new Date().toLocaleString('en-IN', { month: 'long' })} {new Date().getFullYear()}
-                </span>
               </div>
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Row 2: Workforce Overview & Holidays */}
-        <div className={`dash-card ${hasRole("Admin") ? "dash-card--wide" : ""}`}>
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Users />
-              <span>Workforce Overview</span>
+        <section className={`eds-card ${hasRole("Admin") ? "eds-c1-8" : "eds-c1-4"}`}>
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Users /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Workforce Overview</h2>
             </div>
           </div>
-          <div className="overview-stack" style={hasRole("Admin") ? { flexDirection: 'row', gap: '1.5rem' } : {}}>
-            <div className="info-box info-box--blue" style={hasRole("Admin") ? { flex: 1 } : {}}>
-              <div className="box-icon"><Icons.Users /></div>
-              <div className="box-content">
-                <span className="box-val">{String(teamStats.totalEmps).padStart(2, '0')}</span>
-                <span className="box-lab">Total Staff</span>
-                <span className="box-sub">Active workforce</span>
+          <div className="eds-card-body">
+            <div className="eds-tiles">
+              <div className="eds-tile">
+                <span className="eds-tile-chip"><Icons.Users /></span>
+                <div className="eds-tile-figures">
+                  <span className="eds-figure">{String(teamStats.totalEmps).padStart(2, '0')}</span>
+                  <span className="eds-label">Total Staff</span>
+                  <span className="eds-sub">Active workforce</span>
+                </div>
               </div>
-            </div>
-            <div className="info-box info-box--purple" style={hasRole("Admin") ? { flex: 1 } : {}}>
-              <div className="box-icon"><Icons.Team /></div>
-              <div className="box-content">
-                <span className="box-val">{String(teamStats.totalDepts).padStart(2, '0')}</span>
-                <span className="box-lab">Departments</span>
-                <span className="box-sub">Operational units</span>
+              <div className="eds-tile eds-tile--violet">
+                <span className="eds-tile-chip"><Icons.Team /></span>
+                <div className="eds-tile-figures">
+                  <span className="eds-figure">{String(teamStats.totalDepts).padStart(2, '0')}</span>
+                  <span className="eds-label">Departments</span>
+                  <span className="eds-sub">Operational units</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
         {!hasRole("Admin") && (
-          <div className="dash-card">
-            <div className="card-top">
-              <div className="card-title-group">
-                <Icons.Operations />
-                <span>Today's Operations</span>
+          <section className="eds-card eds-c5-4">
+            <div className="eds-card-head">
+              <span className="eds-chip"><Icons.Operations /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Today's Operations</h2>
               </div>
             </div>
-            <div className="overview-stack">
-              <div className="info-box info-box--green">
-                <div className="box-icon"><Icons.Operations /></div>
-                <div className="box-content">
-                  <span className="box-val">{teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%</span>
-                  <span className="box-lab">Attendance Rate</span>
-                  <span className="box-sub">Present today</span>
+            <div className="eds-card-body">
+              <div className="eds-tiles">
+                <div className="eds-tile eds-tile--emerald">
+                  <span className="eds-tile-chip"><Icons.Operations /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure">{teamStats.totalEmps > 0 ? Math.round((teamStats.available / teamStats.totalEmps) * 100) : 0}%</span>
+                    <span className="eds-label">Attendance Rate</span>
+                    <span className="eds-sub">Present today</span>
+                  </div>
                 </div>
-              </div>
-              <div className="info-box info-box--red">
-                <div className="box-icon" style={{ color: "rgb(251, 146, 60)" }}><Icons.Clock /></div>
-                <div className="box-content">
-                  <span className="box-val">{String(teamStats.lateToday).padStart(2, '0')}</span>
-                  <span className="box-lab">Late Arrivals</span>
-                  <span className="box-sub">Past scheduled time</span>
+                <div className="eds-tile eds-tile--amber">
+                  <span className="eds-tile-chip"><Icons.Clock /></span>
+                  <div className="eds-tile-figures">
+                    <span className="eds-figure">{String(teamStats.lateToday).padStart(2, '0')}</span>
+                    <span className="eds-label">Late Arrivals</span>
+                    <span className="eds-sub">Past scheduled time</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
         )}
 
-        <div className="dash-card">
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Calendar />
-              <span>Upcoming Holidays</span>
+        <section className="eds-card eds-c9-4">
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Calendar /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Upcoming Holidays</h2>
             </div>
+            <NavLink to="/calendar" className="eds-action">View all holidays →</NavLink>
           </div>
-          <div className="holiday-list">
-            {holidays.slice(0, 3).map(h => (
-              <div key={h.id} className="holiday-item">
-                <span className="holiday-name">{h.name}</span>
-                <span className="holiday-date">{new Date(h.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '-')}</span>
+          {holidays.length > 0 && (
+            <div className="eds-card-body">
+              <div className="eds-list">
+                {holidays.slice(0, 3).map(h => (
+                  <div key={h.id} className="eds-row">
+                    <div className="eds-row-main">
+                      <span className="eds-row-name">{h.name}</span>
+                    </div>
+                    <span className="eds-date-pill">
+                      {new Date(h.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '-')}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-            <NavLink to="/calendar" className="view-link">View all holidays →</NavLink>
-          </div>
-        </div>
-
-        {/* Row 3: Team Status, Birthdays */}
-        <div className="dash-card dash-card--wide">
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Team />
-              <span>My Team Status</span>
-            </div>
-          </div>
-          <div className="team-status-row">
-            <div className="status-item">
-              <div className="status-icon"><Icons.Users /></div>
-              <div className="status-data">
-                <span className="status-val" style={{ color: "rgb(34,192,93)" }}>{String(teamStats.available).padStart(2, '0')}</span>
-                <span className="status-lab">Available</span>
-              </div>
-            </div>
-            <div className="status-item">
-              <div className="status-icon"><Icons.Calendar /></div>
-              <div className="status-data">
-                <span className="status-val" style={{ color: "rgb(31 74 118)" }}>{String(teamStats.onLeave).padStart(2, '0')}</span>
-                <span className="status-lab">On Leave</span>
-              </div>
-            </div>
-            <div className="status-item">
-              <div className="status-icon"><Icons.Users /></div>
-              <div className="status-data">
-                <span className="status-val" style={{ color: "#da1f1f" }}>{String(teamStats.weeklyOff).padStart(2, '0')}</span>
-                <span className="status-lab">Absent</span>
-              </div>
-            </div>
-            {!isAdmin && <NavLink to="/leave" className="btn btn-primary btn-lg">Request Leave</NavLink>}
-          </div>
-        </div>
-
-        <div className="dash-card">
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Birthday />
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>Upcoming Celebrations</span>
-                <span style={{ fontSize: "0.75rem", opacity: 0.5, fontWeight: 500 }}>Next 7 days</span>
-              </div>
-            </div>
-            <NavLink to="/calendar" className="view-link">View all →</NavLink>
-          </div>
-          {upcomingCelebrations.length > 0 && (
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                marginBottom: "0.75rem",
-                flexWrap: "wrap",
-              }}
-            >
-              {[
-                { label: "Birthdays", count: upcomingCelebrations.filter((c) => c.kind === "birthday").length, color: "rgba(236, 72, 153, 0.18)", border: "rgba(236, 72, 153, 0.45)", emoji: "🎂" },
-                { label: "Work", count: upcomingCelebrations.filter((c) => c.kind === "work").length, color: "rgba(34, 197, 94, 0.18)", border: "rgba(34, 197, 94, 0.45)", emoji: "💼" },
-                { label: "Marriage", count: upcomingCelebrations.filter((c) => c.kind === "marriage").length, color: "rgba(168, 85, 247, 0.18)", border: "rgba(168, 85, 247, 0.45)", emoji: "💍" },
-              ].map((s) => (
-                <div
-                  key={s.label}
-                  style={{
-                    flex: 1,
-                    minWidth: 80,
-                    padding: "0.5rem 0.6rem",
-                    borderRadius: "10px",
-                    background: s.color,
-                    border: `1px solid ${s.border}`,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: "2px",
-                  }}
-                >
-                  <span style={{ fontSize: "0.7rem", fontWeight: 600, opacity: 0.85, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                    {s.emoji} {s.label}
-                  </span>
-                  <span style={{ fontSize: "1.2rem", fontWeight: 800, color: "rgba(255,255,255,0.92)", lineHeight: 1 }}>{s.count}</span>
-                </div>
-              ))}
             </div>
           )}
-          <div className="birthday-body" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        </section>
+
+        <section className="eds-card eds-c1-8">
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Team /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">My Team Status</h2>
+            </div>
+            {!isAdmin && <NavLink to="/leave" className="eds-action eds-action--primary">Request Leave</NavLink>}
+          </div>
+          <div className="eds-card-body">
+            <div className="eds-tiles">
+              <div className="eds-tile eds-tile--emerald">
+                <span className="eds-tile-chip"><Icons.Users /></span>
+                <div className="eds-tile-figures">
+                  <span className="eds-figure">{String(teamStats.available).padStart(2, '0')}</span>
+                  <span className="eds-label">Available</span>
+                </div>
+              </div>
+              <div className="eds-tile eds-tile--sky">
+                <span className="eds-tile-chip"><Icons.Calendar /></span>
+                <div className="eds-tile-figures">
+                  <span className="eds-figure">{String(teamStats.onLeave).padStart(2, '0')}</span>
+                  <span className="eds-label">On Leave</span>
+                </div>
+              </div>
+              <div className="eds-tile eds-tile--rose">
+                <span className="eds-tile-chip"><Icons.Users /></span>
+                <div className="eds-tile-figures">
+                  <span className="eds-figure">{String(teamStats.weeklyOff).padStart(2, '0')}</span>
+                  <span className="eds-label">Absent</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Celebrations — tall list panel, aggregate in the footer strip */}
+        <section className="eds-card eds-c9-4">
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Birthday /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Upcoming Celebrations</h2>
+              <p className="eds-card-sub">Next 7 days</p>
+            </div>
+            <NavLink to="/calendar" className="eds-action">View all →</NavLink>
+          </div>
+          <div className="eds-card-body">
             {upcomingCelebrations.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon"><Icons.Birthday /></div>
-                <p>No Celebrations This Week</p>
-                <span>Nothing on the calendar for the next 7 days.</span>
+              <div className="eds-empty">
+                <span className="eds-chip"><Icons.Birthday /></span>
+                <span className="eds-empty-title">No Celebrations This Week</span>
+                <span className="eds-empty-note">Nothing on the calendar for the next 7 days.</span>
               </div>
             ) : (
-              upcomingCelebrations.slice(0, 8).map((c) => {
-                const tagColor =
-                  c.kind === "birthday"
-                    ? "rgba(236, 72, 153, 0.18)"
-                    : c.kind === "work"
-                    ? "rgba(34, 197, 94, 0.18)"
-                    : "rgba(168, 85, 247, 0.18)";
-                const tagBorder =
-                  c.kind === "birthday"
-                    ? "rgba(236, 72, 153, 0.45)"
-                    : c.kind === "work"
-                    ? "rgba(34, 197, 94, 0.45)"
-                    : "rgba(168, 85, 247, 0.45)";
-                const tagText =
-                  c.kind === "birthday"
-                    ? "🎂 Birthday"
-                    : c.kind === "work"
-                    ? `💼 ${c.years} yr work`
-                    : `💍 ${c.years} yr marriage`;
-                return (
-                  <div
-                    key={c.key}
-                    className="birthday-item"
-                    style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.55rem 0.5rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)" }}
-                  >
-                    <div className="avatar" style={{ flexShrink: 0 }}>{c.name[0]}</div>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-                      <span style={{ fontWeight: 600, fontSize: "0.92rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                      <span
-                        style={{
-                          fontSize: "0.7rem",
-                          fontWeight: 600,
-                          padding: "1px 8px",
-                          borderRadius: "8px",
-                          background: tagColor,
-                          border: `1px solid ${tagBorder}`,
-                          color: "rgba(255,255,255,0.88)",
-                          alignSelf: "flex-start",
-                          marginTop: "2px",
-                        }}
-                      >
-                        {tagText}
-                      </span>
+              <div className="eds-list">
+                {upcomingCelebrations.slice(0, 8).map((c) => {
+                  const tagText =
+                    c.kind === "birthday"
+                      ? "🎂 Birthday"
+                      : c.kind === "work"
+                      ? `💼 ${c.years} yr work`
+                      : `💍 ${c.years} yr marriage`;
+                  return (
+                    <div key={c.key} className="eds-row">
+                      <span className="eds-avatar">{c.name[0]}</span>
+                      <div className="eds-row-main">
+                        <span className="eds-row-name">{c.name}</span>
+                        <span className="eds-tag">{tagText}</span>
+                      </div>
+                      <span className="eds-row-when">{relativeDayLabel(c.date)}</span>
                     </div>
-                    <span style={{ fontSize: "0.78rem", fontWeight: 600, opacity: 0.7, whiteSpace: "nowrap" }}>{relativeDayLabel(c.date)}</span>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </div>
             )}
           </div>
-        </div>
-
-        {/* Row 4: Pending Leaves (admin/HR, 2 cols) + Upcoming Events (1 col) */}
-        {isAdminOrHr && (
-          <div className="dash-card dash-card--wide">
-            <div className="card-top">
-              <div className="card-title-group">
-                <Icons.Calendar />
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '1.1rem', fontWeight: 700 }}>Pending Leave Requests</span>
-                  <span style={{ fontSize: '0.85rem', opacity: 0.5, fontWeight: 500 }}>Recent requests waiting for approval</span>
-                </div>
+          {upcomingCelebrations.length > 0 && (
+            <div className="eds-card-foot">
+              <div className="eds-agg">
+                <span>🎂 Birthdays <b>{upcomingCelebrations.filter((c) => c.kind === "birthday").length}</b></span>
+                <span>💼 Work <b>{upcomingCelebrations.filter((c) => c.kind === "work").length}</b></span>
+                <span>💍 Marriage <b>{upcomingCelebrations.filter((c) => c.kind === "marriage").length}</b></span>
               </div>
-              <NavLink to="/leave-approvals" className="view-link">View all requests →</NavLink>
             </div>
-            <div className="requests-container" style={{ marginTop: '0.5rem' }}>
+          )}
+        </section>
+
+        {isAdminOrHr && (
+          <section className="eds-card eds-c1-8">
+            <div className="eds-card-head">
+              <span className="eds-chip"><Icons.Calendar /></span>
+              <div className="eds-card-titles">
+                <h2 className="eds-card-title">Pending Leave Requests</h2>
+                <p className="eds-card-sub">Recent requests waiting for approval</p>
+              </div>
+              <NavLink to="/leave-approvals" className="eds-action">View all requests →</NavLink>
+            </div>
+            <div className="eds-card-body">
               {pendingLeaveList.length === 0 ? (
-                <div className="no-data-bar" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>
-                  <Icons.Clock />
-                  <span>No pending leave requests</span>
+                <div className="eds-empty">
+                  <span className="eds-chip"><Icons.Clock /></span>
+                  <span className="eds-empty-title">No pending leave requests</span>
                 </div>
               ) : (
-                <div style={{ display: 'grid', gap: '1rem' }}>
+                <div className="eds-list">
                   {pendingLeaveList.map(req => (
-                    <div key={req.id} className="request-card" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px', padding: '1rem' }}>
-                      {/* Request card content */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ fontWeight: 600 }}>{req.employee_name || `Emp #${req.employee_id}`}</div>
-                        <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>{req.leave_type_name} • {req.total_days} Days</div>
+                    <div key={req.id} className="eds-row">
+                      <div className="eds-row-main">
+                        <span className="eds-row-name">{req.employee_name || `Emp #${req.employee_id}`}</span>
                       </div>
+                      <span className="eds-row-meta">{req.leave_type_name} • {req.total_days} Days</span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-          </div>
+          </section>
         )}
 
-        <div className={`dash-card ${isAdminOrHr ? "" : "dash-card--full"}`}>
-          <div className="card-top">
-            <div className="card-title-group">
-              <Icons.Calendar />
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>Upcoming Events</span>
-                <span style={{ fontSize: "0.75rem", opacity: 0.5, fontWeight: 500 }}>Next 7 days</span>
-              </div>
+        <section className={`eds-card ${isAdminOrHr ? "eds-c9-4" : "eds-c1-12"}`}>
+          <div className="eds-card-head">
+            <span className="eds-chip"><Icons.Calendar /></span>
+            <div className="eds-card-titles">
+              <h2 className="eds-card-title">Upcoming Events</h2>
+              <p className="eds-card-sub">Next 7 days</p>
             </div>
-            <NavLink to="/calendar" className="view-link">View all →</NavLink>
+            <NavLink to="/calendar" className="eds-action">View all →</NavLink>
           </div>
-          <div className="birthday-body" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          <div className="eds-card-body">
             {upcomingEvents.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon"><Icons.Calendar /></div>
-                <p>No Events This Week</p>
-                <span>The calendar is clear for the next 7 days.</span>
+              <div className="eds-empty">
+                <span className="eds-chip"><Icons.Calendar /></span>
+                <span className="eds-empty-title">No Events This Week</span>
+                <span className="eds-empty-note">The calendar is clear for the next 7 days.</span>
               </div>
             ) : (
-              upcomingEvents.slice(0, 6).map((e) => (
-                <div
-                  key={e.id}
-                  className="birthday-item"
-                  style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.55rem 0.5rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)" }}
-                  title={e.description || undefined}
-                >
-                  <div
-                    className="avatar"
-                    style={{ flexShrink: 0, background: "rgba(59, 130, 246, 0.2)" }}
-                  >
-                    <Icons.Calendar />
+              <div className="eds-list">
+                {upcomingEvents.slice(0, 6).map((e) => (
+                  <div key={e.id} className="eds-row" title={e.description || undefined}>
+                    <span className="eds-chip"><Icons.Calendar /></span>
+                    <div className="eds-row-main">
+                      <span className="eds-row-name">{e.title}</span>
+                      <span className="eds-tag">
+                        {e.event_type}
+                        {e.employee_name ? ` • ${e.employee_name}` : ""}
+                      </span>
+                    </div>
+                    <span className="eds-row-when">{relativeDayLabel(e.date)}</span>
                   </div>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.92rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {e.title}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        fontWeight: 600,
-                        padding: "1px 8px",
-                        borderRadius: "8px",
-                        background: "rgba(59,130,246,0.18)",
-                        border: "1px solid rgba(59,130,246,0.45)",
-                        color: "rgba(255,255,255,0.88)",
-                        alignSelf: "flex-start",
-                        marginTop: "2px",
-                      }}
-                    >
-                      {e.event_type}
-                      {e.employee_name ? ` • ${e.employee_name}` : ""}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: "0.78rem", fontWeight: 600, opacity: 0.7, whiteSpace: "nowrap" }}>
-                    {relativeDayLabel(e.date)}
-                  </span>
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
-        </div>
+        </section>
       </div>
 
-      <footer className="dash-footer">
+      <footer className="eds-foot">
         <span>© {new Date().getFullYear()} Softwiz HRMS. All rights reserved.</span>
         <span>Version 1.0.0</span>
       </footer>

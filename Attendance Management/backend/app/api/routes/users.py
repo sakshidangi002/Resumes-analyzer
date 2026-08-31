@@ -1,13 +1,14 @@
 """User management (Admin/HR)."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from app.db.session import get_db
 from app.core.security import get_password_hash
 from app.models import User
 from app.models.user import Role, user_roles
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, UserWithRoles
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
+from app.services.audit_service import log_audit
 
 router = APIRouter()
 
@@ -15,9 +16,19 @@ router = APIRouter()
 @router.get("", response_model=list[UserWithRoles])
 def list_users(
     db: Session = Depends(get_db),
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(require_roles(["Admin", "HR"])),
 ):
-    users = db.query(User).all()
+    """Users. Pagination is opt-in -- Manage Users renders the full list and
+    has no pager, so `page` has no default."""
+    # Eager-load roles: the comprehension below reads `u.roles` for every user,
+    # which lazily fired a separate SELECT per user (N+1) on a page that lists
+    # all of them at once.
+    q = db.query(User).options(selectinload(User.roles)).order_by(User.id)
+    if page is not None:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    users = q.all()
     return [
         UserWithRoles(
             id=u.id,
@@ -58,15 +69,17 @@ def create_user(
         official_email=data.official_email,
         employee_id=data.employee_id,
         is_active=True,
+        must_change_password=("Employee" in role_names),
     )
     db.add(user)
     db.flush()
-    for role_name in role_names:
-        role = db.query(Role).filter(Role.name == role_name).first()
-        if role:
-            db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+    # One lookup for all requested roles rather than one per name.
+    roles = db.query(Role).filter(Role.name.in_(role_names)).all() if role_names else []
+    for role in roles:
+        db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
     db.commit()
     db.refresh(user)
+    log_audit(db, current_user.id, "USER_CREATED", "User", str(user.id), f"Created user {user.username}")
     return user
 
 
@@ -102,6 +115,8 @@ def update_user(
         raise HTTPException(status_code=404, detail="User not found")
     if data.password is not None:
         user.password_hash = get_password_hash(data.password)
+        if any(role.name == "Employee" for role in user.roles):
+            user.must_change_password = True
     if data.official_email is not None:
         user.official_email = data.official_email
     if data.employee_id is not None:
@@ -110,12 +125,16 @@ def update_user(
         user.is_active = data.is_active
     if data.role_names is not None:
         db.execute(delete(user_roles).where(user_roles.c.user_id == user.id))
-        for role_name in data.role_names:
-            role = db.query(Role).filter(Role.name == role_name).first()
-            if role:
-                db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+        # One lookup for all requested roles rather than one per name.
+        roles = (
+            db.query(Role).filter(Role.name.in_(data.role_names)).all()
+            if data.role_names else []
+        )
+        for role in roles:
+            db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
     db.commit()
     db.refresh(user)
+    log_audit(db, current_user.id, "USER_UPDATED", "User", str(user.id), f"Updated user {user.username}")
     return user
 
 
@@ -131,6 +150,8 @@ def delete_user(
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     db.execute(delete(user_roles).where(user_roles.c.user_id == user.id))
+    deleted_username = user.username
     db.delete(user)
     db.commit()
+    log_audit(db, current_user.id, "USER_DELETED", "User", str(user_id), f"Deleted user {deleted_username}")
     return {"message": "User deleted"}
