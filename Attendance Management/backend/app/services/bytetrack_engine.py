@@ -160,6 +160,25 @@ def gate_stats() -> dict:
     """Queueing statistics for the YOLO gate — see inference_gate.stats()."""
     return _gate().stats()
 
+
+def _count_detection(camera_id, outcome: str, box_h: float, pos_y) -> None:
+    """Record what became of one raw detection. Never affects the pipeline.
+
+    Two of the three ways a person is lost before tracking were bare `continue`
+    statements with no log and no counter, so "the detector never saw them" and
+    "we discarded them" were indistinguishable from outside — and they need
+    opposite fixes. Wrapped because a metrics failure must never be able to drop
+    a detection.
+    """
+    try:
+        from app.services.pipeline_metrics import metrics
+
+        metrics.record_detection(
+            camera_id, outcome, box_height_px=box_h, centroid_y_frac=pos_y
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("metrics: detection not counted", exc_info=True)
+
 # Minimum box HEIGHT, in pixels, for a detection to be treated as a person.
 #
 # A SIZE floor, not a score floor, and the two reject different things. The room
@@ -817,6 +836,7 @@ class ByteTrackEngine:
 
         detections = 0
         det_scores: list[float] = []
+        _det_heights: list[int] = []
         seen: set[int] = set()
         if results:
             r = results[0]
@@ -838,9 +858,23 @@ class ByteTrackEngine:
                 if getattr(boxes, "id", None) is not None:
                     ids = boxes.id.int().cpu().tolist()
 
+                # Frame height, for reporting WHERE in the view a detection sat.
+                # On a corridor camera that is a distance proxy, and it is the
+                # only way to answer "are we losing the DISTANT ones?".
+                _frame_h = float(frame_bgr.shape[0]) if getattr(frame_bgr, "shape", None) else 0.0
+
                 for idx, box in enumerate(xyxy):
                     b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-                    if (b[3] - b[1]) < _MIN_PERSON_PX:
+                    _box_h = float(b[3] - b[1])
+                    _det_heights.append(int(_box_h))
+                    _pos_y = ((b[1] + b[3]) / 2.0 / _frame_h) if _frame_h else None
+                    if _box_h < _MIN_PERSON_PX:
+                        # Was a silent `continue`: no log, no counter, so it was
+                        # impossible to tell whether this floor ever rejected a
+                        # real person. Behaviour is unchanged; it is now visible.
+                        _count_detection(
+                            self.camera_id, "dropped_size_floor", _box_h, _pos_y
+                        )
                         continue          # too small to be a person -- see above
                     tid = ids[idx] if (ids is not None and idx < len(ids)) else None
                     # The DETECTOR's score for this box. It was already computed
@@ -850,6 +884,9 @@ class ByteTrackEngine:
                     det_conf = det_scores[idx] if idx < len(det_scores) else 0.0
 
                     if tid is not None:
+                        _count_detection(
+                            self.camera_id, "tracked_by_id", _box_h, _pos_y
+                        )
                         seen.add(int(tid))
                         pt = self.tracks.get(int(tid))
                         if pt is None:
@@ -871,6 +908,15 @@ class ByteTrackEngine:
                     # it is confidently a person -- see _ADOPT_UNTRACKED_MIN_CONF.
                     score = det_scores[idx] if idx < len(det_scores) else 0.0
                     if self.adopt_min_conf <= 0 or score < self.adopt_min_conf:
+                        # The largest measured loss on the doorway cameras: 32%
+                        # of detections score under the 0.35 bar, and a walker
+                        # cannot earn a ByteTrack id at this cadence, so this
+                        # `continue` is where they end. Counted, with the height
+                        # and position, so the bar can be set from evidence
+                        # rather than guessed. Behaviour unchanged.
+                        _count_detection(
+                            self.camera_id, "dropped_adopt_bar", _box_h, _pos_y
+                        )
                         continue
 
                     # Do not double-count, and do not churn the id.
@@ -911,10 +957,14 @@ class ByteTrackEngine:
                             matched_id, best_iou = nearest, 1.0   # accept below
 
                     if matched_id is not None and best_iou >= 0.30:
+                        # Merged into an existing track rather than creating a
+                        # new one — still an adopted detection, not a loss.
+                        _count_detection(self.camera_id, "adopted", _box_h, _pos_y)
                         self.tracks[matched_id].update_box(b)
                         seen.add(matched_id)
                         continue
 
+                    _count_detection(self.camera_id, "adopted", _box_h, _pos_y)
                     aux_id = self._next_aux_id
                     self._next_aux_id += 1
                     # NOTE max_misses is NOT what retires this track. Retention
@@ -1098,9 +1148,16 @@ class ByteTrackEngine:
         if sig != self._last_sig:
             self._last_sig = sig
             logger.info(
-                "YOLO camera=%s detections=%d scores=%s tracks=%d ids=%s "
-                "new_track_thresh=%s",
-                self.camera_id, detections, det_scores, len(live), sorted(seen),
+                "YOLO camera=%s detections=%d scores=%s heights=%s tracks=%d "
+                "ids=%s new_track_thresh=%s",
+                self.camera_id, detections, det_scores,
+                # Box HEIGHTS alongside the scores. The scores alone could never
+                # separate "a distant person, correctly detected but small" from
+                # "a decode-corruption fragment", which is the exact ambiguity
+                # the size floor was introduced to resolve and then made
+                # invisible. Same line, no extra work: these were already
+                # computed in the detection loop.
+                _det_heights, len(live), sorted(seen),
                 os.path.basename(self.tracker_cfg),
             )
             # Detections that will never become tracks. If this fires

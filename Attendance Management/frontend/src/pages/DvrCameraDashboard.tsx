@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+import FeedLayoutPicker, {
+  feedGridColumns,
+  feedTileHeight,
+  type FeedLayout,
+} from "../components/FeedLayoutPicker";
 import { dvr } from "../api/client";
 import { useMediaToken } from "../hooks/useMediaToken";
 
@@ -46,26 +51,72 @@ export default function DvrCameraDashboard() {
   const [error, setError] = useState("");
   const [dvrStatus, setDvrStatus] = useState<DVRStatus | null>(null);
 
-  // Only ONE channel streams at a time. Each MJPEG feed is an open
-  // multipart/x-mixed-replace connection that never ends, and the browser only
-  // allows ~6 connections per host: with every online camera streaming, the 5 s
-  // status poll and every other API call queued behind them and the whole page
-  // stalled. Server-side each feed also costs a full-frame JPEG encode per
-  // frame, which on this 4-core box is what makes the picture drift behind.
-  const [liveChannel, setLiveChannel] = useState<number | null>(null);
-  const liveImgRef = useRef<HTMLImageElement | null>(null);
+  // How many channels stream AT ONCE. This page used to hard-limit itself to
+  // one, for reasons that have not gone away — see FeedLayoutPicker for the
+  // browser connection limit and the server-side encode cost. The limit is now
+  // a user choice rather than a constant, but it is still a real cost, so it
+  // stays capped at 4 and DEFAULTS TO 1: the previous behaviour exactly, unless
+  // somebody asks for more.
+  const [layout, setLayout] = useState<FeedLayout>(1);
+  // The channels currently streaming. Length is bounded by `layout`.
+  const [liveChannels, setLiveChannels] = useState<number[]>([]);
   // Short-lived token for the <img>-rendered DVR feed (see useMediaToken).
   const { mediaToken } = useMediaToken();
 
-  // Removing the <img> from the DOM usually aborts its request, but not
-  // reliably for a stream that never completes. Clearing src first guarantees
-  // the browser drops the connection and the server stops encoding for us.
+  const runningChannels = useMemo(
+    () => (dvrStatus?.cameras ?? []).filter((c) => c.worker_status?.is_alive).map((c) => c.channel_id),
+    [dvrStatus],
+  );
+
+  /**
+   * Put a channel on screen.
+   *
+   * At capacity the OLDEST feed is evicted rather than the click being refused:
+   * a viewer clicking a camera wants to see that camera, and silently doing
+   * nothing reads as a broken button. Eviction unmounts that <img>, which
+   * closes its connection and stops the server encoding for it.
+   */
+  const showChannel = useCallback(
+    (channelId: number) => {
+      setLiveChannels((current) => {
+        if (current.includes(channelId)) return current;
+        return [...current, channelId].slice(-layout);
+      });
+    },
+    [layout],
+  );
+
+  const hideChannel = useCallback((channelId: number) => {
+    setLiveChannels((current) => current.filter((id) => id !== channelId));
+  }, []);
+
+  // The whole grid goes fullscreen, not one feed — see the stage comment on the
+  // grid element for why.
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Whether fullscreen covers the screen or shows the whole frame.
+  //
+  // These channels encode 960x1080 — TALLER than wide — so on a 16:9 monitor
+  // those two cannot both be true. "fit" keeps the true shape and leaves black
+  // down both sides of every tile, which in a 2x2 is most of the screen;
+  // "fill" stretches to the cell edges so the tiles meet. Defaults to fill,
+  // because the black gutters are what an operator actually complains about.
+  const [feedFill, setFeedFill] = useState<"fill" | "fit">("fill");
+
   useEffect(() => {
-    const img = liveImgRef.current;
-    return () => {
-      if (img) img.src = "";
-    };
-  }, [liveChannel]);
+    const onChange = () => setIsFullscreen(document.fullscreenElement != null);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleStageFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    void stageRef.current?.requestFullscreen?.();
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -82,18 +133,26 @@ export default function DvrCameraDashboard() {
     return () => clearInterval(interval);
   }, [fetchStatus]);
 
-  // Auto-open the first running camera so the page isn't blank on arrival, and
-  // drop the selection if that camera stops.
+  // Keep the on-screen set valid and full:
+  //   * drop channels that stopped streaming (a dead <img> is not a feed),
+  //   * fill any free slot from the running cameras, so the page is never
+  //     blank on arrival and switching 1 -> 4 fills immediately rather than
+  //     making the viewer click three more times.
   useEffect(() => {
-    const running = (dvrStatus?.cameras ?? []).filter((c) => c.worker_status?.is_alive);
-    if (!running.length) {
-      if (liveChannel !== null) setLiveChannel(null);
-      return;
-    }
-    if (liveChannel === null || !running.some((c) => c.channel_id === liveChannel)) {
-      setLiveChannel(running[0].channel_id);
-    }
-  }, [dvrStatus, liveChannel]);
+    setLiveChannels((current) => {
+      const alive = current.filter((id) => runningChannels.includes(id));
+      const filled = [...alive];
+      for (const id of runningChannels) {
+        if (filled.length >= layout) break;
+        if (!filled.includes(id)) filled.push(id);
+      }
+      const next = filled.slice(0, layout);
+      // Preserve identity when nothing changed, or this setState loops.
+      const same =
+        next.length === current.length && next.every((id, i) => id === current[i]);
+      return same ? current : next;
+    });
+  }, [runningChannels, layout]);
 
   const handleConnect = async () => {
     if (!dvrForm.ip.trim() || !dvrForm.username.trim() || !dvrForm.password.trim()) {
@@ -301,18 +360,61 @@ export default function DvrCameraDashboard() {
                 {dvrStatus.connection_info?.device_info?.model} | {dvrStatus.connection_info?.cameras_count} cameras
               </div>
             </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <FeedLayoutPicker value={layout} onChange={setLayout} />
+              <button type="button" style={btnStyle("secondary")} onClick={toggleStageFullscreen}>
+                ⛶ Fullscreen
+              </button>
               <button type="button" style={btnStyle("primary")} onClick={handleStartAll}>▶ Start All</button>
               <button type="button" style={btnStyle("danger")} onClick={handleStopAll}>⏹ Stop All</button>
               <button type="button" style={btnStyle("ghost")} onClick={handleDisconnect}>🔌 Disconnect</button>
             </div>
           </div>
 
-          {/* Camera Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "1rem" }}>
+          {/* Camera Grid — also the FULLSCREEN STAGE.
+              Fullscreen shows only the requested element's subtree, so
+              requesting it on one feed box showed one camera however many were
+              selected. Requesting it here keeps the whole 1/2/4 layout; the
+              per-card chrome (name, controls, recognition toggle) is hidden by
+              CSS in that state so the screen is all picture. */}
+          <div
+            ref={stageRef}
+            className="dvr-feed-stage"
+            data-layout={layout}
+            data-fill={feedFill}
+            style={{ display: "grid", gridTemplateColumns: feedGridColumns(layout), gap: "1rem" }}
+          >
+            {/* Fill/fit toggle, anchored to the STAGE so it sits in the screen
+                corner rather than inside one tile. Only meaningful in
+                fullscreen — on the page the cards are already their own size. */}
+            {isFullscreen ? (
+              <button
+                type="button"
+                className="cctv-stage-fill-toggle"
+                onClick={() => setFeedFill((m) => (m === "fill" ? "fit" : "fill"))}
+                title={
+                  feedFill === "fill"
+                    ? "Filling the screen: the picture is stretched wider than life, but no part of the scene is hidden. Click for the true shape."
+                    : "True shape, so black down the sides -- these channels encode 960x1080. Click to fill the screen."
+                }
+              >
+                {feedFill === "fill" ? "Fill screen" : "True shape"}
+              </button>
+            ) : null}
             {dvrStatus.cameras.map((camera) => (
-              <div key={camera.channel_id} style={cardStyle}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
+              <div
+                key={camera.channel_id}
+                className="dvr-card"
+                // The grid maps over EVERY camera, not just the streaming
+                // ones, so a 2-feed layout with 4 cameras still lays out 4
+                // cells. On the page the extra cards are useful ("View
+                // live"), but in fullscreen they are dead tiles taking half
+                // the screen — CSS hides them there so fullscreen shows
+                // exactly the feeds that are running.
+                data-live={liveChannels.includes(camera.channel_id) ? "true" : "false"}
+                style={cardStyle}
+              >
+                <div className="dvr-card-chrome" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
                   <div>
                     <div style={{ fontSize: "1rem", fontWeight: 700, marginBottom: "0.3rem" }}>{camera.name}</div>
                     <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.6)" }}>
@@ -338,10 +440,11 @@ export default function DvrCameraDashboard() {
                     background: "#000",
                     borderRadius: 8,
                     width: "100%",
-                    // Fixed viewport-height box; the feed fits inside it
+                    // Viewport-height box; the feed fits inside it
                     // (object-fit: contain) — whole frame, as big as fits, no
-                    // scroll. Thin black bars fill any leftover space.
-                    height: "82vh",
+                    // scroll. Thin black bars fill any leftover space. Shrinks
+                    // with the layout so 4 tiles still fit one screen.
+                    height: feedTileHeight(layout),
                     marginBottom: "1rem",
                     border: "1px solid rgba(255,255,255,0.1)",
                     overflow: "hidden",
@@ -351,13 +454,13 @@ export default function DvrCameraDashboard() {
                     justifyContent: "center",
                   }}
                 >
-                  {camera.worker_status?.is_alive && camera.channel_id !== liveChannel ? (
-                    // Not the selected channel: render NO <img> at all, so no
-                    // MJPEG connection is opened and the server does no JPEG
-                    // encoding for it.
+                  {camera.worker_status?.is_alive && !liveChannels.includes(camera.channel_id) ? (
+                    // Not on screen: render NO <img> at all, so no MJPEG
+                    // connection is opened and the server does no JPEG encoding
+                    // for it. This is what makes the layout cap meaningful.
                     <button
                       type="button"
-                      onClick={() => setLiveChannel(camera.channel_id)}
+                      onClick={() => showChannel(camera.channel_id)}
                       style={{
                         display: "flex", flexDirection: "column", alignItems: "center",
                         gap: "0.6rem", background: "transparent", border: 0,
@@ -367,7 +470,11 @@ export default function DvrCameraDashboard() {
                       <span style={{ fontSize: "2.4rem", lineHeight: 1 }}>▶</span>
                       <span>View live</span>
                       <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.45)" }}>
-                        One camera streams at a time to keep the feed real-time
+                        {layout === 1
+                          ? "One camera streams at a time to keep the feed real-time"
+                          : liveChannels.length >= layout
+                          ? `Showing ${layout} — this will replace the oldest feed`
+                          : `Up to ${layout} cameras stream at once`}
                       </span>
                     </button>
                   ) : camera.worker_status?.is_alive && mediaToken ? (
@@ -376,9 +483,6 @@ export default function DvrCameraDashboard() {
                       // Keyed by channel so switching cameras unmounts the old
                       // <img> and closes its never-ending HTTP connection.
                       key={`live-${camera.channel_id}`}
-                      ref={(el) => {
-                        if (el) liveImgRef.current = el;
-                      }}
                       src={dvr.streamUrl(camera.channel_id, mediaToken)}
                       alt={camera.name}
                       style={{
@@ -386,7 +490,7 @@ export default function DvrCameraDashboard() {
                         // player): as large as possible, no cropping, no scroll.
                         width: "100%",
                         height: "100%",
-                        objectFit: "contain",
+                        objectFit: feedFill === "fill" ? "fill" : "contain",
                         display: "block",
                       }}
                       onError={(e) => {
@@ -397,22 +501,40 @@ export default function DvrCameraDashboard() {
                         img.style.display = "none";
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        const box = (e.currentTarget.closest(".dvr-feed") as HTMLElement | null);
-                        if (document.fullscreenElement) void document.exitFullscreen();
-                        else void box?.requestFullscreen?.();
-                      }}
-                      style={{
-                        position: "absolute", top: 10, right: 10, zIndex: 2,
-                        padding: "0.35rem 0.7rem", borderRadius: 8, cursor: "pointer",
-                        background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.3)",
-                        color: "#fff", fontSize: "0.8rem", fontWeight: 700,
-                      }}
-                    >
-                      ⛶ Fullscreen
-                    </button>
+                    {/* The card header carrying the camera name is hidden in
+                        fullscreen, so the feed needs its own label or a 2x2
+                        wall of video says nothing about which channel is which. */}
+                    <span className="cctv-feed-tile-name">{camera.name}</span>
+                    <div style={{ position: "absolute", top: 10, right: 10, zIndex: 2, display: "flex", gap: "0.4rem" }}>
+                      <button
+                        type="button"
+                        // Fullscreens the whole GRID, not this one box, so
+                        // the chosen 1/2/4 layout is what fills the screen.
+                        onClick={toggleStageFullscreen}
+                        style={{
+                          padding: "0.35rem 0.7rem", borderRadius: 8, cursor: "pointer",
+                          background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.3)",
+                          color: "#fff", fontSize: "0.8rem", fontWeight: 700,
+                        }}
+                      >
+                        ⛶ Fullscreen
+                      </button>
+                      {/* Closing a feed is the only way to free its connection
+                          and stop the server encoding for it without switching
+                          the whole layout. */}
+                      <button
+                        type="button"
+                        title="Stop showing this feed"
+                        onClick={() => hideChannel(camera.channel_id)}
+                        style={{
+                          padding: "0.35rem 0.6rem", borderRadius: 8, cursor: "pointer",
+                          background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.3)",
+                          color: "#fff", fontSize: "0.8rem", fontWeight: 700,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
                     </>
                   ) : (
                     <div style={{
@@ -429,7 +551,7 @@ export default function DvrCameraDashboard() {
                 </div>
 
                 {/* Controls */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
+                <div className="dvr-card-chrome" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
                   <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>
                     {camera.worker_status?.fps ? `${camera.worker_status.fps} FPS` : "0 FPS"}
                   </div>
@@ -447,7 +569,7 @@ export default function DvrCameraDashboard() {
                 </div>
 
                 {/* Recognition Toggle */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.8rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                <div className="dvr-card-chrome" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.8rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
                   <span style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.8)" }}>Face Recognition</span>
                   <button
                     type="button"

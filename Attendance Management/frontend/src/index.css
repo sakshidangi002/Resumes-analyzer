@@ -5312,6 +5312,23 @@ input[type="date"] {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.09);
   transition: border-color 160ms ease;
+  /* The whole field opens the calendar (see openDatePicker in Attendance.tsx),
+     so it must read as one clickable control rather than a text box. */
+  cursor: pointer;
+}
+
+/* Hide the browser's own calendar glyph.
+   The field already renders its own icon, and the native indicator is the ONLY
+   part a date input opens its picker from — leaving both gave two overlapping
+   targets where one silently did nothing. With the whole field wired to
+   showPicker(), the native glyph is redundant. */
+.eds-datefield input[type="date"]::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+
+.eds-datefield input[type="date"] {
+  cursor: pointer;
 }
 
 .eds-datefield:hover,
@@ -8564,6 +8581,89 @@ textarea.eds-input {
   background: #000;
 }
 
+/* ---------------------------------------------------------------------------
+   The feed STAGE — one grid for 1, 2 or 4 tiles.
+
+   Fullscreen renders only the requested element's subtree. Requesting it on a
+   single `.cctv-feed` therefore showed one camera however many were selected,
+   because the other tiles are its siblings. The stage wraps them all and is
+   what goes fullscreen, so inline and fullscreen are the same layout at two
+   different sizes rather than two different views.
+   --------------------------------------------------------------------------- */
+.cctv-feed-stage {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: 1fr;
+  /* Anchors the fill/fit toggle to the STAGE corner. Positioned against the
+     primary feed it landed at the corner of the top-left CELL, which in a 2x2
+     is the middle of the screen. */
+  position: relative;
+}
+
+.cctv-stage-fill-toggle {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 5;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #e2e8f0;
+}
+
+.cctv-feed-stage[data-layout="2"],
+.cctv-feed-stage[data-layout="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Inline tile heights, chosen so the grid fits one screen without scrolling.
+   Set here rather than inline on the element: an inline style would beat the
+   `:fullscreen` rule below and the tiles would keep their page height while
+   fullscreen, leaving most of the screen black. */
+.cctv-feed-stage[data-layout="2"] { grid-auto-rows: 62vh; }
+.cctv-feed-stage[data-layout="4"] { grid-auto-rows: 38vh; }
+
+/* Multi-tile: drop the single-feed size caps so tiles share the row evenly. */
+.cctv-feed-stage:not([data-layout="1"]) .cctv-feed { max-width: none; }
+.cctv-feed-stage:not([data-layout="1"]) .cctv-feed-img {
+  max-height: none;
+  height: 100%;
+}
+
+/* ONE fit mode for every tile in the stage.
+   `data-fill` used to sit only on the primary `.cctv-feed`, so a 2x2 rendered
+   one stretched tile and three letterboxed ones — the cells were identical but
+   their contents were not, which reads as a broken grid. The stage now carries
+   the mode and every tile obeys it, primary and secondary alike. */
+.cctv-feed-stage:not([data-layout="1"])[data-fill="fill"] .cctv-feed-img {
+  object-fit: fill;
+}
+.cctv-feed-stage:not([data-layout="1"])[data-fill="fit"] .cctv-feed-img {
+  object-fit: contain;
+}
+
+.cctv-feed-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  border-radius: 0;
+  gap: 2px;
+  /* 1fr, so 2 tiles fill the height in one row and 4 fill it in two. */
+  grid-auto-rows: 1fr;
+}
+
+.cctv-feed-stage:fullscreen .cctv-feed,
+.cctv-feed-stage:fullscreen .cctv-feed-tile {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+}
+
 .cctv-feed:fullscreen {
   max-width: none;
   width: 100vw;
@@ -8571,6 +8671,103 @@ textarea.eds-input {
   display: grid;
   place-items: center;
   border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   DVR grid as a fullscreen stage.
+
+   Same reasoning as .cctv-feed-stage: fullscreen renders only the requested
+   element's subtree, so requesting it on one feed box showed one camera
+   whatever the layout said. The grid is the stage; in fullscreen the per-card
+   chrome is hidden so the screen is all picture.
+   --------------------------------------------------------------------------- */
+.dvr-feed-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  gap: 2px !important;
+  padding: 0;
+  grid-auto-rows: 1fr;
+  align-content: stretch;
+}
+
+/* Card name, start/stop controls and the recognition toggle. Useful on the
+   page, noise on a wall display — and with 4 tiles they would take more room
+   than the video. */
+.dvr-feed-stage:fullscreen .dvr-card-chrome {
+  display: none !important;
+}
+
+.dvr-feed-stage:fullscreen .dvr-card {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #000;
+  min-height: 0;
+  display: flex;
+}
+
+/* The feed box carries an inline viewport height for the page layout, which
+   would leave most of the screen black in fullscreen — hence !important. */
+.dvr-feed-stage:fullscreen .dvr-feed {
+  height: 100% !important;
+  width: 100%;
+  margin-bottom: 0 !important;
+  border-radius: 0;
+  border: none;
+}
+
+/* Only the RUNNING feeds fill the screen.
+   The grid maps over every camera, so a 2-feed layout with 4 cameras lays out
+   4 cells and two of them hold a "View live" placeholder. On the page those
+   are useful; on a wall display they are dead tiles taking half the screen. */
+.dvr-feed-stage:fullscreen .dvr-card[data-live="false"] {
+  display: none;
+}
+
+/* The name pill lives on the feed and is redundant on the page, where the card
+   header already carries the name a few pixels above it. In fullscreen that
+   header is hidden, and without this a 2x2 wall of video would not say which
+   channel is which. */
+.dvr-feed .cctv-feed-tile-name {
+  display: none;
+}
+
+.dvr-feed-stage:fullscreen .dvr-feed .cctv-feed-tile-name {
+  display: inline-block;
+  z-index: 3;
+}
+
+/* A view-only tile: a click promotes it to primary. */
+.cctv-feed-tile {
+  position: relative;
+  display: block;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #000;
+  cursor: pointer;
+}
+
+.cctv-feed-tile .cctv-feed-img {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.cctv-feed-tile-name {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 /* FIT — the whole frame, letterboxed.
@@ -8581,6 +8778,18 @@ textarea.eds-input {
   max-height: 100vh;
   max-width: 100vw;
   height: 100vh;
+  object-fit: contain;
+}
+
+/* Same rule for the stage, where the fullscreen element is the GRID and the
+   feed is a cell inside it. Sized to the cell (100%), not the viewport (100vh):
+   with 4 tiles a cell is half the screen, and 100vh would make each tile as
+   tall as the whole screen and overflow the grid. */
+.cctv-feed-stage:fullscreen .cctv-feed[data-fill="fit"] .cctv-feed-img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
 }
 
@@ -8596,6 +8805,33 @@ textarea.eds-input {
   max-width: none;
   max-height: none;
   object-fit: fill;
+}
+
+/* Stage equivalent — again sized to the CELL, not the viewport. */
+.cctv-feed-stage:fullscreen .cctv-feed[data-fill="fill"] .cctv-feed-img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+}
+
+/* Fullscreen multi-tile: the stage's mode governs EVERY tile, so the four
+   pictures meet at the cell edges instead of one filling and three floating. */
+.cctv-feed-stage:fullscreen:not([data-layout="1"])[data-fill="fill"] .cctv-feed-img {
+  object-fit: fill;
+}
+.cctv-feed-stage:fullscreen:not([data-layout="1"])[data-fill="fit"] .cctv-feed-img {
+  object-fit: contain;
+}
+
+/* The eight status chips are sized for ONE feed filling the screen. Across a
+   half-width tile they overrun the picture and collide with the camera's own
+   burnt-in OSD — visible in the 2x2 as text over text. Each tile carries its
+   name instead, and the camera's OSD already shows FPS and people, so the chip
+   row stands down until the layout is back to a single feed. */
+.cctv-feed-stage:not([data-layout="1"]) .cctv-feed-chips {
+  display: none;
 }
 
 @media (max-width: 900px) {

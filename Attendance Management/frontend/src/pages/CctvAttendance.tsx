@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import GlobalHeaderControls from "../components/GlobalHeaderControls";
+// Only the picker and the type: this page's grid is laid out in CSS
+// (.cctv-feed-stage), so the same rules apply inline and in fullscreen without
+// an inline style overriding the :fullscreen block.
+import FeedLayoutPicker, { type FeedLayout } from "../components/FeedLayoutPicker";
 import { recognition as recognitionApi, cameras as camerasApi } from "../api/client";
 import { useMediaToken } from "../hooks/useMediaToken";
 
@@ -258,6 +262,10 @@ export default function CctvAttendance() {
   };
   const [dbCameras, setDbCameras] = useState<DbCamera[]>([]);
   const [selectedCamId, setSelectedCamId] = useState<number | "">("");
+  // How many feeds to show at once. 1 is the previous behaviour exactly; more
+  // costs one extra MJPEG connection and one extra server-side JPEG encoder per
+  // tile — see FeedLayoutPicker.
+  const [feedLayout, setFeedLayout] = useState<FeedLayout>(1);
   const previewTimer = useRef<number | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   // Bumped to force the live MJPEG <img> to remount (reconnect) after a stream
@@ -321,8 +329,16 @@ export default function CctvAttendance() {
     };
   }, [selectedCamId]);
 
+  // The element that goes fullscreen is the STAGE, not the single feed.
+  //
+  // Fullscreen shows only the requested element's subtree, so requesting it on
+  // one `.cctv-feed` left every other tile outside it — choosing 4 feeds and
+  // then going fullscreen showed exactly one. The stage contains them all, so
+  // fullscreen is the same 1/2/4 layout at viewport size.
+  const stageRef = useRef<HTMLDivElement | null>(null);
+
   const toggleFullscreen = () => {
-    const el = feedRef.current;
+    const el = stageRef.current ?? feedRef.current;
     if (!el) return;
     if (document.fullscreenElement) {
       void document.exitFullscreen();
@@ -351,6 +367,22 @@ export default function CctvAttendance() {
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
+
+  /**
+   * The other cameras shown alongside the primary one.
+   *
+   * Takes the next enabled cameras after the primary, capped so the TOTAL on
+   * screen is `feedLayout` — the primary counts as one tile. Ordered by the
+   * camera list rather than by click history, so the tiles do not reshuffle
+   * under the pointer every time the list refreshes.
+   */
+  const secondaryCamIds = useMemo(() => {
+    if (feedLayout <= 1 || selectedCamId === "") return [];
+    return dbCameras
+      .filter((c) => c.id !== selectedCamId)
+      .slice(0, feedLayout - 1)
+      .map((c) => c.id);
+  }, [dbCameras, selectedCamId, feedLayout]);
 
   const handleCamSelect = (id: number | "") => {
     setSelectedCamId(id);
@@ -616,18 +648,41 @@ export default function CctvAttendance() {
             </div>
 
             <div style={{ marginTop: "1rem", ...panelStyle }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem", gap: "0.6rem", flexWrap: "wrap" }}>
                 <div style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.65)" }}>Live preview</div>
-                {selectedCamId !== "" ? (
-                  <button
-                    type="button"
-                    onClick={toggleFullscreen}
-                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem", borderRadius: 8, cursor: "pointer", background: "rgba(122,162,255,0.15)", border: "1px solid rgba(122,162,255,0.3)", color: "#cfe0ff" }}
-                  >
-                    Fullscreen
-                  </button>
-                ) : null}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <FeedLayoutPicker value={feedLayout} onChange={setFeedLayout} />
+                  {selectedCamId !== "" ? (
+                    <button
+                      type="button"
+                      onClick={toggleFullscreen}
+                      style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem", borderRadius: 8, cursor: "pointer", background: "rgba(122,162,255,0.15)", border: "1px solid rgba(122,162,255,0.3)", color: "#cfe0ff" }}
+                    >
+                      Fullscreen
+                    </button>
+                  ) : null}
+                </div>
               </div>
+              {/* THE STAGE holds every tile, and it is what goes fullscreen.
+                  Fullscreen used to be requested on the single `.cctv-feed`
+                  element, so the extra tiles — which are its siblings — were
+                  outside the fullscreen subtree and simply vanished: picking 4
+                  feeds and then going fullscreen showed one. One grid now
+                  governs both states, so fullscreen is the same layout at
+                  viewport size rather than a different view. */}
+              {/* data-fill lives on the STAGE, not just the primary feed.
+                  It was on `.cctv-feed` alone, so in a 2x2 the primary rendered
+                  object-fit: fill (stretched edge to edge) while the other
+                  three inherited contain (letterboxed) — one tile bled to its
+                  cell edges and three floated in black, which is what made the
+                  grid look misaligned when the cells were in fact identical.
+                  One mode for every tile keeps them consistent. */}
+              <div
+                ref={stageRef}
+                className="cctv-feed-stage"
+                data-layout={feedLayout}
+                data-fill={feedFill}
+              >
               {selectedCamId !== "" && mediaToken ? (
                 <div ref={feedRef} className="cctv-feed" data-fill={feedFill} style={{ position: "relative", background: "#000", borderRadius: 10, overflow: "hidden" }}>
                   <img
@@ -891,34 +946,20 @@ export default function CctvAttendance() {
                     </div>
                   ) : null}
 
-                  {/* Fill/fit toggle, INSIDE the feed.
-                      It has to live here rather than in the panel header: only
-                      this element goes fullscreen, so a control outside it is
-                      invisible exactly when it is wanted. */}
-                  {isFullscreen ? (
-                    <button
-                      type="button"
-                      onClick={() => setFeedFill((m) => (m === "fill" ? "fit" : "fill"))}
-                      title={
-                        feedFill === "fill"
-                          ? "Filling the screen: the picture is stretched wider than life, but no part of the room is hidden. Click for the true shape."
-                          : "True shape, so black down the sides -- this camera encodes 960x1080. Click to fill the screen."
-                      }
-                      style={{
-                        position: "absolute", bottom: 12, right: 12, zIndex: 5,
-                        fontSize: "0.78rem", padding: "0.35rem 0.7rem",
-                        borderRadius: 8, cursor: "pointer",
-                        background: "rgba(0,0,0,0.6)",
-                        border: "1px solid rgba(255,255,255,0.35)",
-                        color: "#e2e8f0",
-                      }}
-                    >
-                      {feedFill === "fill" ? "Fill screen" : "True shape"}
-                    </button>
+
+                  {/* The primary carries the same name pill as every other
+                      tile, so all four are labelled identically instead of one
+                      showing a chip row and three showing a name. Only when
+                      there IS more than one tile — on a single feed the chip
+                      row already names the camera. */}
+                  {feedLayout > 1 ? (
+                    <span className="cctv-feed-tile-name">
+                      {dbCameras.find((c) => c.id === selectedCamId)?.name || cameraId}
+                    </span>
                   ) : null}
 
                   {/* Real-time status bar overlaid on the feed */}
-                  <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>
+                  <div className="cctv-feed-chips" style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", fontSize: "0.72rem", fontWeight: 700 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "0.2rem 0.55rem", borderRadius: 999, background: "rgba(0,0,0,0.55)", color: "#fff" }}>
                       <span style={{ width: 8, height: 8, borderRadius: "50%", background: (liveStat?.status === "running") ? "#22c55e" : "#ef4444" }} />
                       {(liveStat?.status === "running") ? "Connected" : (liveStat?.status || "…")}
@@ -971,6 +1012,74 @@ export default function CctvAttendance() {
                       : "Authorising live feed…"}
                 </div>
               )}
+
+              {/* Additional feeds, when the layout asks for more than one.
+                  These are VIEW ONLY. The camera selected above stays the
+                  primary: it is the one carrying the chair-occupancy overlay,
+                  the status chips and the scan configuration, and splitting
+                  that across tiles would mean four cameras arguing over one set
+                  of threshold inputs. Click a tile to make it the primary
+                  instead — the previous primary takes its place here, so the
+                  same number of streams stays open. */}
+              {/* Secondary tiles are DIRECT children of the stage, so the one
+                  grid places them next to the primary — inline and fullscreen
+                  alike. Wrapping them in their own grid was what made them a
+                  separate row that fullscreen could not include. */}
+              {feedLayout > 1 && mediaToken
+                ? secondaryCamIds.map((camId) => {
+                    const cam = dbCameras.find((c) => c.id === camId);
+                    return (
+                      <button
+                        key={`secondary-${camId}`}
+                        type="button"
+                        className="cctv-feed-tile"
+                        onClick={() => handleCamSelect(camId)}
+                        title={`Show ${cam?.name ?? `camera ${camId}`} as the primary feed`}
+                      >
+                        <img
+                          key={`secondary-img-${camId}-${feedNonce}`}
+                          className="cctv-feed-img"
+                          src={camerasApi.streamUrl(camId, mediaToken, feedNonce)}
+                          alt={cam?.name ?? `Camera ${camId}`}
+                          onError={(e) => {
+                            // Same rule as the primary: clear src, or a failing
+                            // stream retries forever behind a hidden element.
+                            const img = e.target as HTMLImageElement;
+                            img.src = "";
+                            img.style.visibility = "hidden";
+                          }}
+                        />
+                        <span className="cctv-feed-tile-name">
+                          {cam?.name ?? `Camera ${camId}`}
+                        </span>
+                      </button>
+                    );
+                  })
+                : null}
+
+              {/* Fill/fit toggle, anchored to the STAGE.
+                  It used to sit inside the primary feed, which was correct when
+                  that feed WAS the fullscreen element. Now the stage is, so a
+                  control positioned against the primary lands at the bottom
+                  corner of the top-left CELL — floating in the middle of the
+                  screen in a 2x2. Against the stage it returns to the corner of
+                  the screen, and it governs every tile because the mode lives
+                  on the stage. */}
+              {isFullscreen ? (
+                <button
+                  type="button"
+                  className="cctv-stage-fill-toggle"
+                  onClick={() => setFeedFill((m) => (m === "fill" ? "fit" : "fill"))}
+                  title={
+                    feedFill === "fill"
+                      ? "Filling the screen: the picture is stretched wider than life, but no part of the room is hidden. Click for the true shape."
+                      : "True shape, so black down the sides -- these cameras encode 960x1080. Click to fill the screen."
+                  }
+                >
+                  {feedFill === "fill" ? "Fill screen" : "True shape"}
+                </button>
+              ) : null}
+              </div>
             </div>
           </div>
         </div>

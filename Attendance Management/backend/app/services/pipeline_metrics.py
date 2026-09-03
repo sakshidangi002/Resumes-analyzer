@@ -66,6 +66,51 @@ def _bucket_for(value: float) -> str:
     return _FACE_PX_LABELS[-1]
 
 
+# Person-box HEIGHT buckets, in pixels.
+#
+# Edges are this system's own numbers, not round ones:
+#   30  — _MIN_PERSON_PX, the size floor that drops a box outright
+#   46  — the smallest REAL person in the 41 hand-labelled examples the floor
+#         was chosen from, so 30-46 is the band where the floor is closest to
+#         rejecting somebody genuine
+#   80  — roughly a person at the far door on the doorway cameras
+# The first bucket can only ever be populated by the size-floor rejection path;
+# if it stays empty, the floor is costing nothing.
+_BOX_PX_EDGES = (30.0, 46.0, 80.0, 150.0, 300.0)
+_BOX_PX_LABELS = ("<30", "30-46", "46-80", "80-150", "150-300", ">=300")
+
+# Where in the frame the detection sat, as a fraction of frame height.
+#
+# On a corridor camera this is a distance proxy: the far door is at the top of
+# the frame and the near floor at the bottom, so a funnel split by this band
+# answers "are we losing the DISTANT ones?" — which is the actual question and
+# was previously unanswerable, because nothing recorded where a lost detection
+# had been.
+_POS_LABELS = ("y0.0-0.2", "y0.2-0.4", "y0.4-0.6", "y0.6-0.8", "y0.8-1.0")
+
+# What happened to one raw YOLO detection. These are exhaustive and mutually
+# exclusive: every box the detector emits lands in exactly one, so the counts
+# sum to the number of detections and the funnel actually balances.
+FUNNEL_OUTCOMES = (
+    "tracked_by_id",        # ByteTrack had already confirmed it
+    "adopted",              # no id, but confident enough to adopt as provisional
+    "dropped_size_floor",   # box shorter than _MIN_PERSON_PX
+    "dropped_adopt_bar",    # no id and score below the adopt threshold
+)
+
+
+def _box_bucket(value: float) -> str:
+    for index, edge in enumerate(_BOX_PX_EDGES):
+        if value < edge:
+            return _BOX_PX_LABELS[index]
+    return _BOX_PX_LABELS[-1]
+
+
+def _pos_bucket(fraction: float) -> str:
+    index = int(max(0.0, min(0.999, fraction)) * 5)
+    return _POS_LABELS[index]
+
+
 class PipelineMetrics:
     """Thread-safe outcome counters. One instance per process."""
 
@@ -77,6 +122,13 @@ class PipelineMetrics:
         self._face_px: dict[tuple[str, str], int] = defaultdict(int)
         # (camera_id, action) -> count
         self._attendance: dict[tuple[str, str], int] = defaultdict(int)
+        # --- detection funnel (Fix 1) --------------------------------------
+        # (camera_id, outcome) -> count
+        self._funnel: dict[tuple[str, str], int] = defaultdict(int)
+        # (camera_id, outcome, box-height bucket) -> count
+        self._funnel_px: dict[tuple[str, str, str], int] = defaultdict(int)
+        # (camera_id, outcome, frame-position bucket) -> count
+        self._funnel_pos: dict[tuple[str, str, str], int] = defaultdict(int)
 
     # -- write side (called from the pipeline) -------------------------------
     def record_decision(
@@ -112,6 +164,44 @@ class PipelineMetrics:
         with self._lock:
             self._attendance[(str(camera_id), str(action or "unknown"))] += 1
 
+    def record_detection(
+        self,
+        camera_id,
+        outcome: str,
+        box_height_px: float | None = None,
+        centroid_y_frac: float | None = None,
+    ) -> None:
+        """One raw YOLO detection and what became of it.
+
+        This is the measurement the September investigation could not make. Two
+        of the three ways a person is lost before tracking were bare `continue`
+        statements with no log and no counter, so "the detector never saw them"
+        and "we threw them away" were indistinguishable from outside — and they
+        need opposite fixes.
+
+        `outcome` must be one of FUNNEL_OUTCOMES; they are exhaustive and
+        mutually exclusive, so the counts sum to the detection total and the
+        funnel balances. `box_height_px` and `centroid_y_frac` are optional so
+        a caller that cannot compute them still records the outcome.
+
+        Records only. Nothing here changes what the pipeline does with the
+        detection.
+        """
+        camera = str(camera_id)
+        key = str(outcome or "unknown")
+        with self._lock:
+            self._funnel[(camera, key)] += 1
+            if box_height_px is not None:
+                try:
+                    self._funnel_px[(camera, key, _box_bucket(float(box_height_px)))] += 1
+                except (TypeError, ValueError):
+                    pass
+            if centroid_y_frac is not None:
+                try:
+                    self._funnel_pos[(camera, key, _pos_bucket(float(centroid_y_frac)))] += 1
+                except (TypeError, ValueError):
+                    pass
+
     # -- read side (called from the metrics endpoint) ------------------------
     def snapshot(self) -> dict:
         """Current counts, grouped per camera. Cheap; safe to call anytime."""
@@ -119,6 +209,9 @@ class PipelineMetrics:
             decisions = dict(self._decisions)
             face_px = dict(self._face_px)
             attendance = dict(self._attendance)
+            funnel = dict(self._funnel)
+            funnel_px = dict(self._funnel_px)
+            funnel_pos = dict(self._funnel_pos)
 
         return {
             "decisions": _group(decisions),
@@ -127,6 +220,13 @@ class PipelineMetrics:
             "face_px_total": _totals(face_px, order=_FACE_PX_LABELS),
             "attendance_writes": _group(attendance),
             "attendance_writes_total": _totals(attendance),
+            # Detection funnel: what happened to every box YOLO emitted.
+            # `detection_funnel_total.detections` is the sum of the outcomes, so
+            # a mismatch means a code path is not reporting itself.
+            "detection_funnel": _group(funnel, order=FUNNEL_OUTCOMES),
+            "detection_funnel_total": _funnel_totals(funnel),
+            "detection_box_px": _group3(funnel_px, order=_BOX_PX_LABELS),
+            "detection_position": _group3(funnel_pos, order=_POS_LABELS),
         }
 
     def reset(self) -> None:
@@ -135,6 +235,9 @@ class PipelineMetrics:
             self._decisions.clear()
             self._face_px.clear()
             self._attendance.clear()
+            self._funnel.clear()
+            self._funnel_px.clear()
+            self._funnel_pos.clear()
 
 
 def _group(counts: dict[tuple[str, str], int], order: tuple[str, ...] = ()) -> dict:
@@ -154,6 +257,41 @@ def _totals(counts: dict[tuple[str, str], int], order: tuple[str, ...] = ()) -> 
     for (_camera, key), value in counts.items():
         totals[key] += value
     return _ordered(totals, order)
+
+
+def _group3(counts: dict[tuple[str, str, str], int], order: tuple[str, ...] = ()) -> dict:
+    """{(camera, outcome, bucket): n} -> {camera: {outcome: {bucket: n}}}."""
+    grouped: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(dict))
+    for (camera, outcome, bucket), value in counts.items():
+        grouped[camera][outcome][bucket] = value
+    return {
+        camera: {
+            outcome: _ordered(buckets, order)
+            for outcome, buckets in sorted(outcomes.items())
+        }
+        for camera, outcomes in sorted(grouped.items())
+    }
+
+
+def _funnel_totals(counts: dict[tuple[str, str], int]) -> dict:
+    """Outcome totals across cameras, plus the detection count they sum to.
+
+    `detections` is derived rather than counted separately on purpose: if it
+    ever disagrees with the sum of the outcomes, a code path is dropping a
+    detection without reporting itself, and that is precisely the class of bug
+    this funnel exists to expose.
+    """
+    totals = _totals(counts, order=FUNNEL_OUTCOMES)
+    detections = sum(totals.values())
+    dropped = sum(
+        value for key, value in totals.items() if key.startswith("dropped_")
+    )
+    return {
+        "detections": detections,
+        **totals,
+        "dropped_total": dropped,
+        "dropped_pct": round(100.0 * dropped / detections, 1) if detections else 0.0,
+    }
 
 
 def _ordered(entries: dict[str, int], order: tuple[str, ...]) -> dict:
