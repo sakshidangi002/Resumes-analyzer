@@ -64,3 +64,14 @@ python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.1,<5
 jinja2>=3.1.0
 tomli; python_version < "3.11"
+
+# ── Declared because the code imports them DIRECTLY ────────────────────────
+# backend/api.py imports starlette.concurrency and starlette.responses by name.
+# It comes in with fastapi today; that is not a guarantee it always will.
+starlette>=0.36.0
+
+# Google Sheets export (backend/api.py, frontend/app.py). Optional at runtime —
+# both call sites import inside the function and degrade if absent — but a
+# fresh clone that needs the feature has no way to know what to install.
+gspread>=6.0.0
+oauth2client>=4.1.3
