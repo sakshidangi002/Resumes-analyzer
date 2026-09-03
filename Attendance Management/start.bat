@@ -9,13 +9,16 @@ echo.
 cd /d "%~dp0"
 
 :: --- Check if frontend build exists ---
-if not exist "frontend\dist\index.html" (
+REM Vite writes its build to backend\frontend_build (see frontend\vite.config.ts),
+REM which is also the folder app\main.py serves the SPA from -- check there.
+if not exist "backend\frontend_build\index.html" (
     echo [!] Frontend build not found. Building now...
     echo.
-    cd frontend
-    call npm install
-    call npm run build
-    cd ..
+    call "%~dp0build-frontend.bat" || (
+        echo [ERROR] Frontend build failed. The UI will not load.
+        pause
+        exit /b 1
+    )
     echo.
     echo [OK] Frontend built successfully.
     echo.

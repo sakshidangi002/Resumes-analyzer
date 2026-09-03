@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.types import Scope
 from sqlalchemy.orm import Session
 from app.api.routes import api_router
@@ -627,14 +627,34 @@ app.add_middleware(
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob: https://fastapi.tiangolo.com; "
+        "connect-src 'self' ws: wss: https://cdn.jsdelivr.net; "
+        "font-src 'self' data:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    )
+
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    if request.url.scheme == "https":
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    return response
+    response.headers.setdefault(
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+    )
 
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains"
+        )
+
+    return response
 
 _SENSITIVE_RATE_WINDOW_SECONDS = 60
 _SENSITIVE_RATE_MAX = int(os.getenv("SENSITIVE_RATE_LIMIT_MAX", "30"))
@@ -855,6 +875,14 @@ def _portal_redirect_to_root():
 
 
 # Serve React frontend build (production mode)
+def _is_frontend_build(path: Path) -> bool:
+    """True when `path` looks like a usable Vite build (has an index.html)."""
+    try:
+        return path.is_dir() and (path / "index.html").is_file()
+    except OSError:
+        return False
+
+
 def _get_frontend_dist() -> Path:
     """
     Resolve the built React app folder (Vite `dist/`) in this order:
@@ -869,25 +897,30 @@ def _get_frontend_dist() -> Path:
 
     backend_dir = Path(__file__).resolve().parent.parent
     integrated = backend_dir / "frontend_build"
-    if integrated.exists():
+
+    # A candidate only counts when it actually holds an index.html. A bare
+    # directory (an interrupted build, or a `frontend_build/` left behind by a
+    # cleanup) would otherwise shadow a perfectly good `frontend/dist` and make
+    # every non-API route 500 on a missing file.
+    if _is_frontend_build(integrated):
         return integrated
 
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
         for candidate in (exe_dir / "frontend_build", exe_dir / "frontend" / "dist"):
-            if candidate.is_dir() and (candidate / "index.html").exists():
+            if _is_frontend_build(candidate):
                 return candidate
         return exe_dir / "frontend_build"
 
     legacy = backend_dir.parent / "frontend" / "dist"
-    if legacy.exists():
+    if _is_frontend_build(legacy):
         return legacy
     return integrated
 
 
 FRONTEND_DIST = _get_frontend_dist()
 
-if FRONTEND_DIST.exists():
+if _is_frontend_build(FRONTEND_DIST):
     # Vite build uses /assets for hashed JS/CSS. Incomplete copies sometimes omit this folder.
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.is_dir():
@@ -935,3 +968,36 @@ if FRONTEND_DIST.exists():
     def spa_fallback(full_path: str):
         index = FRONTEND_DIST / "index.html"
         return FileResponse(str(index), headers=_NO_STORE_HEADERS)
+
+else:
+    # No built UI on disk. Without this branch every non-API route (including
+    # "/") falls through to FastAPI's default 404 — the API and /docs answer
+    # fine, so the app looks half-broken with no hint why. Say what is missing
+    # and how to fix it instead.
+    logger.warning(
+        "React frontend build not found at %s - serving build instructions at '/'. "
+        "Run build-frontend.bat (or `npm install && npm run build` in frontend/) "
+        "to build the UI, or set FRONTEND_BUILD_PATH to an existing build.",
+        FRONTEND_DIST,
+    )
+
+    _MISSING_UI_HTML = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>UI not built</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;line-height:1.6">
+<h1>Frontend build not found</h1>
+<p>The API is running, but the React UI has not been built, so there is nothing to serve at this address.</p>
+<p>Expected a Vite build (a folder containing <code>index.html</code>) at:</p>
+<pre style="background:#f4f4f5;padding:.75rem;border-radius:.375rem;overflow-x:auto">{FRONTEND_DIST}</pre>
+<h2>Fix</h2>
+<pre style="background:#f4f4f5;padding:.75rem;border-radius:.375rem;overflow-x:auto">cd "Attendance Management"
+build-frontend.bat</pre>
+<p>Then restart the server. The API docs remain available at <a href="/docs">/docs</a>.</p>
+</body></html>"""
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def missing_frontend(full_path: str):
+        return HTMLResponse(
+            _MISSING_UI_HTML,
+            status_code=503,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
