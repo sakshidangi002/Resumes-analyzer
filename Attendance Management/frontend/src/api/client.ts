@@ -228,6 +228,56 @@ export const attendance = {
     api.get(`/attendance/employee/${employee_id}/history`, { params: { from_date, to_date } }),
 };
 
+/** Reviewing faces the cameras captured but could not name.
+ *
+ *  This is how an employee gets enrolled FROM A CAMERA rather than from an
+ *  uploaded portrait, which is the difference between being recognised at a
+ *  gate and not. Measured on this deployment: the one employee with 15
+ *  camera-57 enrolments was recognised there 7 times in a day, while the
+ *  employee with the most UPLOADED photos (15) was recognised 0 times.
+ */
+export const faceReview = {
+  /** Regroup pending sightings by appearance. Cheap; run it before reviewing. */
+  recluster: (min_cos?: number) =>
+    api.post("/unknown-faces/recluster", null, {
+      params: min_cos != null ? { min_cos } : undefined,
+    }),
+  clusters: (limit = 50) =>
+    api.get("/unknown-faces/clusters", { params: { limit } }),
+  /** The stored crop for one sighting. Blob, because the endpoint needs auth. */
+  crop: (face_id: number) =>
+    api.get(`/unknown-faces/${face_id}/crop`, { responseType: "blob" }),
+  /** Several sightings from one cluster, best-quality first. One sample is not
+   *  enough to identify a person from a doorway crop; across a cluster there is
+   *  usually one frame where they faced the camera. */
+  clusterFaces: (cluster_id: number, limit = 8) =>
+    api.get(`/unknown-faces/clusters/${cluster_id}/faces`, { params: { limit } }),
+  /** Would this assignment be consistent with what that employee looks like?
+   *  Checked BEFORE enrolling: a cluster filed under the wrong person turns
+   *  their gallery into a magnet that matches strangers. */
+  agreement: (cluster_id: number, employee_id: number) =>
+    api.get(`/unknown-faces/clusters/${cluster_id}/agreement`, {
+      params: { employee_id },
+    }),
+  /** Attribute a cluster to an employee and enrol its best faces. */
+  assign: (cluster_id: number, employee_id: number, max_enroll = 5, force = false) =>
+    api.post(`/unknown-faces/clusters/${cluster_id}/assign`, {
+      employee_id,
+      max_enroll,
+      force,
+    }),
+  ignore: (cluster_id: number) =>
+    api.post(`/unknown-faces/clusters/${cluster_id}/ignore`),
+  /** Per-employee gallery health: who is enrolled, and who the matcher ignores. */
+  coverage: () => api.get("/recognition/coverage"),
+  /** Capture ONE face for a named employee from a live camera.
+   *  Poll this while they stand at the gate — each call enrols a frame or says
+   *  why it could not. This is the enrolment that makes a gate work, because
+   *  the gallery ends up holding what THAT camera sees. */
+  enrolFromCamera: (employee_id: number, camera_id: number) =>
+    api.post(`/employees/${employee_id}/enrol-from-camera`, { camera_id }),
+};
+
 export const recognition = {
   recognizeFrame: (file: Blob, threshold?: number, cameraId?: string | null, cameraPurpose?: string | null) => {
     const formData = new FormData();

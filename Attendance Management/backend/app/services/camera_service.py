@@ -54,6 +54,7 @@ from app.services import attendance_gate
 from app.services import bytetrack_engine
 from app.services import camera_profile
 from app.services import face_quality
+from app.services import face_service
 from app.services import person_detector
 from app.services import unknown_faces
 from app.services import unknown_attendance
@@ -243,7 +244,47 @@ _IDENTITY_HOLD_SEC    = float(os.getenv("CCTV_IDENTITY_HOLD_SEC", "2.5"))
 # Motion gate: skip the expensive face/person detection when the frame barely
 # changed (empty doorway). Mean abs-diff below this = "no motion". This keeps
 # CPU free with many cameras and makes detection instant when someone appears.
-_MOTION_THRESHOLD     = float(os.getenv("CCTV_MOTION_THRESHOLD", "3.0"))
+# ── Motion gate ─────────────────────────────────────────────────────────────
+# "How much of the scene changed", as a PERCENTAGE OF PIXELS that moved by more
+# than `_MOTION_PIXEL_DELTA` grey levels.
+#
+# This replaces `mean(absdiff(frame, prev)) < 3.0`, which was wrong in both
+# directions at 1080p because a frame-wide MEAN divides a person's signal by how
+# small they are in the frame.
+#
+# MEASURED on the 253 real person crops these cameras captured (see the
+# unknown-face review queue), each replayed as a person moving half a body width:
+#
+#                       people suppressed      static scene fires?
+#     mean >= 3.0             48%              YES on +/-8 sensor noise (4.24)
+#     (the old rule)                           YES on a global +6 brightness (6.00)
+#     %changed >= 0.15%        6%              no  (0.000% on every static case)
+#
+# Broken down by how far away the person is, the old rule suppressed
+# **100%** of everyone under 300px tall — and camera 57's MEDIAN person is 243px.
+# So the entrance camera was skipping detection entirely until somebody was
+# already close, which is exactly the window in which a crossing is nearly over.
+#
+# The new metric is scale-invariant (a person is a fixed share of the frame
+# however large the frame is) and immune to global brightness change, which is
+# what a lighting shift or auto-exposure step looks like. Headroom against the
+# worst static scene measured is ~150,000x, so it is not near the noise floor.
+_MOTION_PIXEL_DELTA = float(os.getenv("CCTV_MOTION_PIXEL_DELTA", "25"))
+_MOTION_CHANGED_PCT = float(os.getenv("CCTV_MOTION_CHANGED_PCT", "0.15"))
+
+# Retained only to warn: the old variable is in deployed .env files and means a
+# completely different quantity now. Silently reinterpreting "3" as "3% of the
+# frame must change" would suppress essentially every person.
+_LEGACY_MOTION_THRESHOLD = os.getenv("CCTV_MOTION_THRESHOLD")
+if _LEGACY_MOTION_THRESHOLD is not None:
+    logger.warning(
+        "CCTV_MOTION_THRESHOLD=%s is IGNORED. The motion gate now measures the "
+        "percentage of pixels that changed, not the frame-wide mean difference "
+        "(the mean suppressed 100%% of people under 300px at 1080p). Tune "
+        "CCTV_MOTION_CHANGED_PCT (currently %.3f%%) instead, and remove the old "
+        "variable.",
+        _LEGACY_MOTION_THRESHOLD, _MOTION_CHANGED_PCT,
+    )
 
 # How long a MONITOR camera may coast on a static scene before it re-analyses
 # anyway, even with no motion. Bounds the staleness of a coasted count: a room
@@ -265,6 +306,30 @@ _PERSON_TRACKING      = os.getenv("CCTV_PERSON_TRACKING", "").lower() in {"1", "
 # cameras stay on the fast face-only path.
 _MONITOR_PERSON_TRACKING = os.getenv("CCTV_MONITOR_PERSON_TRACKING", "true").lower() in {"1", "true", "yes"}
 _PERSON_REVERIFY_SEC  = float(os.getenv("CCTV_PERSON_REVERIFY_SEC", "5.0"))
+# How long an unconfirmed doorway track survives a missed detection pass. Acts
+# as a FLOOR — bytetrack_engine scales it up to ~1.5x the pass interval the
+# camera is actually achieving, and caps it. Set 0 to restore the old
+# delete-on-first-miss behaviour.
+_DOORWAY_PROVISIONAL_GRACE_SEC = float(
+    os.getenv("CCTV_DOORWAY_PROVISIONAL_GRACE_SEC", "2.0")
+)
+# How often an IDLE camera still reports a PASS line, so "this camera is alive
+# and seeing nobody" stays distinguishable from "this camera stopped".
+_PASS_HEARTBEAT_SEC = float(os.getenv("CCTV_PASS_HEARTBEAT_SEC", "30.0"))
+# How often the shared YOLO gate reports its own queueing statistics.
+_GATE_STATS_EVERY_SEC = float(os.getenv("CCTV_GATE_STATS_EVERY_SEC", "60.0"))
+_GATE_STATS_TS = 0.0
+# Longest an IN/OUT camera may skip analysis because nothing moved. A person
+# standing at a gate produces no frame-to-frame change, so pure motion gating
+# makes them invisible; this bounds that. Rooms are unaffected — they coast
+# deliberately, and a seated person there is already tracked.
+_MAX_IDLE_SKIP_SEC = float(os.getenv("CCTV_MAX_IDLE_SKIP_SEC", "2.0"))
+# The same limit once the gate has seen nobody for a while. An empty corridor
+# does not need checking three times a second, and the inference it frees is
+# what keeps the room cameras' overlay current.
+_MAX_IDLE_SKIP_QUIET_SEC = float(os.getenv("CCTV_MAX_IDLE_SKIP_QUIET_SEC", "8.0"))
+# How long after seeing somebody a gate stays on the fast 2s poll.
+_GATE_QUIET_AFTER_SEC = float(os.getenv("CCTV_GATE_QUIET_AFTER_SEC", "25.0"))
 # Detection floor handed to YOLO. Deliberately LOW: ByteTrack's second-stage
 # association needs low-score boxes to re-attach a seated/occluded person to an
 # existing track. Track CREATION precision is guarded by `new_track_thresh` in
@@ -920,7 +985,10 @@ def _face_in_person_crop(rgb: np.ndarray, box, profile) -> tuple:
         (crop.shape[1] * scale, crop.shape[0] * scale),
         interpolation=cv2.INTER_CUBIC,
     )
-    faces = extract_faces_from_rgb(up)
+    # Deferred: the caller assesses quality against this camera's profile before
+    # anything looks at the embedding, so paying 660ms for a face that is about
+    # to be rejected is pure waste. See face_service.ensure_embedding.
+    faces = extract_faces_from_rgb(up, defer_embedding=True)
     if not faces:
         return None, None
     # Size/pose/blur are judged by the caller through face_quality, against this
@@ -1017,14 +1085,28 @@ def _log_decision(
     fields = dict(quality.as_log_fields())
     fields.update(decision.as_log_fields())
     fields["reason"] = decision.reason or "allowed"
-    level = logging.INFO if (decision.allowed or matched) else logging.DEBUG
-    logger.log(
-        level,
-        "DECISION camera=%s [%s] track=%s employee=%s(%s) allowed=%s %s",
-        w.camera_id, w.camera_purpose, track_id,
-        face_data.get("employee_name") or "Unknown", employee_id,
-        decision.allowed, fields,
-    )
+    fields["frame_age_ms"] = round(float(getattr(w.state, "frame_age_ms", 0.0) or 0.0), 1)
+
+    # INFO, not DEBUG.
+    #
+    # This line is the entire answer to "why was this person not marked?", and it
+    # was being thrown away: production runs at INFO, non-allowed decisions
+    # logged at DEBUG, and a 37MB production log therefore contained ZERO
+    # rejection reasons. The gate was built to be greppable into a distribution
+    # and nothing could grep it.
+    #
+    # Spam is controlled by CHANGE, not by level. A track re-evaluated every pass
+    # while a person walks through produces one line per distinct outcome, not
+    # one per pass, so a settled `already_marked` track stays quiet.
+    key = (track_id, fields["reason"], bool(decision.allowed))
+    if getattr(w, "_last_decision_key", None) != key:
+        w._last_decision_key = key
+        logger.info(
+            "DECISION camera=%s [%s] track=%s employee=%s(%s) allowed=%s %s",
+            w.camera_id, w.camera_purpose, track_id,
+            face_data.get("employee_name") or "Unknown", employee_id,
+            decision.allowed, fields,
+        )
 
 
 def _mark_from_track(
@@ -1603,11 +1685,25 @@ class _RecognitionThread(threading.Thread):
         from app.services.recognition import recognize_face
         from app.services.recognition import extract_faces_from_rgb
 
+        # ── Per-stage timing ────────────────────────────────────────────────
+        # Every number that decides whether this pipeline keeps up, measured on
+        # the pass that actually ran. Latency work was previously guesswork
+        # because only YOLO reported itself (bytetrack_engine's PERF line) and
+        # everything after it was invisible, so "the doorway cycle is 4.75s"
+        # could not be split into the parts a fix would target.
+        # `time.monotonic` throughout: wall clock jumps across a host suspend,
+        # and that is exactly what produced the phantom "3360s cycle" on camera
+        # 60 that looked like a deadlock and was really the machine sleeping.
+        _t = {}
+        _pass_t0 = time.monotonic()
+
         # 1. Detect & track whole bodies. YOLO11+ByteTrack when available (best
         #    for crossing paths); else MobileNet-SSD detections + IoU tracker.
         #    (The engine logs detections / track ids itself, on change only.)
+        _t0 = time.monotonic()
         if w.bytetrack_engine is not None:
             ptracks = w.bytetrack_engine.update(frame)
+            _t["person_detect_track_ms"] = (time.monotonic() - _t0) * 1000.0
         else:
             # OpenCV can execute the configured YOLO ONNX model even when the
             # optional Ultralytics package is unavailable. Monitor cameras use
@@ -1627,6 +1723,7 @@ class _RecognitionThread(threading.Thread):
                 model_path=(_monitor_model or None),
             )
             ptracks = w.person_tracker.update(persons)
+            _t["person_detect_track_ms"] = (time.monotonic() - _t0) * 1000.0
 
         # 1b. PUBLISH THE BODIES NOW, BEFORE THE FACE STAGE.
         #
@@ -1652,6 +1749,10 @@ class _RecognitionThread(threading.Thread):
         # block no longer stamps it -- two stamps for one pass would advance the
         # occupancy state machine twice on one observation, which is the bug
         # that was fixed in v1_bridge, reintroduced one layer down.
+        if ptracks:
+            # Drives the idle-poll backoff above: a gate stays alert for a while
+            # after seeing somebody, then goes quiet.
+            self._last_person_ts = time.monotonic()
         w.state.active_tracks = len(ptracks)
         with w._frame_lock:
             w._latest_tracks = list(ptracks)
@@ -1659,7 +1760,35 @@ class _RecognitionThread(threading.Thread):
 
         # 2. Detect faces (with embeddings) once on the full frame. Skipped when the
         #    frame is too blurry to recognise anyone reliably.
-        faces = [] if skip_faces else extract_faces_from_rgb(rgb)
+        # Embeddings are deferred until a face has cleared the quality gate
+        # below. MEASURED: 660ms per face on this box, and a room camera rejects
+        # most of the faces it detects (16px, downward profile), so this is the
+        # difference between paying for four faces and paying for the one that
+        # will actually be matched. Rejection outcomes are unchanged — the
+        # quality gate never reads the embedding.
+        # No body, no point. In THIS pipeline a detected face reaches recognition
+        # only by being assigned to a person track (_assign_faces_to_tracks); with
+        # no tracks the mapping is empty, the per-track loop never runs, and every
+        # face found here is discarded microseconds later.
+        #
+        # MEASURED on 2026-09-02: full-frame SCRFD costs 859-961ms per pass, and
+        # 73% of camera 57's passes and 52% of camera 58's had NO person track.
+        # That is ~2.5 minutes of inference a day, per camera, spent finding faces
+        # nothing could use — while the doorway it belongs to was queueing 1.1-1.8s
+        # for the very resource it was wasting.
+        #
+        # It also explains a confusing log signature seen all day:
+        # `tracks=0 faces=1`, over and over, on an empty corridor — SCRFD kept
+        # re-finding the same framed photograph on the entrance wall.
+        #
+        # NOT applied to the face-only pipeline in run(): there a face IS the
+        # tracking unit, so skipping detection would blind it completely.
+        _t0 = time.monotonic()
+        if skip_faces or not ptracks:
+            faces = []
+        else:
+            faces = extract_faces_from_rgb(rgb, defer_embedding=True)
+        _t["face_detect_ms"] = (time.monotonic() - _t0) * 1000.0
 
         # Log the stage counts only when they CHANGE (a static room would otherwise
         # log identical lines every analysis tick).
@@ -1692,6 +1821,14 @@ class _RecognitionThread(threading.Thread):
         face_confirmed: list = []   # tracks whose identity came from a FACE this tick
         for pt in ptracks:
             fresh = pt.consecutive_misses == 0
+            # Why a pass with a face AND a track can still skip recognition.
+            # Without these three counters that question needed a debugger:
+            # `fresh` (was this track actually re-detected, or is its box being
+            # coasted?), whether the full-frame face landed inside this track's
+            # box, and whether the recognition throttle let it through at all.
+            _t["fresh_n"] = _t.get("fresh_n", 0) + (1 if fresh else 0)
+            if face_by_track.get(pt.track_id) is not None:
+                _t["face_assigned_n"] = _t.get("face_assigned_n", 0) + 1
 
             # (a) Bind identity: recognise a face inside this body when the track
             #     is still unknown or a periodic re-verify is due.
@@ -1699,7 +1836,30 @@ class _RecognitionThread(threading.Thread):
             # N observations is allowed to collect them. Zero for MONITOR
             # cameras, which never mark attendance and keep the cheap throttle.
             _needed = profile.min_observations if profile.marks_attendance else 0
-            if fresh and pt.needs_recognition(_PERSON_REVERIFY_SEC, _needed):
+
+            # A track whose attendance is already written has nothing left to
+            # decide, so re-reading its face costs the most expensive resource
+            # in the system for no outcome. `attendance_gate` returns
+            # `already_marked` for it either way.
+            #
+            # This mattered more than a plain throttle because of the
+            # `_strong_single` path: a track marked on ONE unambiguous look has
+            # accepted=1, which is below min_observations, so
+            # needs_recognition() returned True on EVERY pass for the rest of
+            # that person's time in frame — full detection, embedding and
+            # matching, repeatedly, on the highest-priority camera.
+            #
+            # `_POST_MARK_REVERIFY_SEC` already existed for exactly this and was
+            # only ever wired into the face-only branch; the body-tracking path
+            # every camera actually runs never consulted it.
+            _settled = (
+                getattr(pt, "attendance_marked", False)
+                and (time.time() - float(getattr(pt, "last_recognition_time", 0.0) or 0.0))
+                < _POST_MARK_REVERIFY_SEC
+            )
+            _wants = pt.needs_recognition(_PERSON_REVERIFY_SEC, _needed)
+            _t["wants_recog_n"] = _t.get("wants_recog_n", 0) + (1 if _wants else 0)
+            if fresh and not _settled and _wants:
                 face = face_by_track.get(pt.track_id)
                 face_scale = 1.0
                 face_image = rgb          # the image `face`'s box refers to
@@ -1707,7 +1867,11 @@ class _RecognitionThread(threading.Thread):
                 # them. On a ceiling camera the face is far too small to detect at
                 # frame scale — this is what makes identification possible at all.
                 if face is None and _FACE_CROP_ENABLED and not skip_faces:
+                    _t0 = time.monotonic()
                     face, face_image = _face_in_person_crop(rgb, pt.box, profile)
+                    _t["face_crop_ms"] = _t.get("face_crop_ms", 0.0) + (
+                        time.monotonic() - _t0) * 1000.0
+                    _t["face_crop_n"] = _t.get("face_crop_n", 0) + 1
                     if face is not None:
                         # Coordinates (and therefore the measured width) are in
                         # the upscaled crop, not the frame.
@@ -1719,17 +1883,40 @@ class _RecognitionThread(threading.Thread):
                 # and a profile embedding is what lands on an arbitrary employee.
                 quality = None
                 if face is not None:
+                    _t0 = time.monotonic()
                     quality = face_quality.assess(
                         face, face_image, limits=profile.limits, scale=face_scale,
                     )
+                    _t["face_quality_ms"] = _t.get("face_quality_ms", 0.0) + (
+                        time.monotonic() - _t0) * 1000.0
                     if not quality.ok:
                         # The full-frame detector can find a 16px face but the
-                        # quality gate quite correctly rejects it. Retry only
-                        # the size failure on an upscaled head crop; this adds
-                        # pixels for SCRFD without weakening the payroll
-                        # threshold, margin, pose, or blur rules.
+                        # quality gate quite correctly rejects it. Retry the
+                        # PIXEL-STARVED failures on an upscaled head crop; this
+                        # adds pixels for SCRFD without weakening the payroll
+                        # threshold, margin, pose, or blur rules — the crop is
+                        # re-judged against exactly the same bar.
+                        #
+                        # `low_det_score` was added after the gate cameras were
+                        # measured. On 2026-09-02 the quality gate accepted 0 of
+                        # 11 faces at the doorways, and the single commonest
+                        # reason was low_det_score (5) — SCRFD finding a face it
+                        # is not confident about, because at 34-41px there is
+                        # barely anything to be confident about. That is the
+                        # failure MORE PIXELS actually fixes, and the engine's
+                        # own diagnostic says so ("this camera needs more PIXELS
+                        # on them, not a lower bar"). The retry never fired for
+                        # it, because the reason was never `face_too_small`:
+                        # the faces cleared the 28px floor and then failed on
+                        # confidence instead.
+                        #
+                        # Deliberately NOT retried: pose_yaw / pose_pitch /
+                        # landmark_asym. Upscaling a head that is genuinely
+                        # turned away produces a bigger picture of the same
+                        # turned head, so a retry there would only burn ~314ms
+                        # to reach the same verdict.
                         if (
-                            quality.reason == "face_too_small"
+                            quality.reason in ("face_too_small", "low_det_score")
                             and _FACE_CROP_ENABLED
                             and not skip_faces
                             and face_scale == 1.0
@@ -1749,12 +1936,38 @@ class _RecognitionThread(threading.Thread):
                                     face_scale = float(profile.face_crop_scale)
                                     quality = cropped_quality
                         if not quality.ok:
+                            # Counted rather than logged per frame. Per-frame
+                            # QUALITY lines at INFO would bury the log, but at
+                            # DEBUG they were invisible in production -- so the
+                            # reason a camera never identifies anybody could not
+                            # be established either way. The rolling summary
+                            # emitted by _log_quality_summary gives the
+                            # distribution, which is what tuning actually needs.
+                            w.note_quality_reject(quality.reason)
                             logger.debug(
                                 "QUALITY camera=%s track=%d rejected=%s %s",
                                 w.camera_id, pt.track_id, quality.reason,
                                 quality.as_log_fields(),
                             )
                             face = None
+                        else:
+                            w.note_quality_accept()
+
+                _t0 = time.monotonic()
+                _embedded = face is not None and face_service.ensure_embedding(face)
+                if face is not None:
+                    _t["embedding_ms"] = _t.get("embedding_ms", 0.0) + (
+                        time.monotonic() - _t0) * 1000.0
+                    _t["embedding_n"] = _t.get("embedding_n", 0) + 1
+                if face is not None and not _embedded:
+                    # Deferred embedding failed (a torch/model error, never a
+                    # quality decision). Treat it as no usable face rather than
+                    # letting a None embedding reach the fuser.
+                    logger.warning(
+                        "camera=%s track=%s embedding unavailable — face dropped",
+                        w.camera_id, pt.track_id,
+                    )
+                    face = None
 
                 if face is not None:
                     # Fuse across every face seen on this body track before
@@ -1766,10 +1979,13 @@ class _RecognitionThread(threading.Thread):
                     match_face = face
                     accepted = True
                     if _EMBEDDING_FUSION:
+                        _t0 = time.monotonic()
                         accepted = pt.add_observation(
                             face.get("embedding"), quality=quality.score,
                         )
                         fused = pt.fused_embedding()
+                        _t["fusion_ms"] = _t.get("fusion_ms", 0.0) + (
+                            time.monotonic() - _t0) * 1000.0
                         if fused is not None:
                             match_face = dict(face)
                             match_face["embedding"] = fused
@@ -1786,11 +2002,14 @@ class _RecognitionThread(threading.Thread):
                             pt.fuser.accepted, pt.fuser.rejected,
                         )
                     else:
+                        _t0 = time.monotonic()
                         result = recognize_face(
                             match_face, threshold=profile.threshold, source="cctv",
                             camera_id=str(w.camera_id), camera_purpose=w.camera_purpose,
                             mark_attendance=False, min_margin=profile.margin,
                         )
+                        _t["matching_ms"] = _t.get("matching_ms", 0.0) + (
+                            time.monotonic() - _t0) * 1000.0
                         fd = (result.get("faces") or [{}])[0]
                         _prev_emp = pt.employee_id
                         _emp = fd.get("employee_id") if fd.get("matched") else None
@@ -1822,6 +2041,7 @@ class _RecognitionThread(threading.Thread):
 
                         # ── Attendance decision ─────────────────────────────
                         if profile.marks_attendance:
+                            _t0 = time.monotonic()
                             decision = attendance_gate.evaluate(
                                 pt,
                                 employee_id=_emp,
@@ -1830,6 +2050,8 @@ class _RecognitionThread(threading.Thread):
                                 margin=float(fd.get("margin") or 0.0),
                                 profile=profile,
                             )
+                            _t["attendance_gate_ms"] = _t.get("attendance_gate_ms", 0.0) + (
+                                time.monotonic() - _t0) * 1000.0
                             _log_decision(
                                 w, pt.track_id, fd, quality, decision,
                                 _emp, bool(fd.get("matched")),
@@ -1986,6 +2208,69 @@ class _RecognitionThread(threading.Thread):
         if w.state.recognition_status == "analyzing":
             w.state.recognition_status = "recognized" if any_match else ("idle" if not ptracks else "analyzing")
 
+        # ── One structured line per analysis pass ───────────────────────────
+        # Wall-clock latency AND the counts needed to read it. A 900ms pass with
+        # 0 persons and a 900ms pass with 4 persons and 3 faces mean completely
+        # different things, so the counts travel with the timings or the timings
+        # cannot be interpreted.
+        _total_ms = (time.monotonic() - _pass_t0) * 1000.0
+        _yolo = bytetrack_engine.last_perf(w.camera_id)
+        _prov = sum(
+            1 for t in ptracks if getattr(t, "provisional", False)
+        )
+        # Every pass that SAW something is worth a line — that is the population
+        # you tune against. An empty corridor is not, so it gets a heartbeat
+        # instead of a line every second, which is the difference between a
+        # useful log and one nobody can grep.
+        _interesting = bool(ptracks) or bool(faces)
+        _since_beat = time.monotonic() - getattr(self, "_pass_beat_ts", 0.0)
+        if _interesting or _since_beat >= _PASS_HEARTBEAT_SEC:
+            if not _interesting:
+                self._pass_beat_ts = time.monotonic()
+            logger.info(
+                "PASS camera=%s role=%s total=%.0fms frame_age=%.0fms "
+                "track_stage=%.0fms yolo=%.0fms yolo_wait=%.0fms "
+                "face_detect=%.0fms face_crop=%.0fms(n=%d) "
+                "quality=%.0fms embed=%.0fms(n=%d) fuse=%.0fms match=%.0fms gate=%.0fms "
+                "tracks=%d fresh=%d face_assigned=%d wants_recog=%d "
+                "provisional=%d faces=%d recognized=%d",
+                w.camera_id, w.camera_purpose, _total_ms,
+                float(getattr(w.state, "frame_age_ms", 0.0) or 0.0),
+                # The WHOLE body stage, not just the inference inside it.
+                # `yolo` below is the engine's own inference timer; the gap
+                # between them is tracker bookkeeping plus the optional
+                # crop-assist SECOND inference, and on camera 59 that gap was
+                # 10.5s a pass with nothing naming it.
+                _t.get("person_detect_track_ms", 0.0),
+                float(_yolo.get("last_ms", 0.0) or 0.0),
+                float(_yolo.get("wait_ms", 0.0) or 0.0),
+                _t.get("face_detect_ms", 0.0),
+                _t.get("face_crop_ms", 0.0), int(_t.get("face_crop_n", 0)),
+                _t.get("face_quality_ms", 0.0),
+                _t.get("embedding_ms", 0.0), int(_t.get("embedding_n", 0)),
+                _t.get("fusion_ms", 0.0),
+                _t.get("matching_ms", 0.0),
+                _t.get("attendance_gate_ms", 0.0),
+                len(ptracks), int(_t.get("fresh_n", 0)),
+                int(_t.get("face_assigned_n", 0)), int(_t.get("wants_recog_n", 0)),
+                _prov, len(faces),
+                sum(1 for t in ptracks if getattr(t, "matched", False)),
+            )
+        w.log_quality_summary()
+
+        # Queueing statistics for the shared YOLO gate, once a minute from
+        # whichever camera gets there first. `high_avg_wait_ms` is the number
+        # that matters: if it is not near zero, attendance cameras are still
+        # queueing behind cameras that cannot mark attendance, and
+        # YOLO_LOW_PRIORITY_MAX_WAIT is the knob.
+        global _GATE_STATS_TS
+        if time.monotonic() - _GATE_STATS_TS >= _GATE_STATS_EVERY_SEC:
+            _GATE_STATS_TS = time.monotonic()
+            try:
+                logger.info("YOLO-GATE %s", bytetrack_engine.gate_stats())
+            except Exception:
+                logger.debug("gate stats unavailable", exc_info=True)
+
     def run(self) -> None:
         w = self._w
         # Attendance cameras get priority on the shared inference gate. A person
@@ -2084,18 +2369,83 @@ class _RecognitionThread(threading.Thread):
                 # Coasting is bounded by _MONITOR_COAST_SEC so a stale count
                 # cannot persist indefinitely.
                 static = False
+                motion_pct = 0.0
                 if self._prev_gray is not None and self._prev_gray.shape == gray.shape:
-                    motion = float(np.mean(cv2.absdiff(gray, self._prev_gray)))
-                    static = motion < _MOTION_THRESHOLD
+                    _diff = cv2.absdiff(gray, self._prev_gray)
+                    # Share of the frame that MOVED, not the average of how much
+                    # every pixel moved -- see _MOTION_CHANGED_PCT.
+                    motion_pct = (
+                        float(np.count_nonzero(_diff > _MOTION_PIXEL_DELTA))
+                        / float(_diff.size) * 100.0
+                    )
+                    static = motion_pct < _MOTION_CHANGED_PCT
                 self._prev_gray = gray
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # A motion gate detects MOVEMENT, not PRESENCE, and those are
+                # different questions at a gate.
+                #
+                # Frame-to-frame difference goes to ~zero for somebody STANDING
+                # STILL. Observed live on 2026-09-02: a person stood at the Exit
+                # camera for about a minute and the camera ran YOLO only every
+                # 7-30s, minting a NEW provisional track id each time
+                # (1000000, 1000001, 1000002, 130, 1000003) because the track
+                # expired in the gaps. Evidence lives on the track, so an
+                # identity can never accumulate across that churn.
+                #
+                # Worse, the doorway branch below CLEARS tracks when it skips.
+                # Once active_tracks reaches 0, a motionless person cannot
+                # restart detection by standing there — only by moving again.
+                # Somebody waiting at the gate is exactly who must be analysed.
+                #
+                # So an attendance camera may skip, but never for long. On an
+                # empty corridor this costs one YOLO pass every few seconds,
+                # which is what it cost before the motion gate existed.
+                # ...but back off once the corridor has been empty for a while.
+                #
+                # Polling every 2s exists for ONE case: somebody standing at the
+                # gate, motionless, whose track has expired. That case is only
+                # possible if a person was recently there. On a genuinely empty
+                # corridor it is pure cost — and MEASURED on 2026-09-02, 54% of
+                # camera 57's passes and 58% of camera 58's had nobody in them.
+                #
+                # Two gates each burning a 1.5s YOLO pass every 2s on an empty
+                # corridor consumed most of the single inference slot, and the
+                # room cameras paid: their cycle went 19.1s -> 28.7s and 10.0s
+                # -> 15.9s, so a person's box in the room refreshed once every
+                # half minute. That was this fix starving them, not the rooms
+                # being deprioritised on purpose.
+                #
+                # Motion still wakes a gate INSTANTLY — this only governs the
+                # forced pass when there is no motion at all.
+                _seen_recently = (
+                    time.monotonic() - getattr(self, "_last_person_ts", 0.0)
+                ) < _GATE_QUIET_AFTER_SEC
+                _idle_limit = (
+                    _MAX_IDLE_SKIP_SEC if _seen_recently else _MAX_IDLE_SKIP_QUIET_SEC
+                )
+                _idle_for = time.monotonic() - getattr(self, "_last_forced_ts", 0.0)
+                if static and not w.is_monitor and _idle_for >= _idle_limit:
+                    static = False
+                    self._last_forced_ts = time.monotonic()
+                    logger.debug(
+                        "Camera %s: forcing a pass after %.1fs of no motion "
+                        "(a stationary person is still a person)",
+                        w.camera_id, _idle_for,
+                    )
+                elif not static:
+                    self._last_forced_ts = time.monotonic()
 
                 if static and not w.is_monitor and w.state.active_tracks == 0:
                     # Empty, static doorway → nothing to do; skip detection.
                     if not self._motion_logged:
                         self._motion_logged = True
-                        logger.info("Camera %s: idle scene — detection paused (no motion)", w.camera_id)
+                        logger.info(
+                            "Camera %s: idle scene — detection paused "
+                            "(changed=%.3f%% < %.3f%%)",
+                            w.camera_id, motion_pct, _MOTION_CHANGED_PCT,
+                        )
                     with w._frame_lock:
                         w._latest_tracks = []
                     w.state.recognition_status = "idle"
@@ -2533,6 +2883,14 @@ class CameraWorker:
         self.entry_direction = (entry_direction or "down").lower()
 
         self.state = CameraRuntimeState()
+        # Quality-gate diagnostics, summarised periodically rather than logged
+        # per frame — see log_quality_summary().
+        self._quality_rejects: dict[str, int] = {}
+        self._quality_accepts: int = 0
+        self._quality_logged_ts: float = time.time()
+        # Last (track, reason, allowed) triple logged, so a settled decision is
+        # not repeated every pass — see _log_decision.
+        self._last_decision_key = None
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         # time.time() when _latest_frame was decoded. Lets the display thread
@@ -2637,6 +2995,15 @@ class CameraWorker:
                         bytetrack_engine._STEEP_ADOPT_UNTRACKED_MIN_CONF
                         if steep else None
                     ),
+                    # IN/OUT only. A doorway person is missed on the very next
+                    # pass routinely (they crossed in ~2s, the pass rate is
+                    # slower), and deleting their provisional track resets the
+                    # evidence attendance needs. MONITOR cameras keep 0: they
+                    # never mark attendance, so a track dying early costs a
+                    # label, and a lingering ghost box costs occupancy accuracy.
+                    provisional_grace_sec=(
+                        0.0 if self.is_monitor else _DOORWAY_PROVISIONAL_GRACE_SEC
+                    ),
                 )
                 self.use_person_tracking = True
                 logger.info(
@@ -2661,6 +3028,39 @@ class CameraWorker:
         self._display_thread: Optional[_DisplayThread] = None
 
     # ── capture pacing ──────────────────────────────────────────────────────
+    # ── quality / stage diagnostics ─────────────────────────────────────────
+    def note_quality_reject(self, reason: str) -> None:
+        """Count one face rejected by the quality gate, by reason."""
+        self._quality_rejects[reason] = self._quality_rejects.get(reason, 0) + 1
+
+    def note_quality_accept(self) -> None:
+        self._quality_accepts += 1
+
+    def log_quality_summary(self, period: float = 60.0) -> None:
+        """Emit the rejection distribution once per `period`, then reset.
+
+        A distribution is what tunes a camera profile -- "38 faces rejected on
+        camera 57, 35 of them face_too_small" says raise the zoom or move the
+        camera, and no per-frame line says that as clearly.
+        """
+        now = time.time()
+        if now - self._quality_logged_ts < period:
+            return
+        self._quality_logged_ts = now
+        if not self._quality_rejects and not self._quality_accepts:
+            return
+        total = self._quality_accepts + sum(self._quality_rejects.values())
+        logger.info(
+            "QUALITY-SUMMARY camera=%s [%s] window=%.0fs faces=%d accepted=%d "
+            "rejected=%d by_reason=%s",
+            self.camera_id, self.camera_purpose, period, total,
+            self._quality_accepts, sum(self._quality_rejects.values()),
+            dict(sorted(self._quality_rejects.items(),
+                        key=lambda kv: -kv[1])),
+        )
+        self._quality_rejects = {}
+        self._quality_accepts = 0
+
     def retrieve_period(self) -> float:
         """Minimum seconds between DECODED frames for this camera.
 

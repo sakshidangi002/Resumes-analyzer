@@ -118,6 +118,22 @@ def list_unknown_clusters(
     return {"clusters": unknown_faces.list_clusters(limit=limit)}
 
 
+@router.get("/unknown-faces/clusters/{cluster_id}/faces")
+def list_cluster_faces(
+    cluster_id: int,
+    limit: int = Query(default=8, ge=1, le=24),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Several sightings from one cluster, best-quality first.
+
+    One sample per cluster is not enough to identify anybody: these are doorway
+    person-crops, and the median is small enough that the face inside is 15-20
+    pixels. Over a whole cluster there is usually one frame where the person
+    faced the camera, and that is the one a reviewer needs to see.
+    """
+    return {"faces": unknown_faces.list_cluster_faces(cluster_id, limit=limit)}
+
+
 @router.get("/unknown-faces/{face_id}/crop")
 def get_unknown_face_crop(
     face_id: int,
@@ -145,6 +161,20 @@ class AssignClusterRequest(BaseModel):
         default=5, ge=1, le=10,
         description="How many of the cluster's best faces to add to the gallery",
     )
+    force: bool = Field(
+        default=False,
+        description="Enrol even if the cluster does not look like this employee",
+    )
+
+
+@router.get("/unknown-faces/clusters/{cluster_id}/agreement")
+def cluster_agreement(
+    cluster_id: int,
+    employee_id: int = Query(..., description="Employee this cluster might belong to"),
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Would this assignment be consistent with what that employee looks like?"""
+    return unknown_faces.cluster_agreement(cluster_id, employee_id)
 
 
 @router.post("/unknown-faces/clusters/{cluster_id}/assign")
@@ -161,6 +191,25 @@ def assign_unknown_cluster(
     mediocre vectors is the condition that produced this system's known
     mislabelling.
     """
+    # Refuse a cluster that does not look like this employee.
+    #
+    # On 2026-09-02 clusters were filed under the wrong person from 54x88px
+    # crops, and one gallery ended up holding three people. Its coherence fell
+    # to 0.248 (a clean gallery is ~0.50) and it then matched 133 of 405
+    # unassigned sightings — the "it detects the wrong person as Seema" report.
+    # A wrong enrolment is far more expensive than a refused one: it is silent,
+    # it persists, and it attributes other people's attendance.
+    agree = unknown_faces.cluster_agreement(cluster_id, payload.employee_id)
+    if agree.get("verdict") == "mismatch" and not payload.force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{agree['detail']} Agreement with their existing faces is "
+                f"{agree['agreement']}. Re-check the pictures; send force=true "
+                f"only if you are certain."
+            ),
+        )
+
     try:
         result = unknown_faces.assign_cluster(
             cluster_id=cluster_id,
@@ -175,6 +224,8 @@ def assign_unknown_cluster(
         "UNKNOWN-FACE cluster=%s assigned to employee=%s by user=%s",
         cluster_id, payload.employee_id, getattr(current_user, "id", None),
     )
+    result["agreement"] = agree.get("agreement")
+    result["agreement_verdict"] = agree.get("verdict")
     return result
 
 

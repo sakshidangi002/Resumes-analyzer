@@ -70,7 +70,94 @@ def _auto_concurrency() -> int:
 
 
 _MAX_CONCURRENT = _auto_concurrency()
-_slots = threading.BoundedSemaphore(_MAX_CONCURRENT)
+
+# Admission to YOLO, PRIORITY-AWARE.
+#
+# This was a bare `threading.BoundedSemaphore`, which has no fairness or
+# priority guarantee at all — the winner was whichever thread the OS happened to
+# wake. That mattered far more than it looked, because YOLO is not a side cost
+# on these cameras, it is essentially the whole cost:
+#
+#   MEASURED on the live system (PERF lines, 25 Aug - 1 Sep, suspends excluded):
+#       camera 57 [IN]  median cycle 4.75s  =  2.40s inside YOLO + 2.10s QUEUEING
+#       camera 58 [OUT] median cycle 3.80s  =  2.03s inside YOLO + 0.76s queueing
+#
+# So the entrance camera spent ~44% of its cycle waiting behind room cameras
+# that can never write attendance. The face pipeline already had a priority gate
+# (services/inference_gate.py) — it was simply applied to the CHEAP stage and
+# not to this one.
+#
+# Priority is ambient, set once per recognition thread by camera_service, so a
+# doorway camera's YOLO call is admitted ahead of a room camera's automatically.
+#
+# What this does NOT do: preempt. A doorway arriving midway through a room
+# camera's 3.3s inference still waits for that pass to finish, so the worst-case
+# wait is one room inference. Making the ROOM model cheaper is what shortens
+# that tail; priority only removes the queue behind it.
+# How long a MONITOR camera may be held back before it is admitted regardless.
+#
+# This is a starvation valve, and at 4.0s it was wide open. MEASURED on
+# 2026-09-02 after priority scheduling was added:
+#
+#     camera 57 [IN]      median cycle 6836ms  =  1546ms YOLO + 3586ms QUEUEING
+#     camera 58 [OUT]     median cycle 7375ms  =  1531ms YOLO + 3797ms queueing
+#     camera 59 [MONITOR] median wait  4813ms
+#     camera 60 [MONITOR] median wait  4766ms
+#
+# The monitors' wait sits just ABOVE the 4.0s valve, which means they were
+# reaching it and being let through ahead of the doorways essentially every
+# pass. Priority was in place and the valve was undoing it: the doorway spent
+# more time queueing (3.6s) than inferring (1.5s), behind cameras that are
+# forbidden from marking attendance.
+#
+# 12s instead. A room camera exists to answer "is this seat occupied", which
+# tolerates a slower refresh; a doorway has about two seconds of a person's
+# time and cannot. Monitor cycles are expected to grow to roughly 20-30s, which
+# the occupancy state machine already coasts through.
+# 12s was too far the other way. MEASURED at each setting on 2026-09-02:
+#
+#              gate wait      room cycle
+#     4.0s      3.6-3.8s      10.0-19.1s   gates starved
+#    12.0s      1.0-1.8s      15.9-28.7s   ROOMS starved — a person's box in the
+#                                          room refreshed once every ~29s
+#
+# 8s splits it, and the real relief comes from the change above: the gates no
+# longer burn the slot polling an empty corridor, so both sides get more.
+_YOLO_LOW_PRIORITY_MAX_WAIT = float(os.getenv("YOLO_LOW_PRIORITY_MAX_WAIT", "8.0"))
+
+# Hard ceiling on the provisional-track grace, however slow a camera gets. A
+# doorway person is gone in seconds; holding their box longer than this would
+# inflate the corridor count and leave a ghost on the overlay.
+_PROVISIONAL_GRACE_MAX_SEC = float(os.getenv("CCTV_PROVISIONAL_GRACE_MAX_SEC", "6.0"))
+_slots = None
+
+
+def _gate():
+    """The process-wide YOLO admission gate (built lazily so settings load first)."""
+    global _slots
+    if _slots is None:
+        from app.services.inference_gate import PriorityInferenceGate
+
+        _slots = PriorityInferenceGate(
+            _MAX_CONCURRENT, low_priority_max_wait=_YOLO_LOW_PRIORITY_MAX_WAIT
+        )
+        logger.info(
+            "YOLO inference gate: slots=%d low_priority_max_wait=%.1fs",
+            _MAX_CONCURRENT, _YOLO_LOW_PRIORITY_MAX_WAIT,
+        )
+    return _slots
+
+
+def _yolo_slot():
+    """Admit one YOLO call at the CALLING THREAD's priority (doorway = high)."""
+    from app.services.inference_gate import is_high_priority
+
+    return _gate().acquire(high_priority=is_high_priority())
+
+
+def gate_stats() -> dict:
+    """Queueing statistics for the YOLO gate — see inference_gate.stats()."""
+    return _gate().stats()
 
 # Minimum box HEIGHT, in pixels, for a detection to be treated as a person.
 #
@@ -259,17 +346,79 @@ def get_perf_stats() -> dict:
         return {k: dict(v) for k, v in _perf.items()}
 
 
+# A queue wait longer than this did not happen inside this process. Nothing in
+# the pipeline can hold the YOLO gate for a minute: the slowest measured
+# inference is ~3.4s and the gate has a starvation override. A "wait" of minutes
+# means the whole PROCESS stopped -- the host suspended -- and wall clock
+# advanced while no thread ran.
+#
+# This is not hypothetical. The production log showed
+#     PERF camera=60 infer=2816ms wait=3357839ms cycle=3360.65s
+# which read as a 56-minute pipeline stall on camera 60 and sent a debugging
+# effort after deadlocks and RTSP hangs. It was the machine sleeping: EVERY
+# thread, all four cameras and apscheduler included, went silent for exactly
+# that window, and the log has ten such gaps (14min, 42min, 56min, 133min, and
+# overnight ones). Folding those into the rolling average also poisoned it --
+# camera 60's mean cycle read 22.3s against a median of 4.0s.
+_IMPLAUSIBLE_WAIT_MS = float(os.getenv("YOLO_IMPLAUSIBLE_WAIT_MS", "60000"))
+
+
 def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
     with _perf_lock:
         d = _perf.setdefault(
-            camera_id, {"calls": 0, "total_ms": 0.0, "last_ms": 0.0, "wait_ms": 0.0}
+            camera_id,
+            {"calls": 0, "total_ms": 0.0, "last_ms": 0.0, "wait_ms": 0.0,
+             "suspensions": 0},
         )
+        if wait_ms > _IMPLAUSIBLE_WAIT_MS:
+            # Report it as what it is, and keep it out of the statistics so the
+            # averages stay usable.
+            d["suspensions"] = d.get("suspensions", 0) + 1
+            logger.warning(
+                "Camera %s: %.0fs gap with no inference — the process was not "
+                "running (host suspend/resume), not a pipeline stall. Excluded "
+                "from latency statistics. Occurrence #%d.",
+                camera_id, wait_ms / 1000.0, d["suspensions"],
+            )
+            wait_ms = 0.0
         d["calls"] += 1
         d["total_ms"] += infer_ms
         d["last_ms"] = infer_ms
         d["wait_ms"] = wait_ms
         d["avg_ms"] = d["total_ms"] / d["calls"]
         return dict(d)
+
+
+def effective_provisional_grace(grace_floor: float, cycle_sec: float) -> float:
+    """How long an unconfirmed track may survive a missed pass, in seconds.
+
+    Scales with the pass rate the camera is ACTUALLY achieving rather than a
+    fixed guess -- the point is to survive ONE missed pass, and the pass
+    interval is the thing that varies (measured 3.8-4.8s on the doorways, and
+    the whole aim of the latency work is to move it). Capped so a stalled
+    camera cannot hold a phantom person on the overlay indefinitely.
+
+    A floor of 0 means "retire on the first miss", the historical behaviour,
+    and is what MONITOR cameras pass.
+    """
+    grace = float(grace_floor or 0.0)
+    if grace <= 0.0:
+        return 0.0
+    return min(max(grace, 1.5 * float(cycle_sec or 0.0)), _PROVISIONAL_GRACE_MAX_SEC)
+
+
+def should_retire_provisional(
+    missed_for: float, grace_floor: float, cycle_sec: float
+) -> bool:
+    """True when an unconfirmed track has been unseen long enough to drop."""
+    grace = effective_provisional_grace(grace_floor, cycle_sec)
+    return grace <= 0.0 or missed_for > grace
+
+
+def last_perf(camera_id: str) -> dict:
+    """Most recent YOLO wait/infer for a camera, for the pass-summary log."""
+    with _perf_lock:
+        return dict(_perf.get(str(camera_id), {}))
 
 
 def _resolve(path: str) -> str | None:
@@ -357,6 +506,7 @@ class ByteTrackEngine:
         tracker_cfg: str | None = None,
         model_path: str | None = None,
         adopt_min_conf: float | None = None,
+        provisional_grace_sec: float = 0.0,
     ):
         s = get_settings()
         # MONITOR cameras may run a lighter/faster model than the IN/OUT
@@ -382,6 +532,11 @@ class ByteTrackEngine:
         # of ten -- see _STEEP_ADOPT_UNTRACKED_MIN_CONF.
         self.adopt_min_conf = (_ADOPT_UNTRACKED_MIN_CONF if adopt_min_conf is None
                                else float(adopt_min_conf))
+        # How long an UNCONFIRMED (provisional) track survives a missed pass.
+        # 0 = delete on the first miss, the historical behaviour and the default.
+        # IN/OUT cameras pass a value because their evidence requirement cannot
+        # otherwise be met at the measured pass rate -- see the retirement block.
+        self.provisional_grace_sec = float(provisional_grace_sec or 0.0)
         self.tracks: dict[int, PersonTrack] = {}
         self._model = None            # own model  ⇒ own predictor ⇒ own ByteTrack state
         self._last_sig: tuple | None = None   # for change-based logging (no spam)
@@ -430,8 +585,7 @@ class ByteTrackEngine:
             return []
 
         try:
-            _slots.acquire()
-            try:
+            with _yolo_slot():
                 result = model.predict(
                     crop,
                     classes=[0],
@@ -440,8 +594,6 @@ class ByteTrackEngine:
                     imgsz=self.imgsz,
                     verbose=False,
                 )[0]
-            finally:
-                _slots.release()
         except Exception:
             logger.exception("Camera %s: supplemental body crop failed", self.camera_id)
             return []
@@ -567,15 +719,14 @@ class ByteTrackEngine:
         # Bounded concurrency: `_slots` admits up to N inferences at once (N=1 is
         # the historical serial behaviour). `wait` is time spent queueing behind
         # other cameras — the number that used to make the overlay stale.
-        _t_wait0 = time.time()
-        _slots.acquire()
-        _wait_ms = (time.time() - _t_wait0) * 1000.0
-        _t_inf0 = time.time()
-        try:
-            results = model.track(frame_bgr, **kwargs)
-        finally:
-            _slots.release()
-        _infer_ms = (time.time() - _t_inf0) * 1000.0
+        _t_wait0 = time.monotonic()
+        with _yolo_slot():
+            _wait_ms = (time.monotonic() - _t_wait0) * 1000.0
+            _t_inf0 = time.monotonic()
+            try:
+                results = model.track(frame_bgr, **kwargs)
+            finally:
+                _infer_ms = (time.monotonic() - _t_inf0) * 1000.0
         stats = _record_perf(self.camera_id, _wait_ms, _infer_ms)
 
         s_perf = get_settings()
@@ -776,17 +927,42 @@ class ByteTrackEngine:
             track = self.tracks[tid]
             track.mark_missed()
 
-            # A provisional track was never confirmed by the tracker. One missed
-            # pass is the whole of its evidence expiring, so it goes now rather
-            # than being coasted.
+            # A provisional track was never confirmed by the tracker.
             #
-            # This is what stops a WALKER accumulating ids. They are somewhere
-            # else on every pass, so they can never be matched to their own held
-            # box by IoU; without this, each pass adopts another id and the count
-            # climbs 1,2,3,4,5 for a single person -- reproduced in
-            # test_track_lifecycle.test_a_walker_does_not_accumulate_ids.
+            # It used to be deleted on its FIRST missed pass, with the reasoning
+            # that one missed pass is the whole of its evidence expiring. That is
+            # right for counting and wrong for identity, and on a doorway the
+            # difference decides whether anybody is ever marked:
+            #
+            #   * evidence -- the fused template, the observation count, the
+            #     identity-agreement counter -- lives ON the track;
+            #   * MEASURED, the doorway cameras run a pass every 3.8-4.8s while a
+            #     person crosses in ~2s, so a walker is routinely missed on the
+            #     very next pass;
+            #   * attendance needs 3 observations on ONE track, so deleting on
+            #     the first miss made that unreachable by construction. 2,783
+            #     provisional tracks in the production log produced 6 allowed
+            #     decisions.
+            #
+            # So a provisional track now gets a SHORT, TIME-BOUNDED grace on
+            # cameras that ask for one. `provisional_grace_sec` is 0 by default,
+            # which is exactly the old delete-immediately behaviour, and
+            # camera_service only sets it for IN/OUT cameras.
+            #
+            # This does NOT keep tracks alive indefinitely: the window is about
+            # one analysis pass, not a coast. And it cannot silently attribute
+            # attendance to the wrong person -- re-association is still spatial
+            # (IoU, else a size-scaled centroid distance), the fuser still
+            # rejects an embedding that disagrees with the template, and
+            # attendance_gate still demands agreeing employee ids, so a bad merge
+            # reads as `unstable_identity` and is refused rather than written.
             if getattr(track, "provisional", False):
-                del self.tracks[tid]
+                if should_retire_provisional(
+                    missed_for=now - track.last_seen,
+                    grace_floor=self.provisional_grace_sec,
+                    cycle_sec=self._cycle_sec,
+                ):
+                    del self.tracks[tid]
                 continue
 
             cx, cy = track.centroid()

@@ -265,7 +265,25 @@ def remote_stat(sftp: paramiko.SFTPClient, remote_path: str) -> tuple[int, float
         return None
 
 
+# Directories already known to exist on the remote, so the second and every
+# later file in a folder costs no round trip at all. A sync of 600 files into
+# 40 folders was issuing thousands of redundant mkdirs.
+_ENSURED_DIRS: set[str] = set()
+
+
 def ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
+    """Create `remote_dir` and its parents, quietly tolerating what is there.
+
+    SFTP has no distinct "already exists" status. Windows OpenSSH answers a
+    mkdir on an existing directory with a bare `Failure`, which is the SAME
+    thing it says for a permission denial or a bad path -- so the old code,
+    which logged every one of them with a full traceback, printed thousands of
+    scary tracebacks during a perfectly healthy sync AND would have buried a
+    genuine failure among them indistinguishably.
+
+    The only way to tell the two apart is to look: if the directory is there
+    afterwards, the mkdir did no harm and there is nothing to report.
+    """
     remote_dir = remote_dir.replace("\\", "/")
     parts = remote_dir.split("/")
     # Handle Windows drive letter C:
@@ -279,10 +297,20 @@ def ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
         if not part:
             continue
         current = f"{current}/{part}" if current else part
+        if current in _ENSURED_DIRS:
+            continue
         try:
             sftp.mkdir(current)
         except OSError:
-            logger.warning("sftp.mkdir failed", exc_info=True)
+            try:
+                sftp.stat(current)          # already there: nothing happened
+            except OSError:
+                logger.warning(
+                    "sftp: could not create remote directory %s", current,
+                    exc_info=True,
+                )
+                continue
+        _ENSURED_DIRS.add(current)
 
 
 def upload_file(

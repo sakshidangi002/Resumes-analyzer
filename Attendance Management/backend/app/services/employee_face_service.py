@@ -109,6 +109,127 @@ async def process_face_uploads(files: list[UploadFile]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Gallery persistence
 # ---------------------------------------------------------------------------
+def capture_enrolment_from_camera(
+    employee_id: int, camera_id: int, min_quality: float | None = None
+) -> dict:
+    """Enrol ONE usable face for this employee from a live camera, right now.
+
+    WHY THIS EXISTS
+    ---------------
+    Enrolment from uploaded portraits does not make a doorway camera recognise
+    anybody. Measured on this deployment: a gate capture scores 0.63-0.75
+    against another gate capture of the same person, and only 0.32-0.54 against
+    that person's uploaded photos, with the match threshold at 0.45. The one
+    employee with 15 camera-enrolled faces was recognised at that camera 7 times
+    in a day; the employee with the MOST uploaded photos was recognised 0 times.
+
+    The unknown-face review queue can also enrol from cameras, but it asks a
+    human to identify a 54x88 px crop and then click through hundreds of small
+    clusters. Here the answer is known before the picture is taken: a named
+    person stands at a named gate. No guessing, no clustering.
+
+    ONE face per call, deliberately. A 30-second capture inside a request would
+    block a worker thread and give the operator no feedback; the caller polls
+    this instead and watches the count climb.
+
+    The face must pass THAT CAMERA'S OWN quality profile — the same gate the
+    embedding will later have to be recognised at. Enrolling a face the camera
+    would refuse to match on would add a vector that can never fire.
+    """
+    import numpy as np  # noqa: F401  (camera frames are ndarrays)
+
+    from app.services import face_quality
+    from app.services.camera_profile import get_profile
+    from app.services.camera_service import camera_manager
+    from app.services.face_service import extract_faces_from_rgb
+
+    worker = camera_manager._workers.get(int(camera_id))
+    if worker is None:
+        return {"enrolled": 0, "reason": "camera_not_running",
+                "detail": "That camera has no running worker. Start it in Camera Manager."}
+
+    frame = worker.get_latest_frame()
+    if frame is None:
+        return {"enrolled": 0, "reason": "no_frame",
+                "detail": "The camera is running but has not delivered a frame yet."}
+
+    import cv2
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    profile = get_profile(worker.camera_id, worker.camera_purpose)
+
+    faces = extract_faces_from_rgb(rgb)
+    if not faces:
+        return {"enrolled": 0, "reason": "no_face",
+                "detail": "No face in view. Stand facing the camera."}
+
+    # The biggest face is the person standing closest, which is the one being
+    # enrolled. Anyone further back is a passer-by and must not be captured
+    # under this employee's name.
+    faces.sort(key=lambda f: (f["box"][2] - f["box"][0]), reverse=True)
+    best, graded = None, None
+    floor = profile.min_quality if min_quality is None else float(min_quality)
+    for face in faces:
+        q = face_quality.assess(face, rgb, limits=profile.limits)
+        if graded is None:
+            graded = q
+        if q.ok and q.score >= floor:
+            best, graded = face, q
+            break
+
+    if best is None:
+        # Say WHAT is wrong, not just that something is. The person is standing
+        # at the camera and can fix pose, distance or angle immediately — but
+        # only if told which one. "Face is not clear" sends them away guessing.
+        # face_quality.assess already says WHAT is wrong, with the measurement
+        # and the limit ("face is turned too far to the side (turn 0.61, limit
+        # 0.55)"). That is the right thing to keep for the log. What it cannot
+        # say is what the person should DO about it — and they are standing at
+        # the camera right now, able to fix pose or distance in a second, if
+        # somebody tells them which. So: measurement for the record, instruction
+        # for the human. Keys match face_quality's `reason` codes exactly.
+        reason = getattr(graded, "reason", None) or "low_quality"
+        action = {
+            "no_face": "No face visible — look toward the camera.",
+            "face_too_small": "Too far away — step closer.",
+            "low_det_score": "Face unclear — step closer and look at the lens.",
+            "pose_yaw": "Turned sideways — face the camera straight on.",
+            "pose_pitch": "Head tilted up or down — look level at the camera.",
+            "landmark_asym": "At an angle — square your shoulders to the camera.",
+            "blurry": "Too blurry — hold still for a moment.",
+        }.get(reason, "Step closer and face the lens.")
+        measured = (getattr(graded, "detail", "") or "").strip()
+        return {
+            "enrolled": 0,
+            "reason": reason,
+            "quality": round(float(getattr(graded, "score", 0.0)), 3),
+            "face_px": round(float(getattr(graded, "face_px", 0.0) or 0.0), 1),
+            "detail": f"{action} ({measured})" if measured else action,
+        }
+
+    added = enroll_embeddings(
+        employee_id=int(employee_id),
+        observations=[{
+            "embedding": best["embedding"],
+            "camera_id": str(worker.camera_id),
+            "aligned": bool(best.get("aligned", True)),
+            "quality_score": float(graded.score),
+            "face_px": float(best["box"][2] - best["box"][0]),
+            "yaw": float((best.get("pose") or {}).get("yaw", 0.0)),
+            "pitch": float((best.get("pose") or {}).get("pitch", 0.0)),
+            "blur_var": float(getattr(graded, "blur_var", 0.0) or 0.0),
+        }],
+        source="cctv",
+    )
+    return {
+        "enrolled": int(added),
+        "reason": "",
+        "quality": round(float(graded.score), 3),
+        "face_px": round(float(best["box"][2] - best["box"][0]), 1),
+        "camera_id": str(worker.camera_id),
+    }
+
+
 def enroll_embeddings(
     employee_id: int,
     observations: Sequence[dict],

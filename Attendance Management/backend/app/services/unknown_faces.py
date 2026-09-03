@@ -79,6 +79,12 @@ _MAX_PENDING = int(os.getenv("UNKNOWN_FACE_MAX_PENDING", "2000"))
 # person's face under another's name.
 CLUSTER_MIN_COS = float(os.getenv("UNKNOWN_FACE_CLUSTER_COS", "0.55"))
 
+# Bars for "does this cluster look like the employee it is being filed under?"
+# Derived from measured gallery coherence: a clean single-person gallery sits
+# around 0.50 (Rakhi 0.502, Sakshi 0.541), a contaminated one at 0.248.
+_ASSIGN_AGREE_OK = float(os.getenv("UNKNOWN_FACE_ASSIGN_AGREE_OK", "0.35"))
+_ASSIGN_AGREE_WARN = float(os.getenv("UNKNOWN_FACE_ASSIGN_AGREE_WARN", "0.22"))
+
 _lock = threading.Lock()
 _last_capture: dict[str, float] = {}
 _pending_full_logged = False
@@ -412,6 +418,142 @@ def list_clusters(limit: int = 50) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
+def list_cluster_faces(cluster_id: int, limit: int = 8) -> list[dict]:
+    """The individual sightings in one cluster, best-quality first.
+
+    `list_clusters` returns a single sample per group, which is enough to show
+    that a group exists and not enough to say WHO it is. The captures are person
+    boxes from a doorway camera and are frequently tiny — measured on this
+    deployment, 54x88 px is the median for some days, holding a face of maybe
+    15-20 px. Nobody identifies a colleague from one of those.
+
+    Across seventeen sightings, though, there is usually at least one frame
+    where the person turned toward the lens or walked close enough. Showing the
+    reviewer several is the difference between a screen they can act on and one
+    they cannot, and it costs nothing — the crops are already on disk.
+    """
+    # STATUS_PENDING lives on the model, not this module — every other function
+    # here imports it locally and this one did not, which is a NameError at the
+    # first request rather than at import, so it survived a callable() smoke test.
+    from app.db.session import SessionLocal
+    from app.models.unknown_face import STATUS_PENDING, UnknownFace
+
+    # COLUMNS, not whole ORM rows. `UnknownFace.embedding` is an EncryptedBinary,
+    # so loading the entity decrypts a 512-float vector per sighting that this
+    # endpoint never looks at. Worse than wasteful: one row that cannot be
+    # decrypted — after a SECRET_KEY rotation, say — raises and takes the entire
+    # review screen down with it, when all the reviewer wanted was a thumbnail.
+    with SessionLocal() as db:
+        rows = (
+            db.query(
+                UnknownFace.id,
+                UnknownFace.camera_id,
+                UnknownFace.captured_at,
+                UnknownFace.quality_score,
+                UnknownFace.face_px,
+                UnknownFace.crop_path,
+            )
+            .filter(
+                UnknownFace.cluster_id == int(cluster_id),
+                UnknownFace.status == STATUS_PENDING,
+                UnknownFace.crop_path.isnot(None),
+            )
+            .order_by(UnknownFace.quality_score.desc().nullslast())
+            .limit(max(1, min(int(limit), 24)))
+            .all()
+        )
+        return [
+            {
+                "face_id": int(row.id),
+                "camera_id": row.camera_id,
+                "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+                "quality_score": float(row.quality_score or 0.0),
+                "face_px": float(row.face_px or 0.0),
+                "has_crop": True,
+            }
+            for row in rows
+        ]
+
+
+def cluster_agreement(cluster_id: int, employee_id: int) -> dict:
+    """Does this cluster actually look like this employee's existing gallery?
+
+    THE FAILURE THIS PREVENTS
+    -------------------------
+    Attributing a cluster is a human judgement made from doorway crops that are
+    often 54x88 px, holding a face of 15-20 px. That is not reliably
+    identifiable by eye, and on 2026-09-02 several clusters were filed under the
+    wrong person. The damage is asymmetric and severe:
+
+      * Seema's gallery ended up holding at least three different people. Its
+        internal coherence fell to 0.248, against ~0.50 for a clean one.
+      * A gallery spanning several people covers a wide region of embedding
+        space, so an arbitrary face lands near it. MEASURED: her gallery matched
+        **133 of 405** unassigned sightings (32.8%), against 1-20 for everyone
+        else — she had become a magnet, and the reported symptom was "it detects
+        the wrong person as Seema".
+
+    So an assignment is now checked against what that employee already looks
+    like. This does not block anything — a first enrolment has nothing to
+    compare against, and the caller decides what to do with a warning — but it
+    makes a bad merge visible at the moment it is made rather than a week later
+    in the attendance sheet.
+
+    Returns ``agreement`` (mean cosine between the cluster's faces and the
+    employee's existing vectors) and a ``verdict``.
+    """
+    import numpy as np
+
+    from app.db.session import SessionLocal
+    from app.models.employee_face import EmployeeFaceEmbedding
+    from app.models.unknown_face import STATUS_PENDING, UnknownFace
+    from app.services.face_service import EMBEDDING_MODEL_VERSION
+
+    with SessionLocal() as db:
+        gallery = [
+            np.frombuffer(row.embedding, dtype=np.float32)
+            for row in db.query(EmployeeFaceEmbedding).filter(
+                EmployeeFaceEmbedding.employee_id == int(employee_id),
+                EmployeeFaceEmbedding.active.is_(True),
+                EmployeeFaceEmbedding.model_version == EMBEDDING_MODEL_VERSION,
+            ).all()
+        ]
+        faces = [
+            _bytes_to_embedding(row.embedding)
+            for row in db.query(UnknownFace).filter(
+                UnknownFace.cluster_id == int(cluster_id),
+                UnknownFace.status == STATUS_PENDING,
+            ).all()
+        ]
+
+    gallery = [g for g in gallery if g is not None and g.size]
+    faces = [f for f in faces if f is not None and getattr(f, "size", 0)]
+    if not gallery:
+        return {"agreement": None, "verdict": "no_gallery",
+                "detail": "First enrolment for this employee — nothing to compare against."}
+    if not faces:
+        return {"agreement": None, "verdict": "no_faces",
+                "detail": "This cluster has no usable embeddings."}
+
+    G, F = np.stack(gallery), np.stack(faces)
+    agreement = float(np.mean(F @ G.T))
+    if agreement >= _ASSIGN_AGREE_OK:
+        verdict, detail = "match", "Consistent with this employee's existing faces."
+    elif agreement >= _ASSIGN_AGREE_WARN:
+        verdict, detail = "weak", (
+            "Only loosely similar to this employee's existing faces. Check the "
+            "pictures carefully before enrolling."
+        )
+    else:
+        verdict, detail = "mismatch", (
+            "This does NOT look like the same person as the faces already "
+            "enrolled for them. Enrolling it would let strangers be recognised "
+            "as this employee."
+        )
+    return {"agreement": round(agreement, 3), "verdict": verdict, "detail": detail,
+            "gallery_size": len(gallery), "cluster_size": len(faces)}
+
+
 def assign_cluster(
     cluster_id: int,
     employee_id: int,

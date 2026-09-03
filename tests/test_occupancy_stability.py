@@ -329,7 +329,10 @@ def test_person_tracks_are_published_before_the_face_stage():
 
     src = inspect.getsource(camera_service._RecognitionThread._analyze_person)
     publish = src.index("w.state.updated_at = time.time()")
-    faces = src.index("extract_faces_from_rgb(rgb)")
+    # Match the CALL, not its full argument list: the face stage grew a
+    # `defer_embedding=True` argument and a literal-string assertion turned that
+    # into a failure of an ordering property that had not changed.
+    faces = src.index("extract_faces_from_rgb(rgb")
     assert publish < faces, (
         "the person boxes are finished before the face stage and occupancy "
         "uses only them; publishing after it just makes the answer staler"

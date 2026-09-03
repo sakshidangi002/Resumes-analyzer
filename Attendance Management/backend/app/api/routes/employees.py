@@ -1,6 +1,8 @@
 """Employee master CRUD and bank details."""
+import logging
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
@@ -55,6 +57,8 @@ from app.services.employee_face_service import (
 )
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1008,7 +1012,41 @@ def update_employee_bank(
     return _bank_response(b, current_user)
 
 
+class CameraEnrolRequest(BaseModel):
+    camera_id: int = Field(..., description="Camera to capture from")
 
 
+# Path is relative to the router's own /employees prefix — every sibling route
+# here is declared as "/{employee_id}/...". Writing the prefix in again produced
+# /employees/employees/... and the browser got 405 Method Not Allowed.
+@router.post("/{employee_id}/enrol-from-camera", tags=["employees"])
+def enrol_from_camera(
+    employee_id: int,
+    payload: CameraEnrolRequest,
+    current_user: User = Depends(require_roles(["Admin", "HR"])),
+):
+    """Capture ONE usable face for this employee from a live camera.
+
+    The caller polls this while the employee stands at the gate. Each call
+    either enrols a frame or says why it could not, so the operator gets
+    feedback instead of a spinner.
+
+    This is the enrolment that makes a gate work: the gallery ends up holding
+    what THAT camera sees, rather than a portrait it can never match. See
+    employee_face_service.capture_enrolment_from_camera for the measurements.
+    """
+    from app.services.employee_face_service import capture_enrolment_from_camera
+
+    result = capture_enrolment_from_camera(
+        employee_id=employee_id, camera_id=payload.camera_id
+    )
+    if result.get("enrolled"):
+        invalidate_embedding_cache()
+        logger.info(
+            "ENROL-FROM-CAMERA employee=%s camera=%s quality=%s face_px=%s by user=%s",
+            employee_id, payload.camera_id, result.get("quality"),
+            result.get("face_px"), getattr(current_user, "id", None),
+        )
+    return result
 
 

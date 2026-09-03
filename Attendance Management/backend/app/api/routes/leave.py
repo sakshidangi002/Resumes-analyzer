@@ -22,6 +22,8 @@ from app.services.leave_service import (
     approve_leave_request,
     ensure_default_allocations_for_employee,
     count_hr_direct_paid_leave_days,
+    short_leave_days_in_month,
+    used_leave_days,
     compute_paid_leave_split,
     paid_leave_summary,
     _count_leave_days,
@@ -334,54 +336,21 @@ def list_leave_allocations(
     sl_type = db.query(LeaveType).filter(LeaveType.code == "SL").first()
     pl_type = db.query(LeaveType).filter(LeaveType.code == "PL").first()
     result = []
-    
-    from app.models.attendance import AttendanceRecord
-    
+
     for a in allocs:
         if sl_type and a.leave_type_id == sl_type.id:
             m = month or _date.today().month
             y = year or _date.today().year
             start = _date(y, m, 1)
             end = _date(y + 1, 1, 1) if m == 12 else _date(y, m + 1, 1)
-            n = (
-                db.query(func.count(LeaveRequest.id))
-                .filter(
-                    LeaveRequest.employee_id == a.employee_id,
-                    LeaveRequest.leave_type_id == sl_type.id,
-                    LeaveRequest.status == "APPROVED",
-                    LeaveRequest.start_date >= start,
-                    LeaveRequest.start_date < end,
-                )
-                .scalar()
-                or 0
-            )
-            
-            att_records = db.query(AttendanceRecord, Employee).join(Employee, Employee.id == AttendanceRecord.employee_id).filter(
-                AttendanceRecord.employee_id == a.employee_id,
-                AttendanceRecord.date >= start,
-                AttendanceRecord.date < end,
-            ).all()
-            
-            unrequested_sl = 0
-            # To handle 1 HD = 2 SL accurately, we sort by date
-            att_records_sorted = sorted(att_records, key=lambda x: x[0].date)
-            sl_buffer_sim = 2
-            
-            for rec, emp in att_records_sorted:
-                is_sl = rec.status == "SHORT"
-                is_hd = rec.status == "HALF_DAY"
-                
-                if is_hd and sl_buffer_sim >= 2:
-                    unrequested_sl += 2
-                    sl_buffer_sim -= 2
-                elif is_sl and sl_buffer_sim >= 1:
-                    unrequested_sl += 1
-                    sl_buffer_sim -= 1
-                elif is_sl or is_hd:
-                    # After buffer, we don't count it towards the "Paid SL" limit display 
-                    # but it will be deducted from PL (dealt with in the next elif block)
-                    pass
 
+            # Short Leave is a MONTHLY allowance: both the total and the dates
+            # come from the same helper, so "Used: 3" always has three dates
+            # behind it. Approved requests count once each; attendance-derived
+            # short days spend the 2-a-month buffer (a half day spends both).
+            used_dates = short_leave_days_in_month(
+                db, a.employee_id, sl_type.id, start, end,
+            )
             result.append(
                 LeaveAllocationResponse(
                     id=a.id,
@@ -390,7 +359,8 @@ def list_leave_allocations(
                     leave_type_id=a.leave_type_id,
                     # allocated_days is monthly for SL
                     allocated_days=a.allocated_days,
-                    used_days=Decimal(n) + Decimal(unrequested_sl),
+                    used_days=sum((e["days"] for e in used_dates), Decimal("0")),
+                    used_dates=used_dates,
                 )
             )
         elif pl_type and a.leave_type_id == pl_type.id and fy:
@@ -409,10 +379,34 @@ def list_leave_allocations(
                     leave_type_id=a.leave_type_id,
                     allocated_days=a.allocated_days,
                     used_days=a.used_days + hr_direct,
+                    used_dates=used_leave_days(
+                        db, a.employee_id, "PL", pl_type.id,
+                        fy.start_date, fy.end_date,
+                    ),
                 )
             )
         else:
-            result.append(LeaveAllocationResponse.model_validate(a))
+            # Built through the constructor, not by assigning onto a validated
+            # model: pydantic only coerces on construction, so a later
+            # `row.used_dates = [...]` would leave raw dicts in a field typed
+            # list[UsedLeaveDay] and fail serialisation.
+            result.append(
+                LeaveAllocationResponse(
+                    id=a.id,
+                    employee_id=a.employee_id,
+                    financial_year_id=a.financial_year_id,
+                    leave_type_id=a.leave_type_id,
+                    allocated_days=a.allocated_days,
+                    used_days=a.used_days,
+                    used_dates=(
+                        used_leave_days(
+                            db, a.employee_id, None, a.leave_type_id,
+                            fy.start_date, fy.end_date,
+                        )
+                        if fy else []
+                    ),
+                )
+            )
     return result
 
 

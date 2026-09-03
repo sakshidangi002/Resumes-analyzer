@@ -4668,6 +4668,90 @@ input[type="date"] {
   min-width: 0;
 }
 
+/* ---- a card that fills its grid row ---- */
+
+/* `.eds-grid` is `align-items: start`, which is right for most pairs: a short
+   card next to a tall one should keep its natural height rather than becoming
+   a mostly-empty box. It is wrong when the short card is a set of TILES, which
+   have somewhere useful to put the height — so filling is opt-in per card
+   rather than a change to the grid everything else sits in. */
+.eds-card--fill {
+  align-self: stretch;
+}
+
+/* Tiles that grow into whatever height the card was given, and get BIGGER
+   with it rather than just drifting further apart. */
+.eds-tiles--fill {
+  flex: 1;
+  align-content: stretch;
+}
+
+.eds-tiles--fill .eds-tile {
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.eds-tiles--fill .eds-tile-chip {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+}
+
+.eds-tiles--fill .eds-tile-chip svg {
+  width: 24px;
+  height: 24px;
+}
+
+.eds-tiles--fill .eds-tile-figures {
+  align-items: center;
+  gap: 6px;
+}
+
+.eds-tiles--fill .eds-figure {
+  font-size: 46px;
+}
+
+.eds-tiles--fill .eds-label {
+  font-size: 15.5px;
+  color: var(--eds-dim);
+}
+
+/* Below the breakpoint the grid is a single column, so there is no neighbour
+   to match and no gap to fill. The tiles go back to their compact side-by-side
+   shape instead of standing needlessly tall on a phone. */
+@media (max-width: 1200px) {
+  .eds-tiles--fill .eds-tile {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 13px;
+    padding: 14px;
+    text-align: left;
+  }
+
+  .eds-tiles--fill .eds-tile-chip {
+    width: 46px;
+    height: 46px;
+    border-radius: 11px;
+  }
+
+  .eds-tiles--fill .eds-tile-chip svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .eds-tiles--fill .eds-tile-figures {
+    align-items: flex-start;
+    gap: 3px;
+  }
+
+  .eds-tiles--fill .eds-figure {
+    font-size: 28px;
+  }
+}
+
 .eds-tile-figures .eds-figure {
   color: var(--eds-fg);
 }
@@ -5396,8 +5480,19 @@ input[type="date"] {
 
 /* Keep the employee roster inside the card at every viewport width. Long
    values are clipped in their cells instead of forcing a horizontal scroller. */
+/* Nine columns of real content. `min-width: 0` opted this table out of the
+   scroll-instead-of-squash rule every other table follows, and `table-layout:
+   fixed` then shared the shortfall out by PERCENTAGE — so on a laptop the name
+   column shrank below a name ("Adarsh Ma...", "Saloni Path...") while Staff
+   type sat half empty, and no width was ever narrow enough to trigger the
+   hide-md/hide-sm column drops, which only start at 768px.
+
+   A floor plus the wrapper's existing `overflow-x: auto` means the columns keep
+   a usable size and the table scrolls sideways instead of crushing itself. The
+   floor is set from the widest real content: a 32px avatar, a 12px gap and a
+   ~150px name inside an 18% column. */
 .eds-table--employees {
-  min-width: 0;
+  min-width: 1240px;
   table-layout: fixed;
 }
 
@@ -7045,6 +7140,202 @@ textarea.eds-input {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- guided capture from a gate camera ---- */
+.eds-cap { margin-bottom: 16px; }
+
+.eds-cap-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.eds-cap-row .eds-cselect { min-width: 230px; flex: 1 1 230px; }
+
+/* Progress toward "enough faces for this gate to work". The target is not
+   decorative: the one employee with 15 camera faces on a gate was recognised
+   there 7 times a day; everyone with 2-4 was recognised never. */
+.eds-cap-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-top: 14px;
+}
+
+.eds-cap-fill {
+  height: 100%;
+  background: var(--eds-emerald, #34d399);
+  border-radius: 999px;
+  transition: width 240ms ease;
+}
+
+.eds-cap-status {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--eds-dim);
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.eds-cap-status strong { color: var(--eds-text); font-size: 15px; }
+
+/* ---- unrecognised-face review ---- */
+.note-panel {
+  background: var(--eds-card);
+  border: 1px solid var(--eds-border);
+  border-left: 3px solid var(--eds-amber, #fbbf24);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--eds-dim);
+  max-width: 82ch;
+}
+.note-panel strong { color: var(--eds-text); }
+
+.eds-fr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.eds-fr-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The picture is the point of this screen: a reviewer decides from the face,
+   not from the metadata, so it gets the space.
+
+   `contain`, NEVER `cover`. What is stored is the PERSON box, which on these
+   cameras is tall and narrow (a 119x243 crop is typical). `cover` in a wide
+   card scaled that to the card's width and then cut everything below the top
+   210px — so the review screen showed a hugely magnified slice of somebody's
+   hair and nothing identifiable. `contain` shows the whole capture; the face is
+   small, which is what a doorway camera actually produced, and clicking opens
+   it full size. */
+.eds-fr-face {
+  width: 100%;
+  height: 200px;
+  object-fit: contain;
+  background: #0d0d0f;
+  display: block;
+  cursor: zoom-in;
+}
+
+/* Several sightings side by side rather than one. A doorway crop is small and
+   often shows the back of a head; the point of a cluster is that ONE of its
+   frames is usually usable, and the reviewer has to be able to see which. */
+.eds-fr-strip {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  background: #0d0d0f;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+
+.eds-fr-shot {
+  height: 190px;
+  width: auto;
+  min-width: 60px;
+  max-width: 150px;
+  object-fit: contain;
+  background: #0d0d0f;
+  cursor: zoom-in;
+  flex: 0 0 auto;
+  border-radius: 3px;
+  transition: outline-color 120ms ease;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+.eds-fr-shot:hover { outline-color: rgba(255, 255, 255, 0.4); }
+
+/* The highest-quality frame in the group leads, and says so. */
+.eds-fr-shot.is-best { outline-color: var(--eds-emerald, #34d399); }
+
+.eds-fr-face--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--eds-dim);
+}
+
+.eds-fr-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.eds-fr-head { display: flex; align-items: baseline; gap: 8px; }
+
+.eds-fr-size {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A big cluster is somebody the cameras are systematically failing to name —
+   worth a minute. A cluster of one is probably a visitor. */
+.eds-fr-sub { font-size: 13px; color: var(--eds-dim); }
+
+.eds-fr-meta {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--eds-dim);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.eds-fr-hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--eds-amber, #fbbf24);
+  line-height: 1.45;
+}
+
+.eds-fr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Full-size view. A 51x79 capture upscaled into a card is unreadable; seen at
+   its own size against a dark ground it is usually enough to recognise a
+   colleague, which is the entire job of this screen. */
+.eds-fr-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  cursor: zoom-out;
+  padding: 24px;
+}
+
+.eds-fr-zoom img {
+  max-width: min(92vw, 720px);
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 8px;
+  /* Upscaled hard pixels rather than a smoothed blur: at this size the blur
+     hides the very detail a reviewer is looking for. */
+  image-rendering: pixelated;
+  background: #0d0d0f;
+}
+
+.eds-fr-zoom-cap {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
 /* ---- per-employee leave allocation cards ---- */
 .eds-alloc-grid {
   display: grid;
@@ -7112,6 +7403,84 @@ textarea.eds-input {
   flex-direction: column;
   align-items: flex-end;
   gap: 1px;
+}
+
+/* An allocation and, when expanded, the dates its "Used" figure is made of. */
+.eds-alloc-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The "Used" number, when there are dates to reveal. Styled as text, not as a
+   button, so the row still reads as a figure rather than a toolbar. */
+.eds-alloc-usedbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--eds-accent, #6ea8fe);
+  cursor: pointer;
+  border-bottom: 1px dashed currentColor;
+  font-variant-numeric: tabular-nums;
+}
+
+.eds-alloc-usedbtn:hover {
+  filter: brightness(1.25);
+}
+
+.eds-alloc-usedchev {
+  display: inline-flex;
+  width: 11px;
+  height: 11px;
+  transition: transform 160ms ease;
+}
+
+.eds-alloc-usedbtn.is-open .eds-alloc-usedchev {
+  transform: rotate(180deg);
+}
+
+.eds-alloc-dates {
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--eds-divider);
+}
+
+.eds-alloc-date {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  border: 1px solid var(--eds-divider);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+
+/* Where the day came from: an approved request, or a day HR marked on the
+   attendance sheet. They are charged the same but are corrected in different
+   places, so the distinction has to survive to the screen. */
+.eds-alloc-date--request {
+  border-color: rgba(110, 168, 254, 0.45);
+}
+
+.eds-alloc-date--attendance {
+  border-style: dashed;
+}
+
+.eds-alloc-date-cost {
+  font-size: 11.5px;
+  color: var(--eds-dim);
 }
 
 .eds-alloc-figure {
