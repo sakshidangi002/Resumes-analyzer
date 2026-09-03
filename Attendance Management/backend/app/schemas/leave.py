@@ -14,6 +14,21 @@ class LeaveTypeResponse(BaseModel):
         from_attributes = True
 
 
+class UsedLeaveDay(BaseModel):
+    """One date charged against an allocation.
+
+    ``days`` is what that date took off the allocation, which is not always 1:
+    a half day is 0.5, a half day against the monthly Short-Leave allowance
+    spends 2 of it, and a day of an approved request that fell to Loss-Of-Pay
+    charges 0. Carrying the figure per date is what lets the listed dates add
+    up to the ``used_days`` shown beside them.
+    """
+    date: date
+    days: Decimal
+    source: str          # "request" (an approved leave request) | "attendance"
+    detail: str          # human-readable reason, shown as the date's tooltip
+
+
 class LeaveAllocationResponse(BaseModel):
     id: int
     employee_id: int
@@ -21,6 +36,8 @@ class LeaveAllocationResponse(BaseModel):
     leave_type_id: int
     allocated_days: Decimal
     used_days: Decimal
+    # Every date behind `used_days`, oldest first. Empty when nothing is used.
+    used_dates: list[UsedLeaveDay] = []
 
     @computed_field
     @property

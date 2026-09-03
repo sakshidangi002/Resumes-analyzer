@@ -20,6 +20,7 @@ from app.schemas.attendance import (
 from app.schemas.leave import (
     LeaveTypeResponse,
     LeaveAllocationResponse,
+    UsedLeaveDay,
     LeaveRequestCreate,
     LeaveRequestResponse,
 )

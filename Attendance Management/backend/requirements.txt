@@ -54,3 +54,24 @@ scikit-image>=0.21.0
 # box on every person in view and binds an employee name when a face matches.
 # Requires torch (already a dependency). Needs models/yolo11n.pt present.
 ultralytics>=8.0.0
+
+# ── Declared because the code imports them DIRECTLY ────────────────────────
+# starlette and anyio arrive transitively with fastapi, but app/main.py imports
+# them by name (starlette.types.Scope, anyio.to_thread). A transitive dependency
+# is not a promise: fastapi is free to drop or re-pin either one, and the app
+# would then fail at import on a fresh clone with no clue why.
+starlette>=0.36.0
+anyio>=4.0.0
+
+# CPU topology, used to size inference concurrency. bytetrack_engine and
+# inference_gate both ask psutil for the PHYSICAL core count to decide how many
+# YOLO/face inferences may run at once; without it they fall back to
+# os.cpu_count()//2, which guesses hyperthreading and can pick the wrong number
+# of slots on the box that decides whether a doorway camera keeps up.
+psutil>=5.9.0
+
+# Reads a .onnx model's declared input size, so a model exported at a fixed
+# 960x960 is not silently fed a 640px frame (onnxruntime then rejects every
+# frame and the camera detects nothing). onnxruntime RUNS models; onnx is the
+# format library needed to INSPECT one.
+onnx>=1.15.0

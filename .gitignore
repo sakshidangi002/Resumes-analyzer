@@ -107,3 +107,31 @@ enrol_drop/
 
 # CCTV V2 measurement clips: frames of identifiable people. Never commit.
 data/cctv_v2_*/
+
+# ── Large model artifacts: NOT source, and unpushable ──────────────────────
+# A 505 MB push timed out with "RPC failed; HTTP 408" — and even with more
+# patience GitHub hard-rejects any file over 100 MB, so these could never land.
+# Both are DERIVED or DOWNLOADED, so committing them buys nothing and costs
+# every future clone the same half gigabyte forever (git keeps blobs in history
+# even after a delete).
+#
+#   adaface_ir50_webface4m.onnx  166 MB  regenerate:
+#       python scripts/export_adaface_onnx.py
+#       (also re-runs the equivalence check against the .ckpt)
+#
+#   weights/clip/ViT-B-32.pt     338 MB  a published CLIP weight; re-download
+#       it from the upstream project rather than versioning it here.
+#
+# The deploy path does not need these in git: scripts/package-for-server.ps1
+# copies models/ straight from the working tree.
+#
+# NOTE: models/yolo11*.pt|onnx and osnet_*.onnx are already tracked from earlier
+# commits that are on origin. They are deliberately NOT ignored here — an ignore
+# rule does not untrack a file, and rewriting pushed history to drop them is a
+# separate, coordinated job.
+weights/
+Attendance Management/backend/models/adaface_ir50_webface4m.onnx
+
+# Working artifacts that got committed by accident
+Attendance Management/backend/gallery_clean_plan.json
+*.tsbuildinfo

@@ -500,16 +500,22 @@ export default function Employees() {
           <>
             <div className="eds-table-wrap">
               <table className="eds-table eds-table--employees">
+                {/* ID, Name, Staff type, Email, Department, DOJ, DOL, Status, Actions.
+                    Rebalanced toward the columns holding variable-length text: Name
+                    was 14% and truncated real names, while Staff type held 9.3% for
+                    the word "Employee". Comments stay OUT of the element — inline
+                    ones leave whitespace text nodes, which are invalid in a
+                    colgroup. */}
                 <colgroup>
-                  <col style={{ width: '4.7%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '9.3%' }} />
-                  <col style={{ width: '19.6%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '10.3%' }} />
-                  <col style={{ width: '10.3%' }} />
-                  <col style={{ width: '9.3%' }} />
-                  {canEdit && <col style={{ width: '8.4%' }} />}
+                  <col style={{ width: '4.5%' }} />
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '8.5%' }} />
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9.5%' }} />
+                  {canEdit && <col style={{ width: '8.5%' }} />}
                 </colgroup>
                 <thead>
                   <tr>
@@ -547,12 +553,16 @@ export default function Employees() {
                           <span className={`eds-avatar eds-avatar--md ${AVATAR_TINTS[e.id % AVATAR_TINTS.length]}`}>
                             {initialsOf(e.first_name, e.last_name)}
                           </span>
-                          <span className="eds-member-name">{e.first_name} {e.last_name}</span>
+                          <span className="eds-member-name" title={`${e.first_name} ${e.last_name}`}>
+                            {e.first_name} {e.last_name}
+                          </span>
                         </div>
                       </td>
                       <td className="eds-cell-dim">{e.staff_type || "Employee"}</td>
-                      <td className="eds-cell-dim eds-cell-clip">{e.official_email}</td>
-                      <td className="hide-sm eds-cell-strong eds-cell-clip">{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
+                      {/* Ellipsised by `eds-cell-clip`, so the full value has to be
+                          reachable somehow — a truncated email is unusable. */}
+                      <td className="eds-cell-dim eds-cell-clip" title={e.official_email}>{e.official_email}</td>
+                      <td className="hide-sm eds-cell-strong eds-cell-clip" title={departments.find((d) => d.id === e.department_id)?.name || undefined}>{departments.find((d) => d.id === e.department_id)?.name || "-"}</td>
                       <td className="hide-md eds-cell-dim">{e.date_of_joining ? new Date(e.date_of_joining).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' }) : "-"}</td>
                       <td className={`hide-md ${hasLeft ? "eds-cell-strong" : "eds-cell-dim"}`} style={hasLeft ? { fontWeight: 600 } : undefined}>
                         {hasLeft ? dolText : <span className="eds-dash">–</span>}

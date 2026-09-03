@@ -70,6 +70,80 @@ def _approved_leave_dates(
     return dates
 
 
+def hr_direct_paid_leave_days(
+    db: Session,
+    employee_id: int,
+    fy_start: date,
+    fy_end: date,
+    pl_leave_type_id: int,
+) -> list[dict]:
+    """The individual DATES behind ``count_hr_direct_paid_leave_days``.
+
+    Returns one entry per charged date::
+
+        {"date": date, "days": Decimal, "source": "attendance", "detail": str}
+
+    Splitting the listing out of the counter is deliberate: the count is now the
+    sum of this list, so a screen that shows the dates and a screen that shows
+    the total can never disagree. Reimplementing the same buffer arithmetic in
+    two places is exactly how "Used: 4" ends up next to three dates.
+    """
+    from app.models.attendance import AttendanceRecord
+    from app.core.staff_policy import is_fixed_salary_staff
+    from app.models.employee import Employee
+
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if employee is not None and is_fixed_salary_staff(employee):
+        return []
+
+    approved_dates = _approved_leave_dates(
+        db, employee_id, pl_leave_type_id, fy_start, fy_end
+    )
+    att_records = (
+        db.query(AttendanceRecord)
+        .filter(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.date >= fy_start,
+            AttendanceRecord.date <= fy_end,
+        )
+        .order_by(AttendanceRecord.date.asc())
+        .all()
+    )
+
+    out: list[dict] = []
+    for rec in att_records:
+        if rec.date in approved_dates:
+            continue
+        if rec.status == "PAID_LEAVE":
+            out.append({
+                "date": rec.date,
+                "days": Decimal("1"),
+                "source": "attendance",
+                "detail": "Paid leave marked by HR",
+            })
+        elif rec.status == "HALF_DAY":
+            m_start = date(rec.date.year, rec.date.month, 1)
+            m_end = (
+                date(rec.date.year, rec.date.month + 1, 1)
+                if rec.date.month < 12
+                else date(rec.date.year + 1, 1, 1)
+            )
+            month_atts = [
+                r for r in att_records if m_start <= r.date < m_end and r.date < rec.date
+            ]
+            month_sl_used = sum(1 for r in month_atts if r.status == "SHORT")
+            month_hd_used = sum(1 for r in month_atts if r.status == "HALF_DAY")
+            buffer_left = 2 - (month_sl_used + (month_hd_used * 2))
+            if buffer_left < 2:
+                out.append({
+                    "date": rec.date,
+                    "days": Decimal("0.5"),
+                    "source": "attendance",
+                    "detail": "Half day (monthly short-leave buffer spent)",
+                })
+    return out
+
+
 def count_hr_direct_paid_leave_days(
     db: Session,
     employee_id: int,
@@ -86,51 +160,194 @@ def count_hr_direct_paid_leave_days(
     daily-hours target, so their short days are not leave at all and must not be
     charged here. They typically hold a ZERO Paid-Leave allocation, so counting
     them produced a nonsensical "3.5 used of 0 allocated" and a negative balance.
+
+    The rule itself lives in ``hr_direct_paid_leave_days``; this is its total.
+    """
+    return sum(
+        (
+            entry["days"]
+            for entry in hr_direct_paid_leave_days(
+                db, employee_id, fy_start, fy_end, pl_leave_type_id
+            )
+        ),
+        Decimal("0"),
+    )
+
+
+def approved_request_days(
+    db: Session,
+    employee_id: int,
+    leave_type_id: int,
+    period_start: date,
+    period_end: date,
+) -> list[dict]:
+    """One entry per calendar date covered by an APPROVED request of this type.
+
+    ``days`` is the share of that date charged to the allocation. Approval writes
+    only the PAID portion to ``used_days`` (see ``approve_request``), so a
+    full-day request that was partly Loss-Of-Pay must not present all of its
+    dates as consumed allocation — the paid days are assigned earliest first,
+    which is the same order payroll uses.
+    """
+    from datetime import timedelta
+
+    rows = (
+        db.query(LeaveRequest)
+        .filter(
+            LeaveRequest.employee_id == employee_id,
+            LeaveRequest.leave_type_id == leave_type_id,
+            LeaveRequest.status == "APPROVED",
+            LeaveRequest.start_date <= period_end,
+            LeaveRequest.end_date >= period_start,
+        )
+        .order_by(LeaveRequest.start_date.asc())
+        .all()
+    )
+
+    out: list[dict] = []
+    for req in rows:
+        span = (min(req.end_date, period_end) - max(req.start_date, period_start)).days + 1
+        per_day = Decimal("0.5") if req.is_half_day else Decimal("1")
+
+        # How many of this request's days were charged to the allocation.
+        #
+        # `paid_days` / `unpaid_days` are written by `approve_request` when it
+        # computes the monthly-earned split. Rows approved BEFORE that existed
+        # were never given a split — and because both columns are declared
+        # `default=0` rather than nullable, they read back as 0/0, NOT as NULL.
+        # Testing `paid_days is None` therefore never fires for them, and a
+        # legacy request would present every one of its days as unpaid while the
+        # allocation's `used_days` said otherwise: three days shown as "LOP"
+        # under a heading that read "Used: 4".
+        #
+        # So the marker for "no split was recorded" is that BOTH are zero. A
+        # request genuinely taken entirely as Loss-Of-Pay has unpaid_days > 0
+        # and is still shown, correctly, as charging nothing.
+        paid = Decimal(str(req.paid_days or 0))
+        unpaid = Decimal(str(req.unpaid_days or 0))
+        split_recorded = bool(paid or unpaid)
+        budget = paid if split_recorded else per_day * span
+
+        d = max(req.start_date, period_start)
+        end = min(req.end_date, period_end)
+        while d <= end:
+            charged = min(per_day, budget) if budget > 0 else Decimal("0")
+            budget -= charged
+            out.append({
+                "date": d,
+                "days": charged,
+                "source": "request",
+                "detail": (
+                    "Approved request"
+                    + (" (half day)" if req.is_half_day else "")
+                    + ("" if charged > 0 else " — unpaid (LOP)")
+                ),
+            })
+            d += timedelta(days=1)
+    return out
+
+
+def short_leave_days_in_month(
+    db: Session,
+    employee_id: int,
+    sl_leave_type_id: int,
+    month_start: date,
+    month_end: date,
+) -> list[dict]:
+    """Short-leave dates charged against the MONTHLY Short Leave allowance.
+
+    Mirrors the monthly buffer the Short-Leave balance is computed from: the
+    allowance is 2 short leaves a month, a SHORT day spends one and a HALF_DAY
+    spends both. Days past the buffer are not charged here — they fall through
+    to Paid Leave via ``hr_direct_paid_leave_days``.
     """
     from app.models.attendance import AttendanceRecord
-    from app.core.staff_policy import is_fixed_salary_staff
-    from app.models.employee import Employee
 
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
-    if employee is not None and is_fixed_salary_staff(employee):
-        return Decimal("0")
+    out: list[dict] = []
 
-    approved_dates = _approved_leave_dates(
-        db, employee_id, pl_leave_type_id, fy_start, fy_end
-    )
+    for req in (
+        db.query(LeaveRequest)
+        .filter(
+            LeaveRequest.employee_id == employee_id,
+            LeaveRequest.leave_type_id == sl_leave_type_id,
+            LeaveRequest.status == "APPROVED",
+            LeaveRequest.start_date >= month_start,
+            LeaveRequest.start_date < month_end,
+        )
+        .order_by(LeaveRequest.start_date.asc())
+        .all()
+    ):
+        # The monthly Short-Leave count is per REQUEST, not per day, so one
+        # entry per request keeps the dates summing to the displayed total.
+        out.append({
+            "date": req.start_date,
+            "days": Decimal("1"),
+            "source": "request",
+            "detail": "Approved short leave",
+        })
+
     att_records = (
         db.query(AttendanceRecord)
         .filter(
             AttendanceRecord.employee_id == employee_id,
-            AttendanceRecord.date >= fy_start,
-            AttendanceRecord.date <= fy_end,
+            AttendanceRecord.date >= month_start,
+            AttendanceRecord.date < month_end,
         )
-        .order_by(AttendanceRecord.date.asc())
         .all()
     )
 
-    hr_direct = Decimal("0")
-    for rec in att_records:
-        if rec.date in approved_dates:
-            continue
-        if rec.status == "PAID_LEAVE":
-            hr_direct += Decimal("1")
-        elif rec.status == "HALF_DAY":
-            m_start = date(rec.date.year, rec.date.month, 1)
-            m_end = (
-                date(rec.date.year, rec.date.month + 1, 1)
-                if rec.date.month < 12
-                else date(rec.date.year + 1, 1, 1)
-            )
-            month_atts = [
-                r for r in att_records if m_start <= r.date < m_end and r.date < rec.date
-            ]
-            month_sl_used = sum(1 for r in month_atts if r.status == "SHORT")
-            month_hd_used = sum(1 for r in month_atts if r.status == "HALF_DAY")
-            buffer_left = 2 - (month_sl_used + (month_hd_used * 2))
-            if buffer_left < 2:
-                hr_direct += Decimal("0.5")
-    return hr_direct
+    buffer_left = 2
+    for rec in sorted(att_records, key=lambda r: r.date):
+        if rec.status == "HALF_DAY" and buffer_left >= 2:
+            buffer_left -= 2
+            out.append({
+                "date": rec.date,
+                "days": Decimal("2"),
+                "source": "attendance",
+                "detail": "Half day (counts as 2 short leaves)",
+            })
+        elif rec.status == "SHORT" and buffer_left >= 1:
+            buffer_left -= 1
+            out.append({
+                "date": rec.date,
+                "days": Decimal("1"),
+                "source": "attendance",
+                "detail": "Short day",
+            })
+    return out
+
+
+def used_leave_days(
+    db: Session,
+    employee_id: int,
+    leave_type_code: str | None,
+    leave_type_id: int,
+    fy_start: date,
+    fy_end: date,
+    *,
+    month_start: date | None = None,
+    month_end: date | None = None,
+) -> list[dict]:
+    """Every date charged against one allocation, sorted, newest last.
+
+    The three leave families each compute their used total differently, and this
+    routes to whichever listing matches — so the dates a screen shows are always
+    the dates its number was made of.
+    """
+    code = (leave_type_code or "").upper()
+    if code == "SL" and month_start and month_end:
+        entries = short_leave_days_in_month(
+            db, employee_id, leave_type_id, month_start, month_end
+        )
+    elif code == "PL":
+        entries = (
+            approved_request_days(db, employee_id, leave_type_id, fy_start, fy_end)
+            + hr_direct_paid_leave_days(db, employee_id, fy_start, fy_end, leave_type_id)
+        )
+    else:
+        entries = approved_request_days(db, employee_id, leave_type_id, fy_start, fy_end)
+
+    return sorted(entries, key=lambda e: e["date"])
 
 
 def get_leave_balance(db: Session, employee_id: int, leave_type_id: int, fy_id: int) -> Decimal:

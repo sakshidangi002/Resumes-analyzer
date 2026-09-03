@@ -19,6 +19,16 @@ interface FinancialYear {
   end_date: string;
 }
 
+/** One date charged against an allocation. `days` is what it cost: 1 for a
+ *  normal day, 0.5 for a half day, 2 for a half day against the monthly
+ *  Short-Leave allowance, 0 for a day that fell to Loss-Of-Pay. */
+interface UsedLeaveDay {
+  date: string;
+  days: number;
+  source: "request" | "attendance";
+  detail: string;
+}
+
 interface Allocation {
   id: number;
   employee_id: number;
@@ -27,6 +37,7 @@ interface Allocation {
   allocated_days: number;
   used_days: number;
   balance_days: number;
+  used_dates?: UsedLeaveDay[];
 }
 
 interface EmployeeOption {
@@ -62,6 +73,11 @@ const Icons = {
       <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>
   ),
+  Chevron: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9"></polyline>
+    </svg>
+  ),
   Leave: () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M17 20v-1.5A3.5 3.5 0 0 0 13.5 15h-6A3.5 3.5 0 0 0 4 18.5V20"></path>
@@ -89,7 +105,19 @@ export default function LeaveAllocations() {
     allocated_days: "",
   });
 
+  // Which allocation rows have their used-dates list expanded. A full financial
+  // year of dates would bury the figures if every card showed them at once.
+  const [openDates, setOpenDates] = useState<Set<number>>(new Set());
+
   const canManage = hasRole("Admin") || hasRole("HR");
+
+  const toggleDates = (allocId: number) =>
+    setOpenDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(allocId)) next.delete(allocId);
+      else next.add(allocId);
+      return next;
+    });
 
   useEffect(() => {
     Promise.all([companyApi.financialYears(), leaveApi.types(), employeesApi.list({ status: "Active" })])
@@ -136,6 +164,13 @@ export default function LeaveAllocations() {
   };
 
   const typeName = (id: number) => types.find((t) => t.id === id)?.name ?? `#${id}`;
+
+  /** Days without a pointless ".00", but never rounding a half day away — a
+   *  listed 0.5-day date beside a "Used: 1" heading reads as a bug. */
+  const fmtDays = (n: number) => {
+    const v = Number(n) || 0;
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  };
 
   const handleDelete = (a: Allocation) => {
     const label = `${typeName(a.leave_type_id)} for ${employeeLabel(a.employee_id)}`;
@@ -305,18 +340,36 @@ export default function LeaveAllocations() {
                       </div>
                     </div>
                     <div className="eds-alloc-list">
-                      {allocs.map((a) => (
-                        <div key={a.id} className="eds-alloc-row">
+                      {allocs.map((a) => {
+                        const usedDates = a.used_dates ?? [];
+                        const isOpen = openDates.has(a.id);
+                        return (
+                        <div key={a.id} className="eds-alloc-item">
+                        <div className="eds-alloc-row">
                           <div className="eds-alloc-type">
                             <span className="eds-alloc-name">{typeName(a.leave_type_id)}</span>
                             <span className="eds-alloc-meta">
-                              Alloc: {Math.round(a.allocated_days)} &middot; Used: {Math.round(Number(a.used_days))}
+                              Alloc: {fmtDays(a.allocated_days)} &middot; Used:{" "}
+                              {usedDates.length > 0 ? (
+                                <button
+                                  type="button"
+                                  className={`eds-alloc-usedbtn${isOpen ? " is-open" : ""}`}
+                                  onClick={() => toggleDates(a.id)}
+                                  aria-expanded={isOpen}
+                                  title={`${isOpen ? "Hide" : "Show"} the ${usedDates.length} date(s) behind this figure`}
+                                >
+                                  {fmtDays(Number(a.used_days))}
+                                  <span className="eds-alloc-usedchev"><Icons.Chevron /></span>
+                                </button>
+                              ) : (
+                                fmtDays(Number(a.used_days))
+                              )}
                             </span>
                           </div>
                           <div className="eds-alloc-end">
                             <div className="eds-alloc-balance">
                               <span className="eds-eyebrow">Balance</span>
-                              <span className="eds-alloc-figure">{Math.round(Number(a.balance_days))}</span>
+                              <span className="eds-alloc-figure">{fmtDays(Number(a.balance_days))}</span>
                             </div>
                             <button
                               type="button"
@@ -339,7 +392,7 @@ export default function LeaveAllocations() {
                               disabled={Number(a.used_days) > 0}
                               title={
                                 Number(a.used_days) > 0
-                                  ? `Cannot delete: ${Math.round(Number(a.used_days))} day(s) already used. Edit the allocation instead.`
+                                  ? `Cannot delete: ${fmtDays(Number(a.used_days))} day(s) already used. Edit the allocation instead.`
                                   : "Delete Allocation"
                               }
                             >
@@ -347,7 +400,26 @@ export default function LeaveAllocations() {
                             </button>
                           </div>
                         </div>
-                      ))}
+
+                        {isOpen && (
+                          <ul className="eds-alloc-dates">
+                            {usedDates.map((d, i) => (
+                              <li
+                                key={`${d.date}-${i}`}
+                                className={`eds-alloc-date eds-alloc-date--${d.source}`}
+                                title={d.detail}
+                              >
+                                <span className="eds-alloc-date-day">{formatDate(d.date)}</span>
+                                <span className="eds-alloc-date-cost">
+                                  {d.days > 0 ? `${fmtDays(d.days)}d` : "LOP"}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        </div>
+                        );
+                      })}
                     </div>
                   </section>
                 );

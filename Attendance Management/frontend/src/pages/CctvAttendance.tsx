@@ -396,14 +396,25 @@ export default function CctvAttendance() {
       setOccupancy(null);
       return;
     }
+    // Chairs are a ROOM concept. Relying on the endpoint 404-ing for doorway
+    // cameras turned out not to hold: the Entrance and Exit views were served a
+    // snapshot with no chairs and a populated `people` list, so every person at
+    // a gate was drawn with a second amber dashed box captioned
+    // "trkNNN · no seat" — which is true, meaningless, and exactly the
+    // duplicate-box clutter the overlay was written to avoid. A doorway has no
+    // seats to be in.
+    if (cameraType !== "MONITOR") {
+      setOccupancy(null);
+      return;
+    }
     let cancelled = false;
     const poll = async () => {
       try {
         const res = await camerasApi.occupancy(selectedCamId as number);
         if (!cancelled) setOccupancy(res.data ?? null);
       } catch {
-        // 404 = doorway camera, or V1 is not running it. Not an error worth
-        // showing: most cameras legitimately have no chairs.
+        // No chair map for this camera, or V1 is not running it. Not an error
+        // worth showing.
         if (!cancelled) setOccupancy(null);
       }
     };
@@ -413,7 +424,8 @@ export default function CctvAttendance() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [selectedCamId]);
+    // cameraType matters now: switching to a doorway must tear the poll down.
+  }, [selectedCamId, cameraType]);
 
   const runScan = async () => {
     if (busyRef.current) return;

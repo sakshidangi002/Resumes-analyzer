@@ -100,7 +100,46 @@ def _normalize(embedding: np.ndarray) -> np.ndarray:
     return embedding / norm if norm > 0 else embedding
 
 
-def _extract_faces_insightface(rgb_image: np.ndarray) -> list[dict]:
+def ensure_embedding(face: dict) -> bool:
+    """Compute a deferred embedding in place. True if the face now has one.
+
+    WHY DEFERRAL EXISTS
+    -------------------
+    Embedding is the single most expensive per-face operation in the pipeline —
+    MEASURED on the production box, AdaFace ir_50 costs **660 ms per face** on
+    CPU, against 823 ms for detecting every face in the whole frame.
+
+    It used to run on EVERY detected face, immediately, inside the detector.
+    The quality gate that decides whether a face may influence identity runs
+    afterwards, in camera_service — so a 16px downward-tilted profile that the
+    gate was always going to reject still cost a full 660 ms first. On a room
+    camera seeing four seated people, most of the embedding budget was spent on
+    faces that were discarded microseconds later.
+
+    Deferring is safe because NOTHING in the quality gate looks at the
+    embedding: `face_quality.assess` reads box, det_score, landmarks and crop
+    sharpness only. So the order can be flipped without changing a single
+    accept/reject outcome — the same faces get embedded, just not the rejected
+    ones.
+
+    Idempotent: calling it on a face that already has an embedding is free.
+    """
+    if face.get("embedding") is not None:
+        return True
+    compute = face.pop("_embed", None)
+    if compute is None:
+        return False
+    try:
+        face["embedding"] = compute()
+    except Exception:
+        logger.exception("deferred embedding failed")
+        face["embedding"] = None
+    return face.get("embedding") is not None
+
+
+def _extract_faces_insightface(
+    rgb_image: np.ndarray, defer_embedding: bool = False
+) -> list[dict]:
     import cv2
 
     bgr_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
@@ -120,16 +159,22 @@ def _extract_faces_insightface(rgb_image: np.ndarray) -> list[dict]:
             # selected gallery and must be rejected, not downgraded.
             logger.debug("AdaFace skipped face without five landmarks")
             continue
-        embedding = (
-            adaface.embed(bgr_image, kps)
-            if adaface is not None and kps is not None
-            else _normalize(face.embedding)
-        )
+
+        def _compute(_face=face, _kps=kps):
+            return (
+                adaface.embed(bgr_image, _kps)
+                if adaface is not None and _kps is not None
+                else _normalize(_face.embedding)
+            )
+
+        embedding = None if defer_embedding else _compute()
         faces.append(
             {
                 "box": _bbox_to_list(face.bbox),
                 "confidence": float(face.det_score),
                 "embedding": embedding,
+                # Present only while deferred; ensure_embedding() consumes it.
+                **({"_embed": _compute} if defer_embedding else {}),
                 # 5-point landmarks (eyes, nose, mouth corners). Used by the
                 # quality gate to reject side-profile faces.
                 "kps": kps.astype(float).tolist() if kps is not None else None,
@@ -291,7 +336,16 @@ def _warn_unaligned() -> None:
     )
 
 
-def extract_faces_from_rgb(rgb_image: np.ndarray) -> list[dict]:
+def extract_faces_from_rgb(
+    rgb_image: np.ndarray, defer_embedding: bool = False
+) -> list[dict]:
+    """Detect every face in the frame.
+
+    ``defer_embedding=True`` returns faces with ``embedding=None`` and defers the
+    660 ms-per-face embedding until the caller calls ``ensure_embedding(face)``.
+    Use it wherever a quality gate runs between detection and matching; the
+    default stays eager so every existing caller is unchanged.
+    """
     if rgb_image.ndim != 3 or rgb_image.shape[2] != 3:
         raise ValueError("Expected an RGB image array with shape (H, W, 3)")
 
@@ -305,6 +359,9 @@ def extract_faces_from_rgb(rgb_image: np.ndarray) -> list[dict]:
     backend = (get_settings().face_detector or "insightface").lower()
     if backend == "yolo":
         try:
+            # The YOLO-face path embeds inline and has no deferral; callers that
+            # asked for it simply get eager embeddings, which is correct, just
+            # not as fast.
             return _extract_faces_yolo(rgb_image)
         except Exception as exc:
             # Never let a detector-config problem take down live recognition —
@@ -312,9 +369,9 @@ def extract_faces_from_rgb(rgb_image: np.ndarray) -> list[dict]:
             logger.error(
                 "YOLO detector unavailable (%s); falling back to InsightFace", exc
             )
-            return _extract_faces_insightface(rgb_image)
+            return _extract_faces_insightface(rgb_image, defer_embedding)
 
-    return _extract_faces_insightface(rgb_image)
+    return _extract_faces_insightface(rgb_image, defer_embedding)
 
 
 def extract_faces_from_image(image: Image.Image) -> list[dict]:

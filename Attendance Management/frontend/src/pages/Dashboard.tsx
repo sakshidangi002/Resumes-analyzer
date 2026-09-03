@@ -763,16 +763,19 @@ export default function Dashboard() {
           )}
         </section>
 
-        <section className="eds-card eds-c1-8">
+        {/* Fills its grid row: the Celebrations panel beside it is a tall list,
+            and a three-tile card left a block of dead space under itself. */}
+        <section className="eds-card eds-c1-8 eds-card--fill">
           <div className="eds-card-head">
             <span className="eds-chip"><Icons.Team /></span>
             <div className="eds-card-titles">
               <h2 className="eds-card-title">My Team Status</h2>
+              <p className="eds-card-sub">Today</p>
             </div>
             {!isAdmin && <NavLink to="/leave" className="eds-action eds-action--primary">Request Leave</NavLink>}
           </div>
           <div className="eds-card-body">
-            <div className="eds-tiles">
+            <div className="eds-tiles eds-tiles--fill">
               <div className="eds-tile eds-tile--emerald">
                 <span className="eds-tile-chip"><Icons.Users /></span>
                 <div className="eds-tile-figures">
