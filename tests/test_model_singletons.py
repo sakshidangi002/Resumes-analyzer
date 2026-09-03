@@ -14,7 +14,7 @@ import types
 import pytest
 
 # backend.main pulls in pdfplumber / python-docx for resume text extraction,
-# which requirements-test.txt deliberately omits. Skip visibly rather than
+# which CI deliberately omits (see .github/workflows/ci.yml). Skip visibly rather than
 # failing collection; CI runs with -rs so this is reported.
 try:
     from backend import main as resume_main

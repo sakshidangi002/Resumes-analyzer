@@ -11,7 +11,7 @@ Three modes:
     restart the NSSM service if any backend Python was uploaded.
 
 Prerequisites (laptop only, one-time):
-    pip install -r scripts/requirements-sync.txt    # paramiko + watchdog
+    pip install -r requirements.txt                 # includes paramiko + watchdog
 
 Setup:
     1. Copy sync_to_server.example.json -> sync_to_server.json and edit host/user/key.

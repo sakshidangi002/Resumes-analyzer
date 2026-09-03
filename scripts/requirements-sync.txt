@@ -1,4 +1,0 @@
-# Dev-laptop only: SSH deploy sync (not installed on production server)
-#   pip install -r scripts/requirements-sync.txt
-paramiko>=3.4.0
-watchdog>=4.0.0

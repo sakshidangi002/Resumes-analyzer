@@ -21,12 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SKIP = {".venv", "venv", "env", ".env", "site-packages", "node_modules",
         "__pycache__", ".git", ".graph_engine_runs", "deploy", "third_party",
         "build", "dist", "release", ".pytest_cache", ".mypy_cache"}
-REQ_FILES = [
-    ROOT / "requirements.txt",
-    ROOT / "Attendance Management" / "backend" / "requirements.txt",
-    ROOT / "requirements-test.txt",
-    ROOT / "scripts" / "requirements-sync.txt",
-]
+# ONE file — see requirements.txt for why the split was removed.
+REQ_FILES = [ROOT / "requirements.txt"]
 # Top-level modules that are this repo's own code, imported without a package
 # prefix because of how the entry points set sys.path.
 OURS = {"app", "backend", "frontend", "scripts", "tests", "net", "conftest",
