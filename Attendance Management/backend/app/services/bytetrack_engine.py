@@ -25,6 +25,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from functools import lru_cache
 
 from app.core.config import get_settings
@@ -340,10 +341,68 @@ _perf_lock = threading.Lock()
 _perf: dict[str, dict] = {}
 
 
+# How many recent passes to keep per camera for percentiles.
+#
+# A mean is not enough and never was. The audit's central number — the doorway
+# p90 cycle of 9.8s against a p50 of 3.5s — is invisible in an average, and it
+# is the p90 that decides whether a person walking through gets sampled at all.
+# 512 passes is roughly 25-40 minutes per camera at the measured rate: long
+# enough for a stable p99, short enough to still reflect "now".
+_PERF_SAMPLES = int(os.getenv("YOLO_PERF_SAMPLES", "512"))
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    """Nearest-rank percentile. `values` must already be sorted."""
+    if not values:
+        return 0.0
+    index = min(len(values) - 1, max(0, int(round(fraction * (len(values) - 1)))))
+    return values[index]
+
+
 def get_perf_stats() -> dict:
-    """Per-camera inference stats: {camera_id: {calls, avg_ms, last_ms, waits_ms}}."""
+    """Per-camera inference stats.
+
+    {camera_id: {calls, avg_ms, last_ms, wait_ms, suspensions,
+                 wait_total_ms, wait_share_pct,
+                 cycle_p50_ms, cycle_p90_ms, cycle_p99_ms, cycle_max_ms,
+                 infer_p50_ms, infer_p90_ms, samples}}
+
+    `cycle` here is wait + inference for a single pass — how long this camera
+    took to be served once, queueing included. It is NOT `_measured_cycle_sec`,
+    which smooths the interval between update() calls for track-hold maths.
+    Under contention the two converge; when a camera is idle they do not.
+
+    Percentiles are computed on read, not maintained on write, so the hot path
+    stays two deque appends.
+    """
     with _perf_lock:
-        return {k: dict(v) for k, v in _perf.items()}
+        raw = {k: (dict(v), list(v.get("_cycles", ())), list(v.get("_infers", ())))
+               for k, v in _perf.items()}
+
+    stats: dict[str, dict] = {}
+    for camera_id, (entry, cycles, infers) in raw.items():
+        entry.pop("_cycles", None)
+        entry.pop("_infers", None)
+        cycles.sort()
+        infers.sort()
+        total_ms = float(entry.get("total_ms") or 0.0)
+        wait_total = float(entry.get("wait_total_ms") or 0.0)
+        denominator = total_ms + wait_total
+        entry.update({
+            "samples": len(cycles),
+            "cycle_p50_ms": round(_percentile(cycles, 0.50), 1),
+            "cycle_p90_ms": round(_percentile(cycles, 0.90), 1),
+            "cycle_p99_ms": round(_percentile(cycles, 0.99), 1),
+            "cycle_max_ms": round(cycles[-1], 1) if cycles else 0.0,
+            "infer_p50_ms": round(_percentile(infers, 0.50), 1),
+            "infer_p90_ms": round(_percentile(infers, 0.90), 1),
+            # THE number the audit turned on: more than half of a doorway
+            # camera's cycle was spent queueing behind other cameras, not
+            # inferring. A mean inference time cannot show that.
+            "wait_share_pct": round(100.0 * wait_total / denominator, 1) if denominator else 0.0,
+        })
+        stats[camera_id] = entry
+    return stats
 
 
 # A queue wait longer than this did not happen inside this process. Nothing in
@@ -368,7 +427,16 @@ def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
         d = _perf.setdefault(
             camera_id,
             {"calls": 0, "total_ms": 0.0, "last_ms": 0.0, "wait_ms": 0.0,
-             "suspensions": 0},
+             "suspensions": 0,
+             # Cumulative, unlike `wait_ms` which is only the LAST wait. Without
+             # this there is no way to compute what share of a camera's time
+             # goes to queueing rather than to work — the single most useful
+             # number about this pipeline.
+             "wait_total_ms": 0.0,
+             # Bounded ring buffers for percentiles. Prefixed with _ so
+             # get_perf_stats can strip them from the public shape.
+             "_cycles": deque(maxlen=_PERF_SAMPLES),
+             "_infers": deque(maxlen=_PERF_SAMPLES)},
         )
         if wait_ms > _IMPLAUSIBLE_WAIT_MS:
             # Report it as what it is, and keep it out of the statistics so the
@@ -385,8 +453,14 @@ def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
         d["total_ms"] += infer_ms
         d["last_ms"] = infer_ms
         d["wait_ms"] = wait_ms
+        d["wait_total_ms"] = d.get("wait_total_ms", 0.0) + wait_ms
         d["avg_ms"] = d["total_ms"] / d["calls"]
-        return dict(d)
+        # Suspension passes reach here with wait_ms zeroed above, so a host
+        # sleep cannot poison the percentiles the way it poisoned the mean.
+        d["_cycles"].append(wait_ms + infer_ms)
+        d["_infers"].append(infer_ms)
+        # The PERF log line reads this; keep the ring buffers out of it.
+        return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
 def effective_provisional_grace(grace_floor: float, cycle_sec: float) -> float:

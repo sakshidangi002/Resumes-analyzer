@@ -56,6 +56,7 @@ from app.services import camera_profile
 from app.services import face_quality
 from app.services import face_service
 from app.services import person_detector
+from app.services import pipeline_metrics
 from app.services import unknown_faces
 from app.services import unknown_attendance
 
@@ -470,6 +471,13 @@ def _submit_attendance(
     """
     from app.services.recognition import mark_cctv_attendance
 
+    def _count_attendance_write(camera: str, action: str) -> None:
+        """Never let a counter stop an attendance write."""
+        try:
+            pipeline_metrics.metrics.record_attendance_write(camera, action)
+        except Exception:                                       # noqa: BLE001
+            logger.debug("metrics: attendance write not counted", exc_info=True)
+
     queued = _attendance_executor._work_queue.qsize()
     if queued > _ATTENDANCE_QUEUE_MAX:
         logger.error(
@@ -477,6 +485,7 @@ def _submit_attendance(
             "camera=%s. The database is not keeping up.",
             queued, _ATTENDANCE_QUEUE_MAX, employee_id, camera_id,
         )
+        _count_attendance_write(camera_id, "dropped_queue_overflow")
         return
 
     def _run() -> None:
@@ -504,6 +513,7 @@ def _submit_attendance(
                 "ATTN-WRITE retry %d/%d in %ds emp=%s camera=%s action=%s",
                 attempt, max_attempts, delay, employee_id, camera_id, action,
             )
+            _count_attendance_write(camera_id, "retried")
             timer = threading.Timer(
                 delay,
                 _submit_attendance,
@@ -522,12 +532,16 @@ def _submit_attendance(
                 "attempts — attendance NOT recorded, manual entry required",
                 employee_id, camera_id, camera_purpose, action, max_attempts,
             )
+            # The one counter that should page somebody (T-06): every increment
+            # is a payroll event that has to be keyed in by hand.
+            _count_attendance_write(camera_id, "lost")
             return
 
         logger.info(
             "ATTN-WRITE done emp=%s camera=%s purpose=%s action=%s took=%.0fms",
             employee_id, camera_id, camera_purpose, action, took_ms,
         )
+        _count_attendance_write(camera_id, action or "unknown")
 
     _attendance_executor.submit(_run)
 
@@ -1101,6 +1115,19 @@ def _log_decision(
     key = (track_id, fields["reason"], bool(decision.allowed))
     if getattr(w, "_last_decision_key", None) != key:
         w._last_decision_key = key
+        # Count the same DISTINCT outcomes this line logs, so /api/metrics and a
+        # grep of the log agree. Counting every re-evaluation instead would let
+        # a single settled `already_marked` track outweigh every other reason.
+        try:
+            pipeline_metrics.metrics.record_decision(
+                w.camera_id,
+                reason=fields["reason"],
+                allowed=bool(decision.allowed),
+                face_px=fields.get("face_px"),
+            )
+        except Exception:                                       # noqa: BLE001
+            # Metrics must never be able to break a decision from being logged.
+            logger.debug("metrics: decision not counted", exc_info=True)
         logger.info(
             "DECISION camera=%s [%s] track=%s employee=%s(%s) allowed=%s %s",
             w.camera_id, w.camera_purpose, track_id,
@@ -3645,6 +3672,108 @@ class CameraManager:
         except Exception:
             logger.debug("inference gate stats unavailable", exc_info=True)
         return stats
+
+    def health_snapshot(self) -> dict:
+        """Per-camera liveness for the /health endpoint. Cheap by design.
+
+        Deliberately NOT `list_statuses()`. That calls `serialize_state()`,
+        which takes each worker's `_frame_lock` and reads the camera profile —
+        a database-backed lookup. A health probe runs on a supervisor's
+        schedule, so it must never contend with the capture threads nor add
+        database load: those are the two things a degraded system has least of,
+        and a probe that makes the fault worse is not a probe. Raw state fields
+        under the manager lock only, same as `get_stats`.
+
+        Two ages are reported, and they answer different questions:
+
+        * ``frame_age_sec``  — how long since the STREAM delivered anything.
+          Fed by ``grab()`` at full rate, so on a healthy camera it is always
+          near zero. ``_StreamThread`` already forces a reconnect at
+          ``_STALE_TIMEOUT`` (15s), so anything much beyond that means the
+          reconnect itself is failing.
+
+        * ``inference_age_sec`` — how long since an analysis pass completed.
+          This one is legitimately allowed to grow: the motion gate suspends
+          detection on a static scene (monitor cameras coast for
+          ``_MONITOR_COAST_SEC``, doorways force a pass only every
+          ``_MAX_IDLE_SKIP_QUIET_SEC``), and a p99 cycle on this hardware is
+          ~25s. An empty corridor at night is SUPPOSED to look idle. The caller
+          must therefore threshold it far more loosely than frame age — see
+          HEALTH_MAX_INFERENCE_AGE_SEC in app/main.py.
+
+        Never raises: a per-worker failure is reported on that worker rather
+        than losing the whole snapshot.
+        """
+        with self._lock:
+            workers = list(self._workers.values())
+
+        now_ts = time.time()
+        cameras: list[dict] = []
+        for w in workers:
+            try:
+                state = w.state
+                last_frame = float(getattr(state, "last_frame_time", 0.0) or 0.0)
+                updated = float(getattr(state, "updated_at", 0.0) or 0.0)
+                # HCNetSDKCameraWorker has no recognition/display threads, so
+                # every thread lookup is optional. A missing thread reports
+                # None ("not applicable"), which is not the same as False
+                # ("died") and must not be treated as a fault.
+                stream_thread = getattr(w, "_stream_thread", None)
+                recog_thread = getattr(w, "_recog_thread", None)
+                cameras.append({
+                    "camera_id": w.camera_id,
+                    "name": w.name,
+                    "purpose": getattr(w, "camera_purpose", None),
+                    "status": state.status,
+                    "last_error": state.last_error,
+                    "frame_age_sec": round(now_ts - last_frame, 1) if last_frame else None,
+                    "inference_age_sec": round(now_ts - updated, 1) if updated else None,
+                    "reconnect_count": int(getattr(state, "reconnect_count", 0) or 0),
+                    "stream_thread_alive": (
+                        stream_thread.is_alive() if stream_thread is not None else None
+                    ),
+                    "recognition_thread_alive": (
+                        recog_thread.is_alive() if recog_thread is not None else None
+                    ),
+                })
+            except Exception as exc:                            # noqa: BLE001
+                # Reporting a broken worker IS the health signal. Swallowing it
+                # would hide exactly the fault this endpoint exists to surface.
+                cameras.append({
+                    "camera_id": getattr(w, "camera_id", None),
+                    "name": getattr(w, "name", None),
+                    "status": "unreadable",
+                    "last_error": f"health snapshot failed: {type(exc).__name__}",
+                    "frame_age_sec": None,
+                    "inference_age_sec": None,
+                    "stream_thread_alive": None,
+                    "recognition_thread_alive": None,
+                })
+        cameras.sort(key=lambda c: str(c["camera_id"]))
+
+        # TECHNICAL DEBT — `_work_queue` is a ThreadPoolExecutor private.
+        #
+        # `_submit_attendance` already reaches into it for the same number, so
+        # this follows existing precedent rather than setting one. It is still
+        # a stdlib internal and NOT a supported interface: a CPython change to
+        # the executor's internals breaks it silently (the except below turns
+        # it into "unknown", which reports as healthy — the wrong direction).
+        #
+        # The fix is to own the queue instead of inspecting someone else's:
+        # wrap submission in a small counter (incremented on submit,
+        # decremented when the task starts) and read that. Deferred because it
+        # touches the attendance write path, which is out of scope for T-01.
+        try:
+            queue_depth = _attendance_executor._work_queue.qsize()
+        except Exception:                                       # noqa: BLE001
+            queue_depth = None
+
+        return {
+            "ffmpeg_ok": self._ffmpeg_ok,
+            "cameras": cameras,
+            "attendance_queue_depth": queue_depth,
+            "attendance_queue_max": _ATTENDANCE_QUEUE_MAX,
+        }
 
     def is_ffmpeg_ok(self) -> bool:
         if self._ffmpeg_ok is None:
