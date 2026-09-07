@@ -55,6 +55,7 @@ from app.services import bytetrack_engine
 from app.services import camera_profile
 from app.services import face_quality
 from app.services import face_service
+from app.services.track_prediction import BoxPredictor as _BoxPredictor
 from app.services import person_detector
 from app.services import pipeline_metrics
 from app.services import unknown_faces
@@ -287,6 +288,62 @@ if _LEGACY_MOTION_THRESHOLD is not None:
         _LEGACY_MOTION_THRESHOLD, _MOTION_CHANGED_PCT,
     )
 
+# Minimum seconds between two analysis passes on a MONITOR camera.
+#
+# This makes `monitor_analysis_interval` (core/config.py) actually do something.
+# It has been declared since the room cameras were added but was read NOWHERE --
+# `grep -rn monitor_analysis_interval app/` returned the declaration and no use
+# site -- so the 5s throttle this .env has advertised for months never existed
+# and the room cameras have always free-run.
+#
+# Accepts the CCTV_-prefixed env first, because that is the spelling already
+# deployed in .env files and the one every other knob in this module uses. The
+# settings field (env MONITOR_ANALYSIS_INTERVAL, no prefix) is the fallback.
+#
+# CHOOSING THE VALUE -- 5s would be a no-op, measured:
+#   camera 59  period 9.08s   yolo 3515ms
+#   camera 60  period 8.03s   yolo 3953ms
+# The rooms already run slower than 5s because one pass COSTS ~6s. Since this is
+# a floor on the period, any value under the work time changes nothing. 15s is
+# the first value that actually throttles, and it sits well inside limits the
+# system already accepts: _MONITOR_COAST_SEC lets a static room coast 30s
+# without re-analysing at all, and seated staff do not move between passes.
+# 0 disables the throttle and restores the previous free-running behaviour.
+def _monitor_min_interval() -> float:
+    env = os.getenv("CCTV_MONITOR_ANALYSIS_INTERVAL")
+    if env is not None:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            logger.warning(
+                "CCTV_MONITOR_ANALYSIS_INTERVAL=%r is not a number; ignoring", env
+            )
+    try:
+        from app.core.config import get_settings
+        return max(0.0, float(getattr(get_settings(), "monitor_analysis_interval", 0.0) or 0.0))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+_MONITOR_MIN_INTERVAL = _monitor_min_interval()
+
+# Minimum seconds between FACE-RECOGNITION passes on a DOORWAY camera.
+#
+# Rate-limits only the face stage; YOLO/ByteTrack still run every pass. See the
+# call site in _RecognitionThread.run() for the measurements behind it.
+#
+# 5.0 is chosen against the measured face-pass cost (~5-7s): one face pass, then
+# ~5s of pure tracking at ~600ms a pass -- roughly 8 consecutive detections for
+# ByteTrack to associate across, where today it gets one.
+#
+# TRADE-OFF, stated plainly: a person in shot for ~7s gets FEWER face samples,
+# so recognition has fewer chances per transit. It is not obviously a loss --
+# an occupied pass already costs 5-7s, so a transit only ever got 1-2 samples --
+# and identity evidence accumulates on the TRACK, which currently cannot
+# accumulate at all because the id churns every pass. 0 disables the limit and
+# restores a face pass on every frame.
+_RECOG_MIN_INTERVAL = max(0.0, float(os.getenv("CCTV_RECOG_MIN_INTERVAL_SEC", "5.0")))
+
 # How long a MONITOR camera may coast on a static scene before it re-analyses
 # anyway, even with no motion. Bounds the staleness of a coasted count: a room
 # that somehow empties without registering motion is re-checked within this.
@@ -324,7 +381,7 @@ _GATE_STATS_TS = 0.0
 # standing at a gate produces no frame-to-frame change, so pure motion gating
 # makes them invisible; this bounds that. Rooms are unaffected — they coast
 # deliberately, and a seated person there is already tracked.
-_MAX_IDLE_SKIP_SEC = float(os.getenv("CCTV_MAX_IDLE_SKIP_SEC", "2.0"))
+_MAX_IDLE_SKIP_SEC = float(os.getenv("CCTV_MAX_IDLE_SKIP_SEC", "0.5"))
 # The same limit once the gate has seen nobody for a while. An empty corridor
 # does not need checking three times a second, and the inference it frees is
 # what keeps the room cameras' overlay current.
@@ -618,6 +675,11 @@ class CameraRuntimeState:
     # bound (which ends in a stall). Cannot be inferred from FPS, which stays
     # healthy-looking while the backlog grows.
     frame_age_ms: float = 0.0
+    # MONITOR cameras only: True while this camera is waiting out its analysis
+    # interval (_MONITOR_MIN_INTERVAL). Always False on a doorway camera, which
+    # is never throttled. Surfaced so "the room count is stale" and "the room
+    # camera is broken" are distinguishable from the dashboard.
+    monitor_throttled: bool = False
     retrieve_fps: float = 0.0  # frames actually DECODED per second (see _StreamThread)
     _disp_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
     _retr_ts: deque = field(default_factory=lambda: deque(maxlen=_FPS_WINDOW))
@@ -1514,6 +1576,15 @@ class _RecognitionThread(threading.Thread):
         # coast its tracks on a static scene -- see the motion gate in run().
         self._last_analysed_ts: float = 0.0
         self._stop_evt = threading.Event()
+        # MONITOR throttle: monotonic instant this camera may next run analysis.
+        # 0 = eligible now. Per-thread, so cameras 59 and 60 hold independent
+        # schedules and neither can gate the other (or a doorway camera).
+        self._monitor_next_allowed: float = 0.0
+        self._monitor_throttle_logged = False
+        # START time of the previous analysis pass, for since_prev on PASS.
+        self._prev_pass_ts: float = 0.0
+        # END of the last pass that actually ran the face stage. Gates only.
+        self._last_recog_end: float = 0.0
         self._prev_gray: Optional[np.ndarray] = None  # for motion gating
         # Edge-triggered log flags: log a skip ONCE when it starts, not every tick.
         self._blur_logged = False
@@ -1701,6 +1772,7 @@ class _RecognitionThread(threading.Thread):
     def _analyze_person(
         self, w: "CameraWorker", frame: np.ndarray, rgb: np.ndarray,
         skip_faces: bool = False, frame_ts: float = 0.0,
+        skip_reason: str = "",
     ) -> None:
         """Body-tracking pipeline: detect people, bind recognised faces to their
         body track, and keep the name on them until they leave the frame.
@@ -1783,6 +1855,13 @@ class _RecognitionThread(threading.Thread):
         w.state.active_tracks = len(ptracks)
         with w._frame_lock:
             w._latest_tracks = list(ptracks)
+            # CAPTURE time of the frame these boxes were measured on -- NOT the
+            # time the pass finished. The display thread needs it to know how
+            # stale the boxes already are when they arrive (measured: ~1.8s on
+            # camera 58), because it draws them on the LIVE frame. Without it a
+            # box can never line up with the video no matter how it is
+            # extrapolated. Display-only; nothing else reads it.
+            w._latest_tracks_frame_ts = frame_ts
             w.state.updated_at = time.time()
 
         # 2. Detect faces (with embeddings) once on the full frame. Skipped when the
@@ -1819,13 +1898,22 @@ class _RecognitionThread(threading.Thread):
 
         # Log the stage counts only when they CHANGE (a static room would otherwise
         # log identical lines every analysis tick).
-        sig = (len(ptracks), len(faces), skip_faces)
+        # The skip REASON is reported, not just the fact of a skip.
+        #
+        # This line used to print "(faces skipped: blurry frame)" for any skip at
+        # all. Once CCTV_RECOG_MIN_INTERVAL_SEC was added, `skip_faces` became
+        # `blurry or recognition-throttled`, so a throttled pass reported itself
+        # as a BLUR problem. That sent a live diagnosis down a hardware path --
+        # camera 58 was logging "blurry frame" while its frames measured a
+        # Laplacian variance of ~395 against a threshold of 80, i.e. nowhere near
+        # blurry. Never merge two causes into one message.
+        sig = (len(ptracks), len(faces), skip_faces, skip_reason)
         if sig != self._stage_sig:
             self._stage_sig = sig
             logger.info(
                 "PIPELINE camera=%s monitor=%s persons=%d faces=%d%s",
                 w.camera_id, w.is_monitor, len(ptracks), len(faces),
-                " (faces skipped: blurry frame)" if skip_faces else "",
+                f" (faces skipped: {skip_reason})" if skip_faces else "",
             )
 
         # Anchor any attendance event to the frame's capture time, not to
@@ -2251,17 +2339,29 @@ class _RecognitionThread(threading.Thread):
         # useful log and one nobody can grep.
         _interesting = bool(ptracks) or bool(faces)
         _since_beat = time.monotonic() - getattr(self, "_pass_beat_ts", 0.0)
+        # Interval between the START of this pass and the previous one -- the
+        # single number this whole throttle exists to move, and previously not
+        # recorded anywhere. It had to be reconstructed from PERF counters
+        # because PASS lines are heartbeat-throttled on an empty corridor and so
+        # cannot be differenced directly.
+        _now_pass = time.monotonic()
+        _since_prev = (_now_pass - self._prev_pass_ts) if self._prev_pass_ts else 0.0
+        self._prev_pass_ts = _now_pass
         if _interesting or _since_beat >= _PASS_HEARTBEAT_SEC:
             if not _interesting:
                 self._pass_beat_ts = time.monotonic()
             logger.info(
-                "PASS camera=%s role=%s total=%.0fms frame_age=%.0fms "
+                "PASS camera=%s role=%s since_prev=%.0fms throttled=%s "
+                "total=%.0fms frame_age=%.0fms "
                 "track_stage=%.0fms yolo=%.0fms yolo_wait=%.0fms "
                 "face_detect=%.0fms face_crop=%.0fms(n=%d) "
                 "quality=%.0fms embed=%.0fms(n=%d) fuse=%.0fms match=%.0fms gate=%.0fms "
                 "tracks=%d fresh=%d face_assigned=%d wants_recog=%d "
                 "provisional=%d faces=%d recognized=%d",
-                w.camera_id, w.camera_purpose, _total_ms,
+                w.camera_id, w.camera_purpose,
+                _since_prev * 1000.0,
+                ("yes" if _MONITOR_MIN_INTERVAL > 0 else "off") if w.is_monitor else "n/a",
+                _total_ms,
                 float(getattr(w.state, "frame_age_ms", 0.0) or 0.0),
                 # The WHOLE body stage, not just the inference inside it.
                 # `yolo` below is the engine's own inference timer; the gap
@@ -2328,6 +2428,47 @@ class _RecognitionThread(threading.Thread):
             # keeps working (the grab thread is cheap and is untouched).
             if getattr(w, "analysis_paused", False):
                 continue
+
+            # ── MONITOR analysis throttle ──────────────────────────────────
+            # Room cameras must keep yolo11m @960: a real-frame benchmark on
+            # cameras 59/60 measured 640 losing 14 of 26 people and 800 losing
+            # 15, all of them SEATED staff behind chairs and monitors. So the
+            # room detection is not made cheaper -- it is made RARER.
+            #
+            # It costs ~3.5-4.0s of inference and runs every ~8-9s, i.e. ~75%
+            # duty on both inference slots, and on a 4-physical-core box that
+            # halves the cores a doorway pass gets. Camera 58's yolo11s@640
+            # measures 349ms standalone but 1125ms live -- the missing 3x is
+            # this contention, not queueing (high_avg_wait_ms is only ~299).
+            #
+            # A FLOOR on the period, not an added delay: the next slot is
+            # booked from the START of this pass, so the period becomes
+            # max(interval, work) rather than interval + work. Setting it below
+            # the work time is therefore a no-op, which is exactly why 5s does
+            # nothing here -- see _MONITOR_MIN_INTERVAL.
+            #
+            # Non-blocking by construction: this `continue` returns to the
+            # loop's own `_stop_evt.wait(analysis_interval)` at the top. It
+            # never sleeps inside the shared inference gate, and it never
+            # touches a doorway camera's thread.
+            if w.is_monitor and _MONITOR_MIN_INTERVAL > 0:
+                _now_m = time.monotonic()
+                if _now_m < self._monitor_next_allowed:
+                    w.state.monitor_throttled = True
+                    if not self._monitor_throttle_logged:
+                        self._monitor_throttle_logged = True
+                        logger.info(
+                            "MONITOR-THROTTLE camera=%s throttled interval=%.1fs "
+                            "next_allowed_in=%.1fs",
+                            w.camera_id, _MONITOR_MIN_INTERVAL,
+                            self._monitor_next_allowed - _now_m,
+                        )
+                    continue
+                # Book the next slot BEFORE the work, so a slow pass does not
+                # push the schedule out by its own duration.
+                self._monitor_next_allowed = _now_m + _MONITOR_MIN_INTERVAL
+                w.state.monitor_throttled = False
+                self._monitor_throttle_logged = False
 
             with w._frame_lock:
                 frame = w._latest_frame
@@ -2499,10 +2640,52 @@ class _RecognitionThread(threading.Thread):
                 # Body-tracking mode: track people, bind a recognised face to the
                 # person so the name persists while they are in view.
                 if w.use_person_tracking:
+                    # ── Recognition cadence, decoupled from tracking ────────
+                    # MEASURED on camera 58 during a real walk:
+                    #     PASS since_prev=7140ms total=6953ms
+                    # YOLO is only ~580ms of that. The rest is the FACE stage
+                    # (face_detect 1.6-3.0s + face_crop up to 2.1s), which fires
+                    # ONLY when somebody is in frame -- so the pipeline is
+                    # slowest at exactly the moment it must be fastest.
+                    #
+                    # A 7s hole mid-walk means consecutive boxes never overlap,
+                    # so ByteTrack cannot associate and every detection mints a
+                    # fresh aux id. Census over 13:40-13:48 with people walking:
+                    #     cam 59 (seated) : 4 ids, 4 REAL ByteTrack, all stable
+                    #     cam 58 (walking): 24 ids, 0 REAL, 23 single-measurement
+                    # Camera 58 is the only camera where ByteTrack confirms
+                    # NOTHING, and the hole is why.
+                    #
+                    # Tracking needs frequent detection; recognition does not.
+                    # So YOLO/ByteTrack runs EVERY pass (~600ms) and the face
+                    # stage is rate-limited, giving ByteTrack long runs of
+                    # closely-spaced frames to associate across.
+                    #
+                    # Measured from the END of the last face pass, not its
+                    # start: a 6s face pass followed by a 5s window yields ~8
+                    # tracking passes in a row, which is what association and
+                    # the velocity fit both need.
+                    #
+                    # Gates only. MONITOR cameras are already throttled to
+                    # _MONITOR_MIN_INTERVAL and rely on the face stage to name
+                    # seated staff, so their cadence is deliberately untouched.
+                    _skip_recog = False
+                    if not w.is_monitor and _RECOG_MIN_INTERVAL > 0:
+                        _since_recog = time.monotonic() - self._last_recog_end
+                        _skip_recog = _since_recog < _RECOG_MIN_INTERVAL
                     # `blurry` only disables the FACE stage — YOLO still runs.
                     self._analyze_person(
-                        w, frame, rgb, skip_faces=blurry, frame_ts=frame_ts,
+                        w, frame, rgb, skip_faces=(blurry or _skip_recog),
+                        frame_ts=frame_ts,
+                        skip_reason=(
+                            "blurry frame" if blurry
+                            else ("recognition throttled "
+                                  f"(CCTV_RECOG_MIN_INTERVAL_SEC={_RECOG_MIN_INTERVAL:g}s)"
+                                  if _skip_recog else "")
+                        ),
                     )
+                    if not _skip_recog:
+                        self._last_recog_end = time.monotonic()
                     # This path returns via `continue`, so the stamp cannot live
                     # with the face path's publish block below. MONITOR cameras
                     # always come through here.
@@ -2743,6 +2926,7 @@ class _RecognitionThread(threading.Thread):
                 self._last_analysed_ts = time.time()
                 with w._frame_lock:
                     w._latest_tracks = list(tracks)
+                    w._latest_tracks_frame_ts = frame_ts   # see _analyse()
                     w.state.updated_at = time.time()
                 if w.state.recognition_status == "analyzing":
                     w.state.recognition_status = "idle" if not tracks else "recognized"
@@ -2771,6 +2955,12 @@ class _DisplayThread(threading.Thread):
         self._w = worker
         self._stop_evt = threading.Event()
         self._drawn_ids: set = set()  # track ids whose box is already on screen
+        # Display-side box extrapolation. Owned by THIS thread, so it needs no
+        # lock; MONITOR cameras get a shorter cap (seated people turn more than
+        # they translate). See services/track_prediction.py.
+        self._predictor = _BoxPredictor(
+            worker.camera_id, is_monitor=bool(getattr(worker, "is_monitor", False))
+        )
         # Edge-triggered: warn ONCE when the pipeline starts lagging, and once
         # again when it recovers — not on every encoded frame.
         self._age_warned = False
@@ -2798,6 +2988,7 @@ class _DisplayThread(threading.Thread):
                 frame = w._latest_frame
                 frame_ts = w._latest_frame_ts
                 tracks = list(w._latest_tracks)
+                tracks_ts = getattr(w, "_latest_tracks_frame_ts", 0.0)
 
             if frame is None:
                 continue
@@ -2836,8 +3027,16 @@ class _DisplayThread(threading.Thread):
                     {"orientation": w.line_orientation, "position": w.line_position}
                     if (w.crossing_enabled and w.use_person_tracking) else None
                 )
+                # DISPLAY ONLY: draw each box where the person is estimated to
+                # be NOW, not where they were when the pass that found them
+                # started 1-4s ago. `tracks` (the real, measured coordinates)
+                # is left untouched and is what crossing/attendance already
+                # consumed upstream; this hands the renderer copies.
+                draw_tracks = self._predictor.predict(
+                    tracks, frame.shape[:2], measured_at=tracks_ts
+                )
                 annotated = _draw_enhanced_overlay(
-                    frame, tracks, w.name, w.state.fps,
+                    frame, draw_tracks, w.name, w.state.fps,
                     line=line_info, crossing_count=w.state.crossing_count,
                     track_label="People" if w.use_person_tracking else "Faces",
                     # Doorway cameras only: a MONITOR camera watches desks and
@@ -2924,6 +3123,9 @@ class CameraWorker:
         # report how far behind real life the picture is (state.frame_age_ms).
         self._latest_frame_ts: float = 0.0
         self._latest_tracks: list = []       # published by recog, drawn by display
+        # Capture time of the frame _latest_tracks was measured on. Read by the
+        # display thread's box predictor only.
+        self._latest_tracks_frame_ts: float = 0.0
         self._frame_counter = 0  # For frame skipping
         self._last_view_ts = 0.0  # last time the preview JPEG was requested
 

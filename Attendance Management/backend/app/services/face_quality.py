@@ -167,12 +167,41 @@ def _landmark_asymmetry(kps: Optional[Sequence]) -> float:
         return 0.0
     try:
         left_eye, right_eye, nose = kps[0], kps[1], kps[2]
-        dl = abs(float(nose[0]) - float(left_eye[0]))
-        dr = abs(float(right_eye[0]) - float(nose[0]))
-        span = dl + dr
+        # Measured along the INTER-OCULAR AXIS, not the image x-axis.
+        #
+        # This used to be `abs(nose.x - left_eye.x)` vs `abs(right_eye.x -
+        # nose.x)` -- horizontal distances in IMAGE space. That is only a
+        # measure of yaw while the head is upright. Under ROLL the eye-nose
+        # axis rotates away from the image axis, so the two x-projections
+        # diverge and a dead-on frontal face reads as "turned to the side".
+        #
+        # MEASURED on camera 58, which is mounted at a steep angle and delivers
+        # faces rolled -7 to -44 degrees:
+        #     w=53 h=86 det=0.785 roll=-43.9 -> asym 0.902  REJECTED
+        #     w=37 h=71 det=0.728 roll=-34.6 -> asym 0.560  REJECTED
+        # Both are large, confidently-detected faces. They were refused for
+        # being rotated, not for being turned away.
+        #
+        # Projecting onto the unit vector between the eyes removes roll exactly:
+        # rotating every landmark rotates that basis with them, so the
+        # projections are invariant. It measures what the metric always intended
+        # -- where the nose sits BETWEEN the eyes -- and costs one square root.
+        # Yaw is still caught, because a real side-turn moves the nose along
+        # this axis; and max_yaw_deg remains a separate, independent check.
+        ex = float(right_eye[0]) - float(left_eye[0])
+        ey = float(right_eye[1]) - float(left_eye[1])
+        span = (ex * ex + ey * ey) ** 0.5
         if span <= 1e-3:
             return 1.0
-        return float(abs(dl - dr) / span)
+        ux, uy = ex / span, ey / span
+        dl = abs((float(nose[0]) - float(left_eye[0])) * ux
+                 + (float(nose[1]) - float(left_eye[1])) * uy)
+        dr = abs((float(right_eye[0]) - float(nose[0])) * ux
+                 + (float(right_eye[1]) - float(nose[1])) * uy)
+        total = dl + dr
+        if total <= 1e-3:
+            return 1.0
+        return float(abs(dl - dr) / total)
     except (TypeError, ValueError, IndexError):
         return 0.0
 

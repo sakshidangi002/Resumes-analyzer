@@ -74,7 +74,20 @@ new_track_thresh: 0.20
 # Frames a lost track is kept alive. Each "frame" here is one ANALYSIS TICK, not a
 # video frame — at a 2s interval, 60 ticks would coast a stale box (with someone's
 # name on it) over an empty chair for 2 minutes after they leave. 8 ticks ≈ 16s.
-track_buffer: 8
+# Frames (= ANALYSIS PASSES here, ultralytics 8.4.86 sets
+# max_frames_lost = track_buffer directly, with no frame-rate scaling) that a
+# lost track survives before it is dropped and its id can never come back.
+#
+# Raised 8 -> 20 on 2026-09-04. 8 was chosen when a doorway pass cost ~2.5s, so
+# it bought ~20s of tolerance. Passes now cost 0.41-1.55s (ONNX build, 2 slots),
+# which silently shrank the SAME 8 passes to ~3-6s of wall clock. A person
+# briefly occluded in the corridor outlived that and came back as a new id.
+# 20 passes restores roughly 8-12s of tolerance at the current rate.
+#
+# This file is the GATE (IN/OUT) tracker only: camera_service sends
+# `steep = is_monitor or id in CCTV_STEEP_CAMERAS` to bytetrack_person_lowconf.yaml,
+# so monitor cameras are unaffected by anything here.
+track_buffer: 20
 
 # IoU/cost association threshold — unchanged from the ultralytics default.
 match_thresh: 0.8
