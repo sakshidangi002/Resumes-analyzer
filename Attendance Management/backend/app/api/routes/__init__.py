@@ -24,6 +24,7 @@ from app.api.routes import (
     interview_questions,
     live_identify,
     face_review,
+    metrics,
 )
 
 api_router = APIRouter()
@@ -55,3 +56,4 @@ api_router.include_router(
 )
 api_router.include_router(live_identify.router, prefix="/live", tags=["live-identify"])
 api_router.include_router(face_review.router, prefix="", tags=["face-review"])
+api_router.include_router(metrics.router, prefix="", tags=["metrics"])

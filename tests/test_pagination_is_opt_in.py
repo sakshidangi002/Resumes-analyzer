@@ -24,7 +24,7 @@ try:
 except ImportError as exc:  # pragma: no cover - depends on the environment
     pytest.skip(
         f"requires the vision stack pulled in by app.api.routes ({exc}); "
-        "install 'Attendance Management/backend/requirements.txt' to run",
+        "install 'requirements.txt' to run",
         allow_module_level=True,
     )
 

@@ -22,12 +22,10 @@ SKIP = {".venv", "venv", "env", ".env", "site-packages", "node_modules",
         "__pycache__", ".git", ".graph_engine_runs", "deploy", "third_party",
         "build", "dist", "release", ".pytest_cache", ".mypy_cache"}
 
-REQ_FILES = [
-    ROOT / "requirements.txt",                                   # Resume Analyzer
-    ROOT / "Attendance Management" / "backend" / "requirements.txt",  # HRMS
-    ROOT / "requirements-test.txt",                              # pytest only
-    ROOT / "scripts" / "requirements-sync.txt",                  # dev deploy tooling
-]
+# ONE file. The dependencies used to live in four, which is how eight imports
+# ended up declared in none of them and thirteen packages ended up declared
+# twice with different pins.
+REQ_FILES = [ROOT / "requirements.txt"]
 
 # ── every top-level module imported anywhere in our own code ───────────────
 imported: dict[str, set[str]] = {}

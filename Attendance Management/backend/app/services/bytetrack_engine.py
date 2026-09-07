@@ -25,6 +25,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from functools import lru_cache
 
 from app.core.config import get_settings
@@ -158,6 +159,25 @@ def _yolo_slot():
 def gate_stats() -> dict:
     """Queueing statistics for the YOLO gate — see inference_gate.stats()."""
     return _gate().stats()
+
+
+def _count_detection(camera_id, outcome: str, box_h: float, pos_y) -> None:
+    """Record what became of one raw detection. Never affects the pipeline.
+
+    Two of the three ways a person is lost before tracking were bare `continue`
+    statements with no log and no counter, so "the detector never saw them" and
+    "we discarded them" were indistinguishable from outside — and they need
+    opposite fixes. Wrapped because a metrics failure must never be able to drop
+    a detection.
+    """
+    try:
+        from app.services.pipeline_metrics import metrics
+
+        metrics.record_detection(
+            camera_id, outcome, box_height_px=box_h, centroid_y_frac=pos_y
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("metrics: detection not counted", exc_info=True)
 
 # Minimum box HEIGHT, in pixels, for a detection to be treated as a person.
 #
@@ -340,10 +360,68 @@ _perf_lock = threading.Lock()
 _perf: dict[str, dict] = {}
 
 
+# How many recent passes to keep per camera for percentiles.
+#
+# A mean is not enough and never was. The audit's central number — the doorway
+# p90 cycle of 9.8s against a p50 of 3.5s — is invisible in an average, and it
+# is the p90 that decides whether a person walking through gets sampled at all.
+# 512 passes is roughly 25-40 minutes per camera at the measured rate: long
+# enough for a stable p99, short enough to still reflect "now".
+_PERF_SAMPLES = int(os.getenv("YOLO_PERF_SAMPLES", "512"))
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    """Nearest-rank percentile. `values` must already be sorted."""
+    if not values:
+        return 0.0
+    index = min(len(values) - 1, max(0, int(round(fraction * (len(values) - 1)))))
+    return values[index]
+
+
 def get_perf_stats() -> dict:
-    """Per-camera inference stats: {camera_id: {calls, avg_ms, last_ms, waits_ms}}."""
+    """Per-camera inference stats.
+
+    {camera_id: {calls, avg_ms, last_ms, wait_ms, suspensions,
+                 wait_total_ms, wait_share_pct,
+                 cycle_p50_ms, cycle_p90_ms, cycle_p99_ms, cycle_max_ms,
+                 infer_p50_ms, infer_p90_ms, samples}}
+
+    `cycle` here is wait + inference for a single pass — how long this camera
+    took to be served once, queueing included. It is NOT `_measured_cycle_sec`,
+    which smooths the interval between update() calls for track-hold maths.
+    Under contention the two converge; when a camera is idle they do not.
+
+    Percentiles are computed on read, not maintained on write, so the hot path
+    stays two deque appends.
+    """
     with _perf_lock:
-        return {k: dict(v) for k, v in _perf.items()}
+        raw = {k: (dict(v), list(v.get("_cycles", ())), list(v.get("_infers", ())))
+               for k, v in _perf.items()}
+
+    stats: dict[str, dict] = {}
+    for camera_id, (entry, cycles, infers) in raw.items():
+        entry.pop("_cycles", None)
+        entry.pop("_infers", None)
+        cycles.sort()
+        infers.sort()
+        total_ms = float(entry.get("total_ms") or 0.0)
+        wait_total = float(entry.get("wait_total_ms") or 0.0)
+        denominator = total_ms + wait_total
+        entry.update({
+            "samples": len(cycles),
+            "cycle_p50_ms": round(_percentile(cycles, 0.50), 1),
+            "cycle_p90_ms": round(_percentile(cycles, 0.90), 1),
+            "cycle_p99_ms": round(_percentile(cycles, 0.99), 1),
+            "cycle_max_ms": round(cycles[-1], 1) if cycles else 0.0,
+            "infer_p50_ms": round(_percentile(infers, 0.50), 1),
+            "infer_p90_ms": round(_percentile(infers, 0.90), 1),
+            # THE number the audit turned on: more than half of a doorway
+            # camera's cycle was spent queueing behind other cameras, not
+            # inferring. A mean inference time cannot show that.
+            "wait_share_pct": round(100.0 * wait_total / denominator, 1) if denominator else 0.0,
+        })
+        stats[camera_id] = entry
+    return stats
 
 
 # A queue wait longer than this did not happen inside this process. Nothing in
@@ -368,7 +446,16 @@ def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
         d = _perf.setdefault(
             camera_id,
             {"calls": 0, "total_ms": 0.0, "last_ms": 0.0, "wait_ms": 0.0,
-             "suspensions": 0},
+             "suspensions": 0,
+             # Cumulative, unlike `wait_ms` which is only the LAST wait. Without
+             # this there is no way to compute what share of a camera's time
+             # goes to queueing rather than to work — the single most useful
+             # number about this pipeline.
+             "wait_total_ms": 0.0,
+             # Bounded ring buffers for percentiles. Prefixed with _ so
+             # get_perf_stats can strip them from the public shape.
+             "_cycles": deque(maxlen=_PERF_SAMPLES),
+             "_infers": deque(maxlen=_PERF_SAMPLES)},
         )
         if wait_ms > _IMPLAUSIBLE_WAIT_MS:
             # Report it as what it is, and keep it out of the statistics so the
@@ -385,8 +472,14 @@ def _record_perf(camera_id: str, wait_ms: float, infer_ms: float) -> dict:
         d["total_ms"] += infer_ms
         d["last_ms"] = infer_ms
         d["wait_ms"] = wait_ms
+        d["wait_total_ms"] = d.get("wait_total_ms", 0.0) + wait_ms
         d["avg_ms"] = d["total_ms"] / d["calls"]
-        return dict(d)
+        # Suspension passes reach here with wait_ms zeroed above, so a host
+        # sleep cannot poison the percentiles the way it poisoned the mean.
+        d["_cycles"].append(wait_ms + infer_ms)
+        d["_infers"].append(infer_ms)
+        # The PERF log line reads this; keep the ring buffers out of it.
+        return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
 def effective_provisional_grace(grace_floor: float, cycle_sec: float) -> float:
@@ -743,6 +836,7 @@ class ByteTrackEngine:
 
         detections = 0
         det_scores: list[float] = []
+        _det_heights: list[int] = []
         seen: set[int] = set()
         if results:
             r = results[0]
@@ -764,9 +858,23 @@ class ByteTrackEngine:
                 if getattr(boxes, "id", None) is not None:
                     ids = boxes.id.int().cpu().tolist()
 
+                # Frame height, for reporting WHERE in the view a detection sat.
+                # On a corridor camera that is a distance proxy, and it is the
+                # only way to answer "are we losing the DISTANT ones?".
+                _frame_h = float(frame_bgr.shape[0]) if getattr(frame_bgr, "shape", None) else 0.0
+
                 for idx, box in enumerate(xyxy):
                     b = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-                    if (b[3] - b[1]) < _MIN_PERSON_PX:
+                    _box_h = float(b[3] - b[1])
+                    _det_heights.append(int(_box_h))
+                    _pos_y = ((b[1] + b[3]) / 2.0 / _frame_h) if _frame_h else None
+                    if _box_h < _MIN_PERSON_PX:
+                        # Was a silent `continue`: no log, no counter, so it was
+                        # impossible to tell whether this floor ever rejected a
+                        # real person. Behaviour is unchanged; it is now visible.
+                        _count_detection(
+                            self.camera_id, "dropped_size_floor", _box_h, _pos_y
+                        )
                         continue          # too small to be a person -- see above
                     tid = ids[idx] if (ids is not None and idx < len(ids)) else None
                     # The DETECTOR's score for this box. It was already computed
@@ -776,6 +884,9 @@ class ByteTrackEngine:
                     det_conf = det_scores[idx] if idx < len(det_scores) else 0.0
 
                     if tid is not None:
+                        _count_detection(
+                            self.camera_id, "tracked_by_id", _box_h, _pos_y
+                        )
                         seen.add(int(tid))
                         pt = self.tracks.get(int(tid))
                         if pt is None:
@@ -797,6 +908,15 @@ class ByteTrackEngine:
                     # it is confidently a person -- see _ADOPT_UNTRACKED_MIN_CONF.
                     score = det_scores[idx] if idx < len(det_scores) else 0.0
                     if self.adopt_min_conf <= 0 or score < self.adopt_min_conf:
+                        # The largest measured loss on the doorway cameras: 32%
+                        # of detections score under the 0.35 bar, and a walker
+                        # cannot earn a ByteTrack id at this cadence, so this
+                        # `continue` is where they end. Counted, with the height
+                        # and position, so the bar can be set from evidence
+                        # rather than guessed. Behaviour unchanged.
+                        _count_detection(
+                            self.camera_id, "dropped_adopt_bar", _box_h, _pos_y
+                        )
                         continue
 
                     # Do not double-count, and do not churn the id.
@@ -837,10 +957,14 @@ class ByteTrackEngine:
                             matched_id, best_iou = nearest, 1.0   # accept below
 
                     if matched_id is not None and best_iou >= 0.30:
+                        # Merged into an existing track rather than creating a
+                        # new one — still an adopted detection, not a loss.
+                        _count_detection(self.camera_id, "adopted", _box_h, _pos_y)
                         self.tracks[matched_id].update_box(b)
                         seen.add(matched_id)
                         continue
 
+                    _count_detection(self.camera_id, "adopted", _box_h, _pos_y)
                     aux_id = self._next_aux_id
                     self._next_aux_id += 1
                     # NOTE max_misses is NOT what retires this track. Retention
@@ -1024,9 +1148,16 @@ class ByteTrackEngine:
         if sig != self._last_sig:
             self._last_sig = sig
             logger.info(
-                "YOLO camera=%s detections=%d scores=%s tracks=%d ids=%s "
-                "new_track_thresh=%s",
-                self.camera_id, detections, det_scores, len(live), sorted(seen),
+                "YOLO camera=%s detections=%d scores=%s heights=%s tracks=%d "
+                "ids=%s new_track_thresh=%s",
+                self.camera_id, detections, det_scores,
+                # Box HEIGHTS alongside the scores. The scores alone could never
+                # separate "a distant person, correctly detected but small" from
+                # "a decode-corruption fragment", which is the exact ambiguity
+                # the size floor was introduced to resolve and then made
+                # invisible. Same line, no extra work: these were already
+                # computed in the detection loop.
+                _det_heights, len(live), sorted(seen),
                 os.path.basename(self.tracker_cfg),
             )
             # Detections that will never become tracks. If this fires

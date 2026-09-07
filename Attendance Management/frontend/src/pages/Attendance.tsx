@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { attendance as api, employees as employeesApi } from "../api/client";
 import CustomSelect from "../components/CustomSelect";
@@ -644,16 +644,56 @@ export default function Attendance() {
     );
   };
 
+  const dateInputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Open the native date picker.
+   *
+   * `showPicker()` is Chromium 99+ / Safari 16+ / Firefox 101+. It throws when
+   * the browser does not have it, or when the call is not treated as
+   * user-activated — neither of which should leave the field unusable, so the
+   * fallback focuses it and the user can still type or use the arrow keys.
+   */
+  const openDatePicker = () => {
+    const el = dateInputRef.current;
+    if (!el) return;
+    try {
+      el.showPicker();
+    } catch {
+      el.focus();
+    }
+  };
+
   const dayNavigator = (
     <div className="eds-att-nav">
-      <label className="eds-datefield" title="Pick a date">
+      {/* Clicking ANYWHERE on this field opens the calendar.
+          By default a date input only opens its picker when you hit the
+          browser's own tiny indicator glyph — clicking the date text just
+          focuses a segment and looks broken. `showPicker()` is the only way to
+          open it from elsewhere, so the whole field becomes the target and the
+          native indicator is hidden in CSS (see .eds-datefield input) to leave
+          one affordance instead of two overlapping ones. */}
+      <label
+        className="eds-datefield"
+        title="Pick a date"
+        onClick={openDatePicker}
+      >
         <Icons.CalendarPlain />
         <input
+          ref={dateInputRef}
           type="date"
           value={selectedDate}
           min="2026-01-01"
           max={todayIso}
           onChange={(e) => setSelectedDate(e.target.value)}
+          // The label's onClick already covers pointer users. This keeps the
+          // keyboard path working: tab to the field, press Enter or Space.
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openDatePicker();
+            }
+          }}
         />
       </label>
       <div className="eds-seg">

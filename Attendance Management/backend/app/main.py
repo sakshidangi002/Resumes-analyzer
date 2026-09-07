@@ -16,6 +16,8 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import asynccontextmanager
 from datetime import timezone
 from logging.handlers import RotatingFileHandler
@@ -504,7 +506,7 @@ async def _unified_lifespan(parent_app: FastAPI):
     # hand out and those endpoints return 503 there. Point the camera UI at the
     # instance that owns the cameras, or put a frame transport (Redis / shared
     # memory) behind camera_manager before load-balancing them freely.
-    if os.getenv("CCTV_WORKERS_ENABLED", "1").strip().lower() not in ("0", "false", "no"):
+    if _cctv_workers_enabled():
         try:
             from app.services.camera_service import camera_manager
             camera_manager.start_all_from_db()
@@ -534,7 +536,7 @@ async def _unified_lifespan(parent_app: FastAPI):
     try:
         from app.core.config import get_settings
         _s = get_settings()
-        if os.getenv("CCTV_WORKERS_ENABLED", "1").strip().lower() in ("0", "false", "no"):
+        if not _cctv_workers_enabled():
             _s = None  # camera pipeline is off for this process; skip the DVR too
         if _s and _s.dvr_autostart and _s.dvr_ip and _s.dvr_username:
             from app.services.dvr_manager import get_dvr_manager
@@ -855,9 +857,257 @@ async def resume_access_guard(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/health")
-def health():
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+# This endpoint used to be `return {"status": "ok"}` — unconditional. It never
+# touched the database or looked at a camera, so it reported a healthy service
+# while every camera was dead and Postgres was unreachable. That is worse than
+# having no endpoint at all: it manufactures confidence, and a supervisor
+# configured against it would never restart anything.
+#
+# LIVENESS vs HEALTH — the split matters, and conflating them is the classic
+# way to build a restart loop:
+#
+#   /health/live  "is this process able to serve a request?"  → supervisor
+#                 Restart target. Trivially 200.
+#   /health       "is this process doing its job?"            → monitoring
+#                 503 when degraded. NOT a restart target: restarting does not
+#                 reconnect an unplugged camera or revive a dead database, it
+#                 just adds an outage to a fault that is already visible.
+#
+# HEALTH_STRICT=0 restores the old unconditional behaviour without a code
+# change, as the rollback path.
+
+def _cctv_workers_enabled() -> bool:
+    """Whether THIS process runs the camera pipeline.
+
+    The health check must agree with the lifespan about this, or an API-only
+    instance reports "no cameras" as healthy while the camera host's failure
+    goes unnoticed. Single source of truth for a value that was parsed
+    identically in three places.
+    """
+    return os.getenv("CCTV_WORKERS_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+
+
+_HEALTH_STRICT = os.getenv("HEALTH_STRICT", "1").strip().lower() not in ("0", "false", "no")
+
+# Comfortably above the stream watchdog's own _STALE_TIMEOUT (15s): by the time
+# a frame is this old, the forced reconnect has already been tried and failed.
+_HEALTH_MAX_FRAME_AGE_SEC = float(os.getenv("HEALTH_MAX_FRAME_AGE_SEC", "60"))
+
+# Deliberately much looser than frame age. Inference is SUPPOSED to pause on a
+# static scene — the motion gate coasts monitor cameras for 30s and only forces
+# a doorway pass every 8s when nothing moves, on top of a p99 cycle around 25s.
+# An empty corridor at night is idle, not broken. 180s clears every legitimate
+# combination of those while still catching the failure that prompted this:
+# camera 60 produced a 3,360-second gap (host sleep) that nothing detected.
+_HEALTH_MAX_INFERENCE_AGE_SEC = float(os.getenv("HEALTH_MAX_INFERENCE_AGE_SEC", "180"))
+
+# Bounded so a hung database cannot hang the probe. A health check that blocks
+# looks identical to a dead process from the supervisor's side.
+_HEALTH_DB_TIMEOUT_SEC = float(os.getenv("HEALTH_DB_TIMEOUT_SEC", "3.0"))
+
+# Fail before the queue is full, not when it overflows — at 100% writes are
+# already being dropped (see camera_service._submit_attendance).
+_HEALTH_QUEUE_WARN_RATIO = float(os.getenv("HEALTH_QUEUE_WARN_RATIO", "0.8"))
+
+
+def _probe_database() -> dict:
+    """SELECT 1 on a short-lived session. Blocking — call it via _check_database.
+
+    `SessionLocal()` is INSIDE the try: checking a connection out of an
+    exhausted pool raises before any query runs, and "too many clients" is a
+    failure this deployment has actually hit. A probe that propagates instead
+    of reporting is a probe that cannot describe the outage it exists for.
+    """
+    from sqlalchemy import text
+
+    db = None
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        # Type name only. The message from a connection failure carries the DSN,
+        # and this body is returned to whatever can reach the endpoint.
+        return {"ok": False, "error": type(exc).__name__}
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.debug("ignored, non-critical", exc_info=True)
+
+
+# One dedicated thread for the database probe, and never more than one probe in
+# flight.
+#
+# The obvious implementation — `asyncio.wait_for(asyncio.to_thread(probe))` —
+# returns on time but does NOT cancel the thread: a blocking socket read is not
+# interruptible. The work keeps running in asyncio's DEFAULT executor, which is
+# shared with everything else. A supervisor polling /health every 10s against a
+# database that is hung (not refusing — hung) therefore parks a new thread every
+# poll, in the pool the rest of the app depends on. The health check becomes an
+# outage amplifier.
+#
+# So: a private single-thread executor, and if the previous probe has not come
+# back the answer is already known — the database is not responding — and no
+# second probe is started. Bounded at exactly one thread no matter how long the
+# fault lasts.
+_HEALTH_DB_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="health-db")
+_health_db_inflight: "Future | None" = None
+_health_db_lock = threading.Lock()
+
+
+def _check_database() -> dict:
+    """Bounded database probe. Never blocks longer than the timeout."""
+    global _health_db_inflight
+
+    with _health_db_lock:
+        pending = _health_db_inflight
+        if pending is not None and not pending.done():
+            # A previous probe is still stuck on the socket. That IS the answer.
+            return {"ok": False, "error": "database not responding (probe still in flight)"}
+        try:
+            future = _HEALTH_DB_EXECUTOR.submit(_probe_database)
+        except Exception as exc:  # noqa: BLE001 — executor shut down at exit
+            return {"ok": False, "error": type(exc).__name__}
+        _health_db_inflight = future
+
+    try:
+        return future.result(timeout=_HEALTH_DB_TIMEOUT_SEC)
+    except FuturesTimeoutError:
+        # Leave the future in place: the next call sees it unfinished and
+        # returns immediately rather than queueing behind it.
+        return {"ok": False, "error": f"timeout after {_HEALTH_DB_TIMEOUT_SEC:.0f}s"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def _probe_cameras() -> dict:
+    """Camera liveness. Never raises — a probe that throws reports nothing."""
+    if not _cctv_workers_enabled():
+        # Not a fault. This instance was deliberately started without cameras.
+        return {"ok": True, "enabled": False, "total": 0, "unhealthy": [], "cameras": []}
+
+    try:
+        from app.services.camera_service import camera_manager
+
+        snapshot = camera_manager.health_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Health: camera snapshot failed")
+        return {"ok": False, "enabled": True, "error": type(exc).__name__,
+                "total": 0, "unhealthy": [], "cameras": []}
+
+    cameras = snapshot.get("cameras", [])
+    unhealthy: list[dict] = []
+    for cam in cameras:
+        reasons = []
+        frame_age = cam.get("frame_age_sec")
+        infer_age = cam.get("inference_age_sec")
+
+        if cam.get("status") in ("error", "unreadable"):
+            reasons.append(f"status={cam.get('status')}")
+        # None means the camera has never produced a frame. On a worker that is
+        # registered and supposedly running, that is a fault, not "no data yet".
+        if frame_age is None:
+            reasons.append("no frame ever received")
+        elif frame_age > _HEALTH_MAX_FRAME_AGE_SEC:
+            reasons.append(f"frame {frame_age:.0f}s old (>{_HEALTH_MAX_FRAME_AGE_SEC:.0f}s)")
+        if infer_age is not None and infer_age > _HEALTH_MAX_INFERENCE_AGE_SEC:
+            reasons.append(
+                f"no analysis for {infer_age:.0f}s (>{_HEALTH_MAX_INFERENCE_AGE_SEC:.0f}s)"
+            )
+        # False means the thread died. None means this worker type never had one
+        # (HCNetSDK), which is not a fault.
+        if cam.get("stream_thread_alive") is False:
+            reasons.append("capture thread dead")
+        if cam.get("recognition_thread_alive") is False:
+            reasons.append("recognition thread dead")
+
+        if reasons:
+            unhealthy.append({
+                "camera_id": cam.get("camera_id"),
+                "name": cam.get("name"),
+                "reasons": reasons,
+            })
+
+    return {
+        "ok": not unhealthy,
+        "enabled": True,
+        "total": len(cameras),
+        "unhealthy": unhealthy,
+        "cameras": cameras,
+        "ffmpeg_ok": snapshot.get("ffmpeg_ok"),
+    }
+
+
+def _probe_attendance_writer() -> dict:
+    """Queue depth for the attendance write pool. Full queue = dropped writes."""
+    if not _cctv_workers_enabled():
+        return {"ok": True, "enabled": False}
+    try:
+        from app.services.camera_service import camera_manager
+
+        snapshot = camera_manager.health_snapshot()
+        depth = snapshot.get("attendance_queue_depth")
+        maximum = snapshot.get("attendance_queue_max") or 0
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "enabled": True, "error": type(exc).__name__}
+
+    if depth is None or not maximum:
+        return {"ok": True, "enabled": True, "queue_depth": depth, "queue_max": maximum}
+    return {
+        "ok": depth < maximum * _HEALTH_QUEUE_WARN_RATIO,
+        "enabled": True,
+        "queue_depth": depth,
+        "queue_max": maximum,
+    }
+
+
+@app.get("/health/live")
+def health_live():
+    """Liveness only: the process is up and can serve a request.
+
+    The supervisor's restart target. Deliberately checks NOTHING else — a
+    restart cannot fix an unplugged camera or a dead database, so making those
+    conditions restart the process converts a visible fault into a restart loop
+    on top of it.
+    """
     return {"status": "ok"}
+
+
+@app.get("/health")
+async def health():
+    """Health: is this process actually doing its job?
+
+    200 when every subsystem is good, 503 when any is not, so a monitor can
+    alert on it directly. The body names what failed and why.
+    """
+    if not _HEALTH_STRICT:
+        # Rollback path — the pre-T-01 behaviour, without a code change.
+        return {"status": "ok"}
+
+    import asyncio
+
+    # _check_database is bounded and cheap, but it still WAITS — keep that off
+    # the event loop so a slow database cannot stall unrelated requests.
+    database = await asyncio.to_thread(_check_database)
+
+    checks = {
+        "database": database,
+        "cameras": _probe_cameras(),
+        "attendance_writer": _probe_attendance_writer(),
+    }
+    healthy = all(check.get("ok") for check in checks.values())
+
+    body = {"status": "ok" if healthy else "degraded", "checks": checks}
+    if healthy:
+        return body
+    # 503, not 500: the service is up and answering, it just is not fit to
+    # serve. A 500 would read as "the health check itself is broken".
+    return JSONResponse(status_code=503, content=body)
 
 
 # Serve the Resume Analyzer static frontend at /resume/  (index.html, app.py, styles.css, assets/)
