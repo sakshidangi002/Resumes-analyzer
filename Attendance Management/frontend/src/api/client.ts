@@ -969,3 +969,103 @@ export type PeopleCountReport = {
 export const peopleCount = {
   get: () => api.get<PeopleCountReport>("/cameras/stats"),
 };
+
+// Company mailbox, served by the backend via the email MCP server. Each call
+// spawns the MCP subprocess and does an IMAP round-trip, so the default 15s
+// client timeout is too tight — allow 60s here specifically.
+export type MailRow = {
+  uid: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+};
+
+export type MailMessage = MailRow & { body?: string };
+
+export const companyMail = {
+  list: (params?: { folder?: string; limit?: number; search?: string }) =>
+    api.get<MailRow[]>("/email/messages", { params, timeout: 60000 }),
+  read: (uid: string, folder = "INBOX") =>
+    api.get<MailMessage>("/email/messages/" + encodeURIComponent(uid), {
+      params: { folder },
+      timeout: 60000,
+    }),
+};
+
+// --- HRMS chatbot ----------------------------------------------------------
+// `answer` is always present and always safe to render on its own: refusals,
+// clarifying questions and errors all come back as an answer string with an
+// appropriate `kind`, never as an HTTP error.
+export type ChatbotKind =
+  | "answer"
+  | "clarify"
+  | "denied"
+  | "not_found"
+  | "general"
+  | "capabilities"
+  | "error";
+
+export type ChatbotReply = {
+  answer: string;
+  kind: ChatbotKind;
+  /** Which lookup produced it, or null when the model answered. */
+  skill?: string | null;
+  /** The figures behind the sentence, for rendering as chips. */
+  data?: Record<string, unknown> | null;
+  /** Tables and services read, so a number can be traced to its origin. */
+  sources?: string[];
+  employee?: { id: number; name: string; employee_code: string } | null;
+  period?: { label: string; assumed: boolean } | null;
+  /** Skill scores for this question. Admin/HR only. */
+  debug?: Record<string, unknown> | null;
+};
+
+export type ChatbotSkill = {
+  name: string;
+  topic: string;
+  summary: string;
+  examples: string[];
+  company_wide: boolean;
+  salary: boolean;
+};
+
+export type ChatbotCapabilities = {
+  scope: string;
+  can_see_company: boolean;
+  can_see_salary: boolean;
+  skills: ChatbotSkill[];
+};
+
+/** What the previous turn established, echoed back on the next one. */
+export type ChatbotContext = {
+  skill?: string | null;
+  employeeId?: number | null;
+  period?: string | null;
+};
+
+export const chatbot = {
+  // The first question of a server process also pays to load the local chat
+  // model, and the shared 15s client timeout would abort a request the server
+  // is about to answer. This one opts out of it.
+  // What the previous turn settled: which lookup, which person, which period.
+  // A follow-up states only what changed ("and Neha?", "what about her leave?",
+  // "same for last month"), so everything it leaves out has to come from here
+  // or the question cannot be answered at all.
+  //
+  // The server never trusts these: the employee id is re-loaded through the
+  // caller's own permission scope, so echoing back one they may not see
+  // resolves to nothing.
+  ask: (question: string, context?: ChatbotContext) =>
+    api.post<ChatbotReply>(
+      "/chatbot/ask",
+      {
+        question,
+        last_skill: context?.skill ?? null,
+        last_employee_id: context?.employeeId ?? null,
+        last_period: context?.period ?? null,
+      },
+      { timeout: 120000 },
+    ),
+  capabilities: () => api.get<ChatbotCapabilities>("/chatbot/capabilities"),
+};

@@ -37,6 +37,7 @@ const Reports = lazy(() => import("./pages/Reports"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const Notifications = lazy(() => import("./pages/Notifications"));
 const Inbox = lazy(() => import("./pages/Inbox"));
+const CompanyMail = lazy(() => import("./pages/CompanyMail"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const DSR = lazy(() => import("./pages/DSR"));
 const Policies = lazy(() => import("./pages/Policies"));
@@ -105,6 +106,7 @@ export default function App() {
         <Route path="calendar" element={<Calendar />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="inbox" element={<Inbox />} />
+        <Route path="company-mail" element={<RoleRoute roles={["Admin", "HR"]}><CompanyMail /></RoleRoute>} />
         <Route path="policies" element={<Policies />} />
         <Route path="onboarding" element={<Onboarding />} />
         <Route path="dsr" element={<DSR />} />

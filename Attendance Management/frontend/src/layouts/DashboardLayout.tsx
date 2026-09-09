@@ -2,6 +2,7 @@ import logo from '../assets/New softwiz Logo.png';
 import { useState, Suspense } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import ChatWidget from "../components/ChatWidget";
 import DsrReminderBanner from "../components/DsrReminderBanner";
 import ToastHost from "../components/ToastHost";
 import { SectionLoader } from "../components/LoadingState";
@@ -130,6 +131,11 @@ export default function DashboardLayout() {
               <NavLink to="/employees" onClick={closeSidebar}>
                 <Icons.Employees /> Employees
               </NavLink>
+              {(hasRole("Admin") || hasRole("HR")) && (
+                <NavLink to="/company-mail" onClick={closeSidebar}>
+                  <Icons.Inbox /> Company Mail
+                </NavLink>
+              )}
               {hasRole("Admin") && (
                 <NavLink to="/users" onClick={closeSidebar}>
                   <Icons.Profile /> Manage Users
@@ -215,6 +221,9 @@ export default function DashboardLayout() {
 
       <DsrReminderBanner />
       <ToastHost />
+      {/* Outside <main> so the panel isn't clipped by the content area's
+          scroll container, and so it stays put across route changes. */}
+      <ChatWidget />
     </div>
   );
 }

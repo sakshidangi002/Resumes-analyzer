@@ -8931,3 +8931,298 @@ textarea.eds-input {
   background: #35443e;
   border-color: rgba(52, 211, 153, 0.45);
 }
+
+/* ==========================================================================
+   HR Assistant chat widget (components/ChatWidget.tsx)
+
+   A floating panel rather than a page: the questions it answers ("was I marked
+   absent last Tuesday?") come up while the user is already looking at
+   something else, and making them navigate away to ask defeats the point.
+
+   Sits above the sidebar and the toast host but below modals, so an open
+   confirm dialog still owns the screen. On small screens it becomes a sheet
+   pinned to the bottom, because a 380px panel floating over a 360px viewport
+   is just a broken full-screen dialog.
+   ========================================================================== */
+.chatbot-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1200;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--brand-500);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.chatbot-fab:hover {
+  background: var(--brand-400);
+  transform: translateY(-2px);
+}
+
+.chatbot-fab.is-open {
+  background: var(--card);
+}
+
+.chatbot-panel {
+  position: fixed;
+  right: 24px;
+  bottom: 90px;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  /* Tall enough to hold a conversation, never taller than the viewport. */
+  height: min(560px, calc(100vh - 140px));
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: chatbot-in 0.16s ease-out;
+}
+
+@keyframes chatbot-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.chatbot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--brand-600);
+  color: #fff;
+}
+
+.chatbot-head strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.chatbot-sub {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.chatbot-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.chatbot-close:hover { opacity: 1; }
+
+.chatbot-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chatbot-msg {
+  max-width: 85%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* Answers that list rows — "leave taken by each employee", holidays, a payroll
+   breakdown — arrive as newline-separated bullets. Without pre-wrap the whole
+   list collapses into one unreadable run-on line. */
+.chatbot-msg p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.chatbot-msg--user {
+  align-self: flex-end;
+  background: var(--brand-500);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.chatbot-msg--bot {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+/* Refusals, clarifications and failures — readable, but visibly not an answer. */
+.chatbot-msg--muted {
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.78);
+  border-style: dashed;
+}
+
+/* Who the answer is about, when it is about a named person — so an answer about
+   Priya can never be mistaken for one about the person reading it. */
+.chatbot-about {
+  display: inline-block;
+  margin-bottom: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(var(--brand-rgb), 0.35);
+  border: 1px solid var(--border);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.chatbot-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.chatbot-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chatbot-fact em {
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.65;
+}
+
+.chatbot-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chatbot-suggestions button {
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.chatbot-suggestions button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.chatbot-typing {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.chatbot-typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+  animation: chatbot-blink 1.2s infinite ease-in-out;
+}
+
+.chatbot-typing i:nth-child(2) { animation-delay: 0.18s; }
+.chatbot-typing i:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes chatbot-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40%           { opacity: 1; }
+}
+
+.chatbot-input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.chatbot-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.chatbot-input input:focus {
+  outline: none;
+  border-color: var(--brand-300);
+}
+
+.chatbot-input button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 50%;
+  border: none;
+  background: var(--brand-500);
+  color: #fff;
+  cursor: pointer;
+}
+
+.chatbot-input button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .chatbot-panel {
+    right: 10px;
+    left: 10px;
+    bottom: 84px;
+    width: auto;
+    height: min(70vh, calc(100vh - 120px));
+  }
+
+  .chatbot-fab {
+    right: 16px;
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatbot-panel { animation: none; }
+  .chatbot-fab { transition: none; }
+  .chatbot-typing i { animation: none; opacity: 0.5; }
+}

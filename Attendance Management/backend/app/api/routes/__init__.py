@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     assistant,
     auth,
+    chatbot,
     employees,
     attendance,
     leave,
@@ -16,6 +17,7 @@ from app.api.routes import (
     onboarding,
     dsr,
     dsr_reminder,
+    email,
     push,
     recognition,
     cameras,
@@ -46,10 +48,12 @@ api_router.include_router(
     dsr_reminder.router, prefix="/dsr-reminder", tags=["dsr-reminder"]
 )
 api_router.include_router(push.router, prefix="/push", tags=["push"])
+api_router.include_router(email.router, prefix="/email", tags=["email"])
 api_router.include_router(recognition.router, prefix="", tags=["recognition"])
 api_router.include_router(cameras.router, prefix="", tags=["cameras"])
 api_router.include_router(queries.router, prefix="/queries", tags=["queries"])
 api_router.include_router(assistant.router, prefix="/assistant", tags=["assistant"])
+api_router.include_router(chatbot.router, prefix="/chatbot", tags=["chatbot"])
 api_router.include_router(policies.router, prefix="/policies", tags=["policies"])
 api_router.include_router(
     interview_questions.router, prefix="/interview-questions", tags=["interview-questions"]
